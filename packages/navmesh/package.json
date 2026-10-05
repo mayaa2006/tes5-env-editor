@@ -10,6 +10,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@tes5/esp": "*"
+    "@tes5/esp": "*",
+    "recast-navigation": "^0.43.1"
   }
 }
