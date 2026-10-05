@@ -326,6 +326,40 @@ export function setTriangleFlags(nav: Navmesh, tris: Iterable<number>, flag: num
   }
 }
 
+/** Horizontal distance from a point to a triangle (0 when inside). */
+function distanceToTriangle2D(p: NavVertex, a: NavVertex, b: NavVertex, c: NavVertex): number {
+  const seg = (u: NavVertex, v: NavVertex) => {
+    const dx = v.x - u.x;
+    const dy = v.y - u.y;
+    const len2 = dx * dx + dy * dy || 1e-12;
+    const t = Math.max(0, Math.min(1, ((p.x - u.x) * dx + (p.y - u.y) * dy) / len2));
+    return Math.hypot(p.x - (u.x + t * dx), p.y - (u.y + t * dy));
+  };
+  const s1 = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+  const s2 = (c.x - b.x) * (p.y - b.y) - (c.y - b.y) * (p.x - b.x);
+  const s3 = (a.x - c.x) * (p.y - c.y) - (a.y - c.y) * (p.x - c.x);
+  if ((s1 >= 0 && s2 >= 0 && s3 >= 0) || (s1 <= 0 && s2 <= 0 && s3 <= 0)) return 0;
+  return Math.min(seg(a, b), seg(b, c), seg(c, a));
+}
+
+/** Nearest triangle within `maxDistance` horizontally and `maxDz` vertically, or -1. */
+export function findNearestTriangle(nav: Navmesh, p: NavVertex, maxDistance = 128, maxDz = 64): number {
+  const inside = findTriangleAt(nav, p);
+  if (inside >= 0) return inside;
+  let best = -1;
+  let bestD = maxDistance;
+  nav.triangles.forEach((t, i) => {
+    const [a, b, c] = t.v.map((k) => nav.vertices[k]!) as [NavVertex, NavVertex, NavVertex];
+    const d = distanceToTriangle2D(p, a, b, c);
+    const z = (a.z + b.z + c.z) / 3;
+    if (d < bestD && Math.abs(z - p.z) <= maxDz) {
+      bestD = d;
+      best = i;
+    }
+  });
+  return best;
+}
+
 /** Index of the triangle containing (x, y) in plan view, preferring the one closest in Z. */
 export function findTriangleAt(nav: Navmesh, p: NavVertex): number {
   let best = -1;

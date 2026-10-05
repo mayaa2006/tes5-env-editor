@@ -1,0 +1,474 @@
+/**
+ * A small, entirely synthetic data set ("DemoWorld.esm") used by the browser
+ * demo of the Studio and by tests. It contains no Bethesda content: meshes,
+ * textures and records are generated here.
+ */
+import { CHARGEN_SLIDER_MORPHS, writeNif, writeRgbaDds, writeTri } from '@tes5/assets';
+import {
+  Plugin,
+  PluginRecord,
+  RecordFlags,
+  VmadPropertyType,
+  applyTyped,
+  newCondition,
+  conditionFunctionByName,
+  placeRecord,
+  type PlaceOptions,
+} from '@tes5/esp';
+import type { MemoryFileSystem } from '../fs';
+import { box, cylinder, ellipsoid, merge, shape, stairs, terrain, translate, type MeshData } from './meshes';
+
+export interface DemoPaths {
+  gameDir: string;
+  dataDir: string;
+  plugins: string[];
+}
+
+const T = (name: string) => `textures\\demo\\${name}.dds`;
+
+function texture(w: number, h: number, fn: (x: number, y: number) => [number, number, number, number]): Uint8Array {
+  const px = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const [r, g, b, a] = fn(x, y);
+      px.set([r, g, b, a], (y * w + x) * 4);
+    }
+  return writeRgbaDds(w, h, px);
+}
+
+function noise(x: number, y: number, s = 1): number {
+  const n = Math.sin(x * 12.9898 * s + y * 78.233) * 43758.5453;
+  return n - Math.floor(n);
+}
+
+const TEXTURES: Record<string, Uint8Array> = {
+  wood: texture(64, 64, (x, y) => {
+    const v = 0.75 + 0.25 * Math.sin(x / 2 + Math.sin(y / 9) * 3) - noise(x, y) * 0.1;
+    return [Math.round(120 * v), Math.round(80 * v), Math.round(45 * v), 255];
+  }),
+  stone: texture(64, 64, (x, y) => {
+    const mortar = x % 32 < 2 || (y + (Math.floor(x / 32) % 2) * 16) % 32 < 2;
+    const v = mortar ? 0.45 : 0.7 + noise(x, y) * 0.2;
+    return [Math.round(140 * v), Math.round(138 * v), Math.round(130 * v), 255];
+  }),
+  plaster: texture(32, 32, (x, y) => {
+    const v = 0.85 + noise(x, y) * 0.1;
+    return [Math.round(220 * v), Math.round(205 * v), Math.round(175 * v), 255];
+  }),
+  metal: texture(32, 32, (x, y) => {
+    const v = 0.6 + noise(x, y, 3) * 0.15;
+    return [Math.round(150 * v), Math.round(150 * v), Math.round(160 * v), 255];
+  }),
+  grass: texture(64, 64, (x, y) => {
+    const v = 0.7 + noise(x, y) * 0.3;
+    return [Math.round(70 * v), Math.round(110 * v), Math.round(50 * v), 255];
+  }),
+  rock: texture(64, 64, (x, y) => {
+    const v = 0.55 + noise(x, y, 2) * 0.35;
+    return [Math.round(115 * v), Math.round(110 * v), Math.round(105 * v), 255];
+  }),
+  skin: texture(32, 32, (x, y) => {
+    const v = 0.95 + noise(x, y) * 0.05;
+    return [Math.round(225 * v), Math.round(180 * v), Math.round(150 * v), 255];
+  }),
+  hair: texture(32, 32, (x, y) => {
+    const v = 0.6 + 0.4 * Math.abs(Math.sin(x * 1.3 + noise(x, y)));
+    return [Math.round(255 * v), Math.round(255 * v), Math.round(255 * v), 255];
+  }),
+  eyes: texture(32, 32, (x, y) => {
+    const d = Math.hypot(x - 16, y - 16);
+    if (d < 4) return [10, 10, 10, 255];
+    if (d < 10) return [90, 60, 30, 255];
+    return [240, 240, 235, 255];
+  }),
+  fabric: texture(32, 32, (x, y) => {
+    const v = (x + y) % 4 < 2 ? 0.8 : 0.7;
+    return [Math.round(130 * v), Math.round(40 * v), Math.round(40 * v), 255];
+  }),
+  marker: texture(8, 8, () => [255, 80, 200, 255]),
+};
+
+function nif(...shapes: Parameters<typeof shape>[]): Uint8Array {
+  return writeNif(
+    shapes.map((s) => shape(...s)),
+    { game: 'SkyrimSE' },
+  );
+}
+
+/** The head used by both sexes, with chargen morphs for every slider. */
+function headMesh(female: boolean): { mesh: MeshData; tri: Uint8Array } {
+  const m = ellipsoid(female ? 9.5 : 10.5, female ? 11 : 12, female ? 13 : 14, 120, 18, 28);
+  const p = m.positions;
+  const n = p.length / 3;
+  const region = (fn: (x: number, y: number, z: number) => [number, number, number]) => {
+    const d = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      const [dx, dy, dz] = fn(p[i * 3]!, p[i * 3 + 1]!, p[i * 3 + 2]! - 120);
+      d[i * 3] = dx;
+      d[i * 3 + 1] = dy;
+      d[i * 3 + 2] = dz;
+    }
+    return d;
+  };
+  const near = (x: number, y: number, z: number, cx: number, cy: number, cz: number, r: number) => Math.max(0, 1 - Math.hypot(x - cx, y - cy, z - cz) / r);
+  const front = (y: number) => (y > 0 ? 1 : 0);
+  const effects: Record<string, (x: number, y: number, z: number) => [number, number, number]> = {
+    NoseShort: (x, y, z) => [0, -2.5 * near(x, y, z, 0, 12, 0, 6), 0],
+    NoseLong: (x, y, z) => [0, 3 * near(x, y, z, 0, 12, 0, 6), 0],
+    NoseUp: (x, y, z) => [0, 0, 2 * near(x, y, z, 0, 12, 0, 6)],
+    NoseDown: (x, y, z) => [0, 0, -2 * near(x, y, z, 0, 12, 0, 6)],
+    JawUp: (x, y, z) => [0, 0, z < -6 ? 2 : 0],
+    JawDown: (x, y, z) => [0, 0, z < -6 ? -2.5 : 0],
+    JawWide: (x, _y, z) => [z < -4 ? Math.sign(x) * 2 : 0, 0, 0],
+    JawNarrow: (x, _y, z) => [z < -4 ? -Math.sign(x) * 1.5 : 0, 0, 0],
+    JawForward: (_x, y, z) => [0, z < -6 && y > 0 ? 2 : 0, 0],
+    JawBack: (_x, y, z) => [0, z < -6 && y > 0 ? -2 : 0, 0],
+    CheeksUp: (x, y, z) => [0, 0, 1.5 * near(Math.abs(x), y, z, 7, 8, -1, 5)],
+    CheeksDown: (x, y, z) => [0, 0, -1.5 * near(Math.abs(x), y, z, 7, 8, -1, 5)],
+    CheeksForward: (x, y, z) => [0, 1.5 * near(Math.abs(x), y, z, 7, 8, -1, 5), 0],
+    CheeksBack: (x, y, z) => [0, -1.5 * near(Math.abs(x), y, z, 7, 8, -1, 5), 0],
+    EyesUp: (x, y, z) => [0, 0, 1.2 * near(Math.abs(x), y, z, 4, 10, 3, 4)],
+    EyesDown: (x, y, z) => [0, 0, -1.2 * near(Math.abs(x), y, z, 4, 10, 3, 4)],
+    EyesIn: (x, y, z) => [-Math.sign(x) * near(Math.abs(x), y, z, 4, 10, 3, 4), 0, 0],
+    EyesOut: (x, y, z) => [Math.sign(x) * near(Math.abs(x), y, z, 4, 10, 3, 4), 0, 0],
+    EyesForward: (x, y, z) => [0, near(Math.abs(x), y, z, 4, 10, 3, 4), 0],
+    EyesBack: (x, y, z) => [0, -near(Math.abs(x), y, z, 4, 10, 3, 4), 0],
+    BrowUp: (x, y, z) => [0, 0, 1.5 * near(Math.abs(x), y, z, 4, 10, 6, 4)],
+    BrowDown: (x, y, z) => [0, 0, -1.5 * near(Math.abs(x), y, z, 4, 10, 6, 4)],
+    BrowIn: (x, y, z) => [-Math.sign(x) * near(Math.abs(x), y, z, 4, 10, 6, 4), 0, 0],
+    BrowOut: (x, y, z) => [Math.sign(x) * near(Math.abs(x), y, z, 4, 10, 6, 4), 0, 0],
+    BrowForward: (x, y, z) => [0, 1.5 * near(Math.abs(x), y, z, 4, 10, 6, 4), 0],
+    BrowBack: (x, y, z) => [0, -1.5 * near(Math.abs(x), y, z, 4, 10, 6, 4), 0],
+    LipMoveUp: (x, y, z) => [0, 0, near(x, y, z, 0, 11, -5, 4)],
+    LipMoveDown: (x, y, z) => [0, 0, -near(x, y, z, 0, 11, -5, 4)],
+    LipMoveIn: (x, y, z) => [0, -near(x, y, z, 0, 11, -5, 4), 0],
+    LipMoveOut: (x, y, z) => [0, near(x, y, z, 0, 11, -5, 4), 0],
+    ChinThin: (x, y, z) => [-Math.sign(x) * near(x, y, z, 0, 9, -11, 5), 0, 0],
+    ChinWide: (x, y, z) => [Math.sign(x) * 1.5 * near(x, y, z, 0, 9, -11, 5), 0, 0],
+    ChinMoveUp: (x, y, z) => [0, 0, near(x, y, z, 0, 9, -11, 5)],
+    ChinMoveDown: (x, y, z) => [0, 0, -1.5 * near(x, y, z, 0, 9, -11, 5)],
+    OverBite: (x, y, z) => [0, front(y) * near(x, y, z, 0, 11, -7, 4), 0],
+    UnderBite: (x, y, z) => [0, front(y) * near(x, y, z, 0, 10, -9, 4), 0],
+    VampireMorph: (x, y, z) => [0, 0, -0.5 * near(x, y, z, 0, 0, 0, 12)],
+  };
+  const morphs = CHARGEN_SLIDER_MORPHS.flat()
+    .filter((n) => n && effects[n])
+    .map((name) => ({ name, deltas: region(effects[name]!) }));
+  const tri = writeTri({ vertices: new Float32Array(m.positions), triangles: new Uint32Array(m.indices), uvs: new Float32Array(m.uvs), morphs });
+  return { mesh: m, tri };
+}
+
+function meshesAndTextures(): Record<string, Uint8Array> {
+  const files: Record<string, Uint8Array> = {};
+  for (const [name, dds] of Object.entries(TEXTURES)) files[T(name)] = dds;
+  files['meshes\\demo\\floor.nif'] = nif(['Floor', box(-128, -128, -8, 128, 128, 0), [T('wood')]]);
+  files['meshes\\demo\\wall.nif'] = nif(['Wall', box(-128, -8, 0, 128, 8, 256), [T('plaster')]]);
+  files['meshes\\demo\\crate.nif'] = nif(['Crate', box(-24, -24, 0, 24, 24, 48, 1 / 48), [T('wood')]]);
+  files['meshes\\demo\\barrel.nif'] = nif(['Barrel', cylinder(20, 56, 16), [T('wood')]]);
+  files['meshes\\demo\\pillar.nif'] = nif(['Pillar', merge(box(-20, -20, 0, 20, 20, 16), cylinder(14, 224, 12, 16), box(-20, -20, 240, 20, 20, 256)), [T('stone')]]);
+  files['meshes\\demo\\table.nif'] = nif(['Table', merge(box(-60, -36, 70, 60, 36, 78), box(-56, -32, 0, -48, -24, 70), box(48, -32, 0, 56, -24, 70), box(-56, 24, 0, -48, 32, 70), box(48, 24, 0, 56, 32, 70)), [T('wood')]]);
+  files['meshes\\demo\\stairs.nif'] = nif(['Stairs', stairs(128, 256, 128, 8), [T('stone')]]);
+  files['meshes\\demo\\rock.nif'] = nif(['Rock', ellipsoid(90, 70, 50, 20, 8, 12), [T('rock')]]);
+  files['meshes\\demo\\door.nif'] = nif(['Door', box(-48, -6, 0, 48, 6, 160, 1 / 96), [T('wood')]], ['Frame', merge(box(-56, -10, 0, -48, 10, 168), box(48, -10, 0, 56, 10, 168), box(-56, -10, 160, 56, 10, 168)), [T('stone')]]);
+  files['meshes\\demo\\chest.nif'] = nif(['Chest', merge(box(-40, -24, 0, 40, 24, 40), box(-41, -25, 40, 41, 25, 52)), [T('wood')]]);
+  files['meshes\\demo\\torch.nif'] = nif(['Torch', cylinder(3, 40, 8), [T('wood')]], ['Flame', translate(ellipsoid(5, 5, 9, 0, 6, 8), 0, 0, 46), [T('marker')], { alphaBlend: true }]);
+  files['meshes\\demo\\xmarker.nif'] = nif(['Marker', box(-8, -8, 0, 8, 8, 16), [T('marker')]]);
+  files['meshes\\demo\\ground.nif'] = nif(['Ground', terrain(4096, 16, 60), [T('grass')]]);
+  const male = headMesh(false);
+  const female = headMesh(true);
+  files['meshes\\demo\\head_male.nif'] = nif(['MaleHead', male.mesh, [T('skin')]]);
+  files['meshes\\demo\\head_male_chargen.tri'] = male.tri;
+  files['meshes\\demo\\head_female.nif'] = nif(['FemaleHead', female.mesh, [T('skin')]]);
+  files['meshes\\demo\\head_female_chargen.tri'] = female.tri;
+  files['meshes\\demo\\hair_short.nif'] = nif(['HairShort', translate(ellipsoid(11, 12.5, 9, 0, 10, 20), 0, -1, 126), [T('hair')]]);
+  files['meshes\\demo\\hair_long.nif'] = nif(['HairLong', merge(translate(ellipsoid(11.5, 13, 10, 0, 10, 20), 0, -1.5, 126), box(-10, -14, 96, 10, -6, 124)), [T('hair')]]);
+  files['meshes\\demo\\beard.nif'] = nif(['Beard', translate(ellipsoid(8, 5, 6, 0, 8, 12), 0, 9, 108), [T('hair')]]);
+  files['meshes\\demo\\eyes.nif'] = nif(['Eyes', merge(translate(ellipsoid(2, 2, 2, 0, 6, 8), -4, 10, 123), translate(ellipsoid(2, 2, 2, 0, 6, 8), 4, 10, 123)), [T('eyes')]]);
+  files['meshes\\demo\\brows.nif'] = nif(['Brows', merge(box(-7, 10.5, 126, -1.5, 12, 127), box(1.5, 10.5, 126, 7, 12, 127)), [T('hair')]]);
+  files['meshes\\demo\\body.nif'] = nif(['Body', merge(cylinder(16, 60, 12, 0), translate(cylinder(18, 46, 12), 0, 0, 60), translate(cylinder(6, 8, 8), 0, 0, 106)), [T('fabric')]]);
+  return files;
+}
+
+const SCRIPTS: Record<string, string> = {
+  DemoQuestScript: `Scriptname DemoQuestScript extends Quest
+{Tracks the tavern quest.}
+
+GlobalVariable Property DemoGoldReward Auto
+ReferenceAlias Property Alias_Innkeeper Auto
+
+Function GiveReward()
+  Game.GetPlayer().AddItem(Game.GetForm(0x0000000F), DemoGoldReward.GetValueInt())
+EndFunction
+`,
+  DemoChestScript: `Scriptname DemoChestScript extends ObjectReference
+
+Message Property DemoWelcomeMsg Auto
+
+Event OnActivate(ObjectReference akActionRef)
+  If akActionRef == Game.GetPlayer()
+    DemoWelcomeMsg.Show()
+  EndIf
+EndEvent
+`,
+};
+
+function posRot(x: number, y: number, z: number, rz = 0) {
+  return { position: { x, y, z }, rotation: { x: 0, y: 0, z: rz } };
+}
+
+function rec(p: Plugin, sig: string, id: number, data: Record<string, unknown>, where: PlaceOptions = {}, flags = 0): number {
+  const r = PluginRecord.create(sig, id, [], flags);
+  applyTyped(r, data);
+  placeRecord(p, r, where);
+  return id;
+}
+
+function buildDemoMaster(): Plugin {
+  const p = Plugin.create('DemoWorld.esm', { author: 'tes5-env-editor', description: 'Synthetic demo data (no Bethesda content).' });
+  let next = 0x800;
+  const id = () => next++;
+  const model = (file: string) => ({ file });
+  const bounds = (x: number, y: number, z: number) => ({ x1: -x, y1: -y, z1: 0, x2: x, y2: y, z2: z });
+  const dirMat = { maxAngle: 90, material: 0, consideredSnow: 0, unused: new Uint8Array(3) };
+
+  const kwNpc = rec(p, 'KYWD', id(), { editorId: 'ActorTypeNPC', color: { r: 0, g: 0, b: 0, a: 0 } });
+  const vMale = rec(p, 'VTYP', id(), { editorId: 'MaleCommoner', flags: 1 });
+  const vFemale = rec(p, 'VTYP', id(), { editorId: 'FemaleCommoner', flags: 1 | 2 });
+  const hairBrown = rec(p, 'CLFM', id(), { editorId: 'HairColorBrown', name: 'Brown', color: { r: 92, g: 60, b: 38, a: 0 }, playable: 1 });
+  rec(p, 'CLFM', id(), { editorId: 'HairColorBlonde', name: 'Blonde', color: { r: 214, g: 180, b: 110, a: 0 }, playable: 1 });
+  const hairBlack = rec(p, 'CLFM', id(), { editorId: 'HairColorBlack', name: 'Black', color: { r: 25, g: 22, b: 20, a: 0 }, playable: 1 });
+  rec(p, 'CLFM', id(), { editorId: 'HairColorRed', name: 'Red', color: { r: 140, g: 50, b: 25, a: 0 }, playable: 1 });
+  const raceId = 0x900;
+  const validRaces = rec(p, 'FLST', id(), { editorId: 'HeadPartsDemoHuman', forms: [raceId] });
+  const hp = (edid: string, name: string, type: number, flags: number, file: string, chargen?: string) =>
+    rec(p, 'HDPT', id(), {
+      editorId: edid,
+      name,
+      model: model(file),
+      flags,
+      type,
+      parts: chargen ? [{ type: 2, file: chargen }] : [],
+      validRaces,
+    });
+  const headM = hp('DemoHeadMale', 'Male Head', 1, 1 | 2, 'demo\\head_male.nif', 'demo\\head_male_chargen.tri');
+  const headF = hp('DemoHeadFemale', 'Female Head', 1, 1 | 4, 'demo\\head_female.nif', 'demo\\head_female_chargen.tri');
+  const hairShort = hp('DemoHairShort', 'Short Hair', 3, 1 | 2 | 4, 'demo\\hair_short.nif');
+  const hairLong = hp('DemoHairLong', 'Long Hair', 3, 1 | 2 | 4, 'demo\\hair_long.nif');
+  const eyes = hp('DemoEyesBrown', 'Brown Eyes', 2, 1 | 2 | 4, 'demo\\eyes.nif');
+  const brows = hp('DemoBrows', 'Brows', 6, 1 | 2 | 4, 'demo\\brows.nif');
+  const beard = hp('DemoBeardFull', 'Full Beard', 4, 1 | 2, 'demo\\beard.nif');
+  const race = rec(p, 'RACE', raceId, { editorId: 'DemoHumanRace', name: 'Human', description: 'A sturdy demo people.', data: new Uint8Array(128) });
+  const cls = rec(p, 'CLAS', id(), { editorId: 'DemoWarriorClass', name: 'Warrior', description: 'Fights things.', data: new Uint8Array(36) });
+  const faction = rec(p, 'FACT', id(), { editorId: 'DemoTownFaction', name: 'Townsfolk', relations: [], flags: 0 });
+  const gold = rec(p, 'GLOB', id(), { editorId: 'DemoGoldReward', type: 115, value: 100 });
+  const msg = rec(p, 'MESG', id(), { editorId: 'DemoWelcomeMsg', description: 'Welcome to the Demo Tavern!', icon: 0, flags: 1, displayTime: 2 });
+
+  const skills = { values: new Array(18).fill(15), offsets: new Array(18).fill(0), health: 50, magicka: 0, stamina: 0, unused: new Uint8Array(2), farAwayDistance: 0, gearedUpWeapons: 0, unused2: new Uint8Array(3) };
+  const npc = (edid: string, name: string, female: boolean, parts: number[], hair: number, morph: Record<string, number>, tone: [number, number, number]) =>
+    rec(p, 'NPC_', id(), {
+      editorId: edid,
+      bounds: bounds(22, 14, 128),
+      config: { flags: (female ? 1 : 0) | 0x20 | 0x2, magickaOffset: 0, staminaOffset: 0, level: 5, calcMinLevel: 1, calcMaxLevel: 0, speedMultiplier: 100, dispositionBase: 35, templateFlags: 0, healthOffset: 0, bleedoutOverride: 0 },
+      factions: [{ faction, rank: 0, unused: new Uint8Array(3) }],
+      voice: female ? vFemale : vMale,
+      race,
+      keywords: [kwNpc],
+      class: cls,
+      name,
+      marker: true,
+      skills,
+      headParts: parts,
+      hairColor: hair,
+      unknownNAM5: new Uint8Array([0xff, 0x00]),
+      height: 1,
+      weight: 50,
+      soundLevel: 1,
+      textureLighting: { r: tone[0], g: tone[1], b: tone[2] },
+      faceMorph: morph,
+      faceParts: { nose: 0, unknown: -1, eyes: 0, mouth: 0 },
+      tintLayers: [{ index: 1, color: { r: 230, g: 190, b: 160, a: 0 }, value: 100, preset: 0 }],
+    });
+  const smith = npc('DemoBlacksmith', 'Halvar the Smith', false, [headM, hairShort, eyes, brows, beard], hairBrown, { noseLongShort: -0.3, jawNarrowWide: 0.6, chinUnderbiteOverbite: 0.2 }, [0.85, 0.7, 0.6]);
+  const keeper = npc('DemoInnkeeper', 'Brynja', true, [headF, hairLong, eyes, brows], hairBlack, { noseUpDown: 0.3, cheeksUpDown: 0.4, lipsInOut: 0.2 }, [0.9, 0.78, 0.7]);
+  npc('DemoGuard', 'Town Guard', false, [headM, hairShort, eyes, brows], hairBrown, {}, [0.8, 0.65, 0.55]);
+
+  const stat = (edid: string, file: string, b: [number, number, number], flags = 0) => rec(p, 'STAT', id(), { editorId: edid, bounds: bounds(...b), model: model(file), directionalMaterial: dirMat }, {}, flags);
+  const floor = stat('DemoFloorWood', 'demo\\floor.nif', [128, 128, 0]);
+  const wall = stat('DemoWallPlaster', 'demo\\wall.nif', [128, 8, 256]);
+  const crate = stat('DemoCrate', 'demo\\crate.nif', [24, 24, 48]);
+  const barrel = stat('DemoBarrel', 'demo\\barrel.nif', [20, 20, 56]);
+  const pillar = stat('DemoPillar', 'demo\\pillar.nif', [20, 20, 256]);
+  const table = stat('DemoTable', 'demo\\table.nif', [60, 36, 78]);
+  stat('DemoStairs', 'demo\\stairs.nif', [128, 256, 128]);
+  const rock = stat('DemoRock', 'demo\\rock.nif', [90, 70, 70]);
+  const ground = stat('DemoGroundPatch', 'demo\\ground.nif', [4096, 4096, 120]);
+  stat('XMarkerDemo', 'demo\\xmarker.nif', [8, 8, 16], 1 << 23);
+  const light = rec(p, 'LIGH', id(), {
+    editorId: 'DemoTorchLight',
+    bounds: bounds(5, 5, 55),
+    model: model('demo\\torch.nif'),
+    data: { time: -1, radius: 512, color: { r: 255, g: 180, b: 110, unused: new Uint8Array(1) }, flags: 0, falloffExponent: 1, fov: 90, nearClip: 0, flickerPeriod: 0, flickerIntensityAmplitude: 0, flickerMovementAmplitude: 0, value: 0, weight: 0 },
+    fadeValue: 1,
+  });
+  const door = rec(p, 'DOOR', id(), { editorId: 'DemoDoor', bounds: bounds(56, 10, 168), name: 'Door', model: model('demo\\door.nif'), flags: 0 });
+  const chest = rec(p, 'CONT', id(), {
+    editorId: 'DemoChest',
+    bounds: bounds(41, 25, 52),
+    name: 'Chest',
+    model: model('demo\\chest.nif'),
+    data: { flags: 0, weight: 0 },
+    scripts: { version: 5, objectFormat: 2, scripts: [{ name: 'DemoChestScript', flags: 0, properties: [{ name: 'DemoWelcomeMsg', type: VmadPropertyType.Object, flags: 1, value: { form: msg, alias: -1 } }] }] },
+  });
+
+  // ---- interior cell: the Demo Tavern
+  const tavern = 0xa00;
+  rec(p, 'CELL', tavern, {
+    editorId: 'DemoTavern',
+    name: 'The Demo Tavern',
+    flags: 1,
+    lighting: {
+      ambient: { r: 70, g: 60, b: 52 },
+      directional: { r: 150, g: 130, b: 110 },
+      fogNearColor: { r: 20, g: 18, b: 16 },
+      fogNear: 0,
+      fogFar: 6000,
+      directionalRotationXY: 45,
+      directionalRotationZ: 45,
+      directionalFade: 1,
+      fogClipDistance: 0,
+      fogPower: 1,
+      ambientColors: new Uint8Array(32),
+      fogFarColor: { r: 30, g: 26, b: 22 },
+      fogMax: 1,
+      lightFadeBegin: 0,
+      lightFadeEnd: 0,
+      inherits: 0,
+    },
+  });
+  let refId = 0xa01;
+  const place = (base: number, x: number, y: number, z: number, rz = 0, opts: { persistent?: boolean; scale?: number; edid?: string; sig?: string } = {}) => {
+    const r = refId++;
+    const data: Record<string, unknown> = { base, placement: posRot(x, y, z, rz) };
+    if (opts.scale) data.scale = opts.scale;
+    if (opts.edid) data.editorId = opts.edid;
+    rec(p, opts.sig ?? 'REFR', r, data, { cell: tavern, persistent: opts.persistent }, opts.persistent ? RecordFlags.Persistent : 0);
+    return r;
+  };
+  for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) place(floor, -384 + i * 256, -384 + j * 256, 0);
+  for (let i = 0; i < 4; i++) {
+    place(wall, -384 + i * 256, -512, 0);
+    place(wall, -384 + i * 256, 512, 0, Math.PI);
+    place(wall, -512, -384 + i * 256, 0, Math.PI / 2);
+    if (i !== 1) place(wall, 512, -384 + i * 256, 0, -Math.PI / 2);
+  }
+  place(pillar, 0, 0, 0);
+  place(table, -200, 150, 0);
+  place(table, 200, 180, 0, 0.4);
+  place(crate, -420, -420, 0);
+  place(crate, -420, -360, 0, 0.3);
+  place(crate, -420, -390, 48, 0.8);
+  place(barrel, 420, -420, 0);
+  place(barrel, 380, -440, 0);
+  place(chest, -420, 300, 0, Math.PI / 2, { edid: 'DemoTavernChestRef' });
+  place(light, -480, 0, 180, 0);
+  place(light, 480, 300, 180, 0);
+  place(door, 512, -128, 0, -Math.PI / 2, { edid: 'DemoTavernDoorRef', persistent: true });
+  place(keeper, 150, 250, 0, Math.PI, { persistent: true, sig: 'ACHR', edid: 'DemoInnkeeperRef' });
+  place(smith, -250, -200, 0, 0.5, { persistent: true, sig: 'ACHR', edid: 'DemoBlacksmithRef' });
+
+  // ---- exterior worldspace with two cells
+  const world = 0xb00;
+  rec(p, 'WRLD', world, { editorId: 'DemoWorld', name: 'Demo Valley', parent: {}, distantLodMultiplier: 1, flags: 0x1 | 0x10 });
+  let cellId = 0xb01;
+  for (const gx of [0, 1]) {
+    const c = cellId++;
+    const xclc = { x: gx, y: 0, forceHideLand: 0 };
+    rec(p, 'CELL', c, { editorId: `DemoValley${gx}_0`, flags: 0, grid: xclc }, { worldspace: world, grid: { x: gx, y: 0 } });
+    const r = refId++;
+    rec(p, 'REFR', r, { base: ground, placement: posRot(gx * 4096, 0, 0) }, { cell: c });
+    for (let k = 0; k < 4; k++) {
+      const rr = refId++;
+      rec(p, 'REFR', rr, { base: rock, placement: posRot(gx * 4096 + 600 + k * 800, 900 + ((k * 1300) % 2000), 30, k), scale: 0.8 + k * 0.2 }, { cell: c });
+    }
+  }
+
+  // ---- a quest with dialogue
+  const quest = 0xc00;
+  const isId = conditionFunctionByName('GetIsID')!.index;
+  const getStage = conditionFunctionByName('GetStage')!.index;
+  rec(p, 'QUST', quest, {
+    editorId: 'DemoTavernQuest',
+    name: 'A Quiet Drink',
+    general: { flags: 0x1, priority: 40, formVersion: 0, unknown: new Uint8Array(4), type: 8 },
+    marker: true,
+    stages: [
+      { index: { index: 0, flags: 2, unknown: 0 }, logEntries: [] },
+      { index: { index: 10, flags: 0, unknown: 0 }, logEntries: [{ flags: 0, text: 'Brynja at the Demo Tavern has a job for me.' }] },
+      { index: { index: 20, flags: 0, unknown: 0 }, logEntries: [{ flags: 0, text: 'I found the missing crate.' }] },
+      { index: { index: 100, flags: 0, unknown: 0 }, logEntries: [{ flags: 1, text: 'Brynja paid me for my help.' }] },
+    ],
+    objectives: [
+      { index: 10, oredWithPrevious: 0, text: 'Find the missing crate', targets: [] },
+      { index: 20, oredWithPrevious: 0, text: 'Return to Brynja', targets: [{ target: { alias: 0, ignoresLocks: 0, unused: new Uint8Array(3) } }] },
+    ],
+    nextAliasId: 1,
+    aliases: [{ option: 0, value: { id: 0, name: 'Innkeeper', flags: 0x40, fill: { option: 1, value: { actor: keeper } }, end: true } }],
+    scripts: { version: 5, objectFormat: 2, scripts: [{ name: 'DemoQuestScript', flags: 0, properties: [] }] },
+  });
+  const topic = 0xc01;
+  rec(p, 'DIAL', topic, { editorId: 'DemoTavernJobTopic', name: 'Got any work for me?', priority: 50, quest, data: { doAllBeforeRepeating: 0, category: 0, subtype: 0 }, subtypeName: 'CUST', infoCount: 1 });
+  rec(p, 'DLBR', 0xc02, { editorId: 'DemoTavernJobBranch', quest, category: 0, flags: 1, startingTopic: topic });
+  rec(
+    p,
+    'INFO',
+    0xc03,
+    {
+      data: { flags: 0, resetHours: 0 },
+      favorLevel: 0,
+      responses: [
+        { data: { emotion: 5, emotionValue: 40, unused: new Uint8Array(4), responseNumber: 1, unused2: new Uint8Array(3), sound: 0, useEmotionAnimation: 0, unused3: new Uint8Array(3) }, text: 'A crate of mead went missing from the cellar.' },
+        { data: { emotion: 0, emotionValue: 50, unused: new Uint8Array(4), responseNumber: 2, unused2: new Uint8Array(3), sound: 0, useEmotionAnimation: 0, unused3: new Uint8Array(3) }, text: 'Find it and I will make it worth your while.' },
+      ],
+      conditions: [{ data: { ...newCondition(isId), param1: keeper } }, { data: { ...newCondition(getStage), param1: quest, op: '<', value: 10 } }],
+    },
+    { topic },
+  );
+  void table;
+  return p;
+}
+
+/** A plugin with typical "dirty" edits for demonstrating the cleaner. */
+function buildDirtyPatch(master: Plugin): Plugin {
+  const p = Plugin.create('DirtyPatch.esp', { masters: ['DemoWorld.esm'], author: 'Someone in a hurry' });
+  const crate = [...master.recordsOfType('STAT')].find((r) => r.editorId === 'DemoCrate')!;
+  placeRecord(p, crate.clone()); // ITM
+  const cell = [...master.recordsOfType('CELL')].find((r) => r.editorId === 'DemoTavern')!;
+  placeRecord(p, cell.clone()); // ITM parent cell
+  const refs = master.childGroupOf(cell)!.groups.flatMap((g) => g.records);
+  const baseOf = (r: PluginRecord) => new DataView(r.get('NAME')!.data.buffer, r.get('NAME')!.data.byteOffset, 4).getUint32(0, true);
+  const crates = refs.filter((r) => r.sig === 'REFR' && baseOf(r) === crate.formId);
+  const barrels = refs.filter((r) => r.sig === 'REFR' && r.get('NAME') && [...master.recordsOfType('STAT')].find((s) => s.formId === baseOf(r))?.editorId === 'DemoBarrel');
+  placeRecord(p, crates[0]!.clone(), { cell: cell.formId }); // ITM reference
+  placeRecord(p, new PluginRecord({ sig: 'REFR', formId: barrels[0]!.formId, flags: RecordFlags.Deleted }, new Uint8Array(0)), { cell: cell.formId }); // UDR: deleted barrel
+  const moved = crates[1]!.clone(); // a real edit: move a crate
+  const d = moved.get('DATA')!.data.slice();
+  new DataView(d.buffer).setFloat32(0, -300, true);
+  moved.set('DATA', d);
+  placeRecord(p, moved, { cell: cell.formId });
+  p.updateHeaderBookkeeping();
+  return p;
+}
+
+/** Write the demo game folder into a memory file system. */
+export function createDemoData(fs: MemoryFileSystem, root = '/Demo/Skyrim Special Edition'): DemoPaths {
+  const dataDir = `${root}/Data`;
+  fs.writeFileSync(`${root}/SkyrimSE.exe`, new Uint8Array(0));
+  const master = buildDemoMaster();
+  master.updateHeaderBookkeeping();
+  fs.writeFileSync(`${dataDir}/DemoWorld.esm`, master.serialize());
+  fs.writeFileSync(`${dataDir}/DirtyPatch.esp`, buildDirtyPatch(master).serialize());
+  for (const [path, bytes] of Object.entries(meshesAndTextures())) fs.writeFileSync(`${dataDir}/${path.replace(/\\/g, '/')}`, bytes);
+  for (const [name, src] of Object.entries(SCRIPTS)) fs.writeFileSync(`${dataDir}/Source/Scripts/${name}.psc`, src.replace(/\n/g, '\r\n'));
+  fs.writeFileSync(`${dataDir}/Source/Scripts/TESV_Papyrus_Flags.flg`, 'Flag hidden 0\r\nFlag conditional 1\r\n');
+  return { gameDir: root, dataDir, plugins: ['DemoWorld.esm', 'DirtyPatch.esp'] };
+}

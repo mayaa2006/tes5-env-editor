@@ -4,7 +4,7 @@
  * recomputed automatically whenever a navmesh is saved.
  */
 import { NAVMESH_PATHING_DOOR_CRC, NavTriFlags, type NavVertex, type Navmesh } from '@tes5/esp';
-import { findTriangleAt } from './build';
+import { findNearestTriangle } from './build';
 
 const EDGE_FLAGS = [NavTriFlags.Edge01Link, NavTriFlags.Edge12Link, NavTriFlags.Edge20Link] as const;
 
@@ -116,13 +116,16 @@ export interface DoorPlacement {
   position: NavVertex;
 }
 
-/** Link door references to the triangle under them and flag that triangle. */
-export function linkDoors(nav: Navmesh, doors: readonly DoorPlacement[]): number {
+/**
+ * Link door references to the triangle under (or, since navmeshes stop short
+ * of walls, nearest in front of) them and flag that triangle.
+ */
+export function linkDoors(nav: Navmesh, doors: readonly DoorPlacement[], maxDistance = 160): number {
   nav.doorLinks = [];
   for (const t of nav.triangles) t.flags &= ~NavTriFlags.Door;
   let n = 0;
   for (const d of doors) {
-    const tri = findTriangleAt(nav, d.position);
+    const tri = findNearestTriangle(nav, d.position, maxDistance);
     if (tri < 0) continue;
     nav.doorLinks.push({ triangle: tri, crc: NAVMESH_PATHING_DOOR_CRC, door: d.ref });
     nav.triangles[tri]!.flags |= NavTriFlags.Door;

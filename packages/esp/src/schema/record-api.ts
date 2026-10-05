@@ -47,9 +47,12 @@ export function decodeRecord(rec: PluginRecord, ctx: Partial<CodecContext> = {})
   let lossless = res.errors.length === 0;
   if (lossless) {
     try {
-      // Re-encode without remapping string IDs (lookups are read-only here).
-      const again = encodeRecordData(def, res.data, { ...c, storeString: undefined }, res.unknown);
-      lossless = subrecordsEqual(again, subs);
+      // Check the raw round trip: FormIDs as stored and localized strings as IDs.
+      // (Mapping FormIDs to keys or IDs to text is a presentation concern.)
+      const rawCtx = defaultCodecContext(rec.sig, { formVersion: rec.formVersion, localized: c.localized });
+      const raw = ctx.mapFormId || ctx.lookupString ? decodeRecordData(def, subs, rawCtx) : res;
+      const again = encodeRecordData(def, raw.data, rawCtx, raw.unknown);
+      lossless = raw.errors.length === 0 && subrecordsEqual(again, subs);
     } catch {
       lossless = false;
     }
