@@ -34,6 +34,11 @@ export interface ViewportCallbacks {
   hiddenChanged(): void;
   navPick?(triangles: number[], additive: boolean): void;
   navDelete?(): void;
+  /** Draw tool: a new triangle from three world points (snapped to existing vertices). */
+  navAddTriangle?(points: { x: number; y: number; z: number }[]): void;
+  /** G in navmesh mode: new positions for vertices. */
+  navMoveVertices?(moves: { index: number; x: number; y: number; z: number }[]): void;
+  navDrawChanged?(on: boolean): void;
   /** Tab: toggle navmesh edit mode (Blender's edit-mode key). */
   tab?(): void;
 }
@@ -131,6 +136,8 @@ export class Viewport {
   private ro: ResizeObserver;
 
   private navEdit?: { key: FormKey; nav: Navmesh; selected: Set<number> };
+  private navDraw?: { points: THREE.Vector3[] };
+  private navMove?: { verts: number[]; start: THREE.Vector3[]; pivot: THREE.Vector3; mouse0: THREE.Vector2; axis: Axis | null; plane: boolean; typed: string };
   private navMeshes: { key: FormKey; nav: Navmesh; mine: boolean }[] = [];
 
   constructor(
@@ -386,6 +393,7 @@ export class Viewport {
   setNavEdit(key: FormKey | null): void {
     const n = key ? this.navMeshes.find((m) => m.key === key) : undefined;
     this.navEdit = n ? { key: n.key, nav: n.nav, selected: new Set() } : undefined;
+    if (!this.navEdit && this.navDraw) this.setNavDraw(false);
     if (this.navEdit) this.setSelection([]);
     this.rebuildNav();
   }
@@ -398,6 +406,102 @@ export class Viewport {
     if (!this.navEdit) return;
     this.navEdit.selected = new Set(tris);
     this.rebuildNav();
+  }
+
+  /** Toggle the navmesh draw tool (click three points to add a triangle; Esc stops). */
+  setNavDraw(on: boolean): void {
+    this.navDraw = on && this.navEdit ? { points: [] } : undefined;
+    this.drawNavPoints();
+    this.cb.navDrawChanged?.(!!this.navDraw);
+    this.cb.status(this.navDraw ? 'Draw: click 3 points to add a triangle (snaps to existing vertices) · Esc to stop' : null);
+  }
+
+  get isNavDrawing(): boolean {
+    return !!this.navDraw;
+  }
+
+  private drawNavPoints(): void {
+    for (const c of [...this.helpers.children]) if (c.userData.navDraw) this.helpers.remove(c);
+    for (const p of this.navDraw?.points ?? []) {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(Math.max(4, this.dist / 250), 10, 8), new THREE.MeshBasicMaterial({ color: 0xffb340, depthTest: false }));
+      m.position.copy(p);
+      m.renderOrder = 12;
+      m.userData.navDraw = true;
+      this.helpers.add(m);
+    }
+    const pts = this.navDraw?.points ?? [];
+    if (pts.length >= 2) {
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0xffb340, depthTest: false }));
+      line.userData.navDraw = true;
+      line.renderOrder = 12;
+      this.helpers.add(line);
+    }
+    this.invalidate();
+  }
+
+  /** A point for navmesh drawing: geometry under the cursor, snapped to a nearby existing vertex. */
+  private navPointAt(clientX: number, clientY: number): THREE.Vector3 {
+    const ray = this.rayAt(clientX, clientY);
+    const hits = ray.intersectObjects([this.root, this.terrainGroup, this.navGroup], true).filter((h) => h.object.visible && (h.object as THREE.Mesh).isMesh);
+    const p = hits[0]?.point.clone() ?? this.pickPoint(clientX, clientY);
+    const nav = this.navEdit?.nav;
+    if (nav) {
+      // Snap within ~12 screen pixels.
+      const sp = new THREE.Vector2(clientX, clientY);
+      let best: THREE.Vector3 | undefined;
+      let bestD = 12;
+      for (const v of nav.vertices) {
+        const w = new THREE.Vector3(v.x, v.y, v.z);
+        const d = this.toScreen(w).distanceTo(sp);
+        if (d < bestD) {
+          bestD = d;
+          best = w;
+        }
+      }
+      if (best) return best;
+    }
+    return p;
+  }
+
+  private startNavMove(): void {
+    const ne = this.navEdit;
+    if (!ne || !ne.selected.size) return;
+    const verts = [...new Set([...ne.selected].flatMap((t) => ne.nav.triangles[t]?.v ?? []))];
+    const start = verts.map((i) => new THREE.Vector3(ne.nav.vertices[i]!.x, ne.nav.vertices[i]!.y, ne.nav.vertices[i]!.z));
+    const pivot = start.reduce((a, b) => a.add(b), new THREE.Vector3()).divideScalar(start.length);
+    this.navMove = { verts, start, pivot, mouse0: this.mouse.clone(), axis: null, plane: false, typed: '' };
+    this.updateNavMove();
+  }
+
+  private updateNavMove(): void {
+    const m = this.navMove;
+    const ne = this.navEdit;
+    if (!m || !ne) return;
+    const typed = m.typed !== '' && m.typed !== '-' && m.typed !== '.' ? Number(m.typed) : undefined;
+    const delta = this.moveDelta(m.pivot, m.mouse0, m.axis, m.plane, typed);
+    m.verts.forEach((vi, i) => {
+      const p = m.start[i]!.clone().add(delta);
+      ne.nav.vertices[vi] = { x: p.x, y: p.y, z: p.z };
+    });
+    this.rebuildNav();
+    this.drawAxisGuide(m);
+    this.cb.status(`Move ${m.verts.length} navmesh vertices  X ${delta.x.toFixed(1)}  Y ${delta.y.toFixed(1)}  Z ${delta.z.toFixed(1)}${m.axis ? `   ${m.plane ? 'plane ⟂ ' : 'along '}${m.axis.toUpperCase()}` : ''}${m.typed ? `   [${m.typed}]` : ''}`);
+  }
+
+  private endNavMove(confirm: boolean): void {
+    const m = this.navMove;
+    const ne = this.navEdit;
+    this.navMove = undefined;
+    this.drawAxisGuide(undefined);
+    this.cb.status(null);
+    if (!m || !ne) return;
+    if (confirm) {
+      const moves = m.verts.map((vi) => ({ index: vi, ...ne.nav.vertices[vi]! }));
+      this.cb.navMoveVertices?.(moves);
+    } else {
+      m.verts.forEach((vi, i) => (ne.nav.vertices[vi] = { x: m.start[i]!.x, y: m.start[i]!.y, z: m.start[i]!.z }));
+      this.rebuildNav();
+    }
   }
 
   setNavVisible(v: boolean): void {
@@ -654,6 +758,24 @@ export class Viewport {
       e.preventDefault();
       return;
     }
+    if (this.navMove) {
+      this.endNavMove(e.button === 0);
+      e.preventDefault();
+      return;
+    }
+    if (this.navDraw && !e.altKey && (e.button === 0 || e.button === 2)) {
+      e.preventDefault();
+      if (e.button === 2) return this.setNavDraw(false);
+      this.navDraw.points.push(this.navPointAt(e.clientX, e.clientY));
+      if (this.navDraw.points.length === 3) {
+        const pts = this.navDraw.points.map((p) => ({ x: p.x, y: p.y, z: p.z }));
+        // Keep the last two points so the next click continues a strip.
+        this.navDraw.points = this.navDraw.points.slice(1);
+        this.cb.navAddTriangle?.(pts);
+      }
+      this.drawNavPoints();
+      return;
+    }
     if (e.button === 0 && !e.altKey && this.gizmo.axis) return; // the gizmo handles it
     const mode = e.button === 1 || (e.button === 0 && e.altKey) ? (e.shiftKey ? 'pan' : e.ctrlKey ? 'zoom' : 'orbit') : e.button === 2 ? 'look' : e.button === 0 ? (this.boxMode ? 'box' : 'click') : undefined;
     if (!mode) return;
@@ -670,6 +792,11 @@ export class Viewport {
     if (this.modal && !this.modal.gizmo) {
       this.ctrlHeld = e.ctrlKey;
       this.updateModal();
+      return;
+    }
+    if (this.navMove) {
+      this.ctrlHeld = e.ctrlKey;
+      this.updateNavMove();
       return;
     }
     const d = this.drag;
@@ -819,6 +946,29 @@ export class Viewport {
       this.modalKey(e);
       return;
     }
+    if (this.navMove) {
+      e.preventDefault();
+      e.stopPropagation();
+      const nm = this.navMove;
+      const key = e.key.toLowerCase();
+      if (key === 'escape') return this.endNavMove(false);
+      if (key === 'enter') return this.endNavMove(true);
+      if (key === 'x' || key === 'y' || key === 'z') {
+        if (nm.axis === key && nm.plane === e.shiftKey) nm.axis = null;
+        else {
+          nm.axis = key;
+          nm.plane = e.shiftKey;
+        }
+      } else if (/^[0-9.]$/.test(e.key)) nm.typed += e.key;
+      else if (e.key === '-') nm.typed = nm.typed.startsWith('-') ? nm.typed.slice(1) : `-${nm.typed}`;
+      else if (key === 'backspace') nm.typed = nm.typed.slice(0, -1);
+      return this.updateNavMove();
+    }
+    if (this.navDraw && e.key === 'Escape') {
+      this.setNavDraw(false);
+      e.preventDefault();
+      return;
+    }
     const k = e.key.toLowerCase();
     const ctrl = e.ctrlKey || e.metaKey;
     const handled = (): void => {
@@ -885,6 +1035,14 @@ export class Viewport {
       }
       if (k === 'f') {
         this.frameNav();
+        return handled();
+      }
+      if (k === 'g' && !ctrl && this.navEdit.selected.size) {
+        this.startNavMove();
+        return handled();
+      }
+      if (k === 'd' && !ctrl && !e.shiftKey) {
+        this.setNavDraw(!this.navDraw);
         return handled();
       }
       return;
@@ -1042,27 +1200,7 @@ export class Viewport {
     let text = '';
     const axisName = m.axis ? `${m.plane ? 'plane ⟂ ' : 'along '}${m.axis.toUpperCase()}` : '';
     if (m.kind === 'move') {
-      let delta = new THREE.Vector3();
-      if (typed !== undefined && Number.isFinite(typed)) {
-        delta = AXES[m.axis && !m.plane ? m.axis : 'x'].clone().multiplyScalar(typed);
-      } else {
-        let normal: THREE.Vector3;
-        if (m.axis && !m.plane) {
-          const a = AXES[m.axis];
-          normal = a.clone().cross(viewDir.clone().cross(a));
-          if (normal.lengthSq() < 1e-6) normal = viewDir.clone();
-        } else if (m.axis && m.plane) normal = AXES[m.axis].clone();
-        else normal = viewDir.clone();
-        const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal.normalize(), m.pivot);
-        const p0 = this.planeIntersect(m.mouse0.x, m.mouse0.y, plane);
-        const p1 = this.planeIntersect(this.mouse.x, this.mouse.y, plane);
-        if (p0 && p1) {
-          delta = p1.sub(p0);
-          if (m.axis && !m.plane) delta = AXES[m.axis].clone().multiplyScalar(delta.dot(AXES[m.axis]));
-          if (m.axis && m.plane) delta.sub(AXES[m.axis].clone().multiplyScalar(delta.dot(AXES[m.axis])));
-        }
-        if (this.snapping) delta.set(Math.round(delta.x / this.snap.move) * this.snap.move, Math.round(delta.y / this.snap.move) * this.snap.move, Math.round(delta.z / this.snap.move) * this.snap.move);
-      }
+      const delta = this.moveDelta(m.pivot, m.mouse0, m.axis, m.plane, typed);
       for (const [k, s] of m.start) {
         const o = this.entries.get(k)!.obj;
         o.position.copy(s.pos).add(delta);
@@ -1114,7 +1252,31 @@ export class Viewport {
     this.invalidate(true);
   }
 
-  private drawAxisGuide(m: ModalState | undefined): void {
+  /** World-space translation for a move drag (or typed value), honouring axis/plane constraints and snapping. */
+  private moveDelta(pivot: THREE.Vector3, mouse0: THREE.Vector2, axis: Axis | null, planeLock: boolean, typed: number | undefined): THREE.Vector3 {
+    if (typed !== undefined && Number.isFinite(typed)) return AXES[axis && !planeLock ? axis : 'x'].clone().multiplyScalar(typed);
+    const viewDir = this.target.clone().sub(this.camera.position).normalize();
+    let normal: THREE.Vector3;
+    if (axis && !planeLock) {
+      const a = AXES[axis];
+      normal = a.clone().cross(viewDir.clone().cross(a));
+      if (normal.lengthSq() < 1e-6) normal = viewDir.clone();
+    } else if (axis && planeLock) normal = AXES[axis].clone();
+    else normal = viewDir.clone();
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal.normalize(), pivot);
+    const p0 = this.planeIntersect(mouse0.x, mouse0.y, plane);
+    const p1 = this.planeIntersect(this.mouse.x, this.mouse.y, plane);
+    let delta = new THREE.Vector3();
+    if (p0 && p1) {
+      delta = p1.sub(p0);
+      if (axis && !planeLock) delta = AXES[axis].clone().multiplyScalar(delta.dot(AXES[axis]));
+      if (axis && planeLock) delta.sub(AXES[axis].clone().multiplyScalar(delta.dot(AXES[axis])));
+    }
+    if (this.snapping) delta.set(Math.round(delta.x / this.snap.move) * this.snap.move, Math.round(delta.y / this.snap.move) * this.snap.move, Math.round(delta.z / this.snap.move) * this.snap.move);
+    return delta;
+  }
+
+  private drawAxisGuide(m: { pivot: THREE.Vector3; axis: Axis | null } | undefined): void {
     for (const c of [...this.helpers.children]) if (c.userData.guide) this.helpers.remove(c);
     if (!m?.axis) return;
     const d = AXES[m.axis].clone().multiplyScalar(100000);

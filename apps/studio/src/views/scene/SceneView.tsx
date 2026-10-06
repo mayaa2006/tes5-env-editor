@@ -4,7 +4,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormKey, Navmesh } from '@tes5/esp';
-import { deleteTriangles, setTriangleFlags } from '@tes5/navmesh';
+import { addTriangle, buildGrid, deleteTriangles, setTriangleFlags } from '@tes5/navmesh';
 import type { PlacedRef } from '@tes5/workspace';
 import { Checkbox, Field, Icon, Modal, Select, TextInput, useQuery } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
@@ -27,6 +27,7 @@ export default function SceneView() {
   const [showNav, setShowNav] = useState(true);
   const [navEdit, setNavEdit] = useState<FormKey | null>(null);
   const [navSel, setNavSel] = useState<number[]>([]);
+  const [navDrawing, setNavDrawing] = useState(false);
   const [dropping, setDropping] = useState(false);
   const [hiddenTick, setHiddenTick] = useState(0);
   const [newCell, setNewCell] = useState(false);
@@ -66,7 +67,18 @@ export default function SceneView() {
       hiddenChanged: () => setHiddenTick((t) => t + 1),
       navPick: (tris) => setNavSel(tris),
       navDelete: () => void editNav((nav, sel) => deleteTriangles(nav, sel), 'Delete navmesh triangles'),
+      navAddTriangle: (pts) => void editNav((nav) => void addTriangle(nav, pts[0]!, pts[1]!, pts[2]!, 2), 'Add navmesh triangle', { needsSelection: false }),
+      navMoveVertices: (moves) =>
+        void editNav(
+          (nav) => {
+            for (const m of moves) nav.vertices[m.index] = { x: m.x, y: m.y, z: m.z };
+            buildGrid(nav, nav.grid.divisor);
+          },
+          'Move navmesh vertices',
+          { needsSelection: false },
+        ),
       tab: () => toggleNavEdit(),
+      navDrawChanged: setNavDrawing,
     });
     vpRef.current = vp;
     (window as unknown as { __viewport?: Viewport }).__viewport = vp;
@@ -97,13 +109,13 @@ export default function SceneView() {
     setShowNav(true);
   };
 
-  const editNav = async (fn: (nav: Navmesh, sel: number[]) => void, label: string) => {
+  const editNav = async (fn: (nav: Navmesh, sel: number[]) => void, label: string, opts: { needsSelection?: boolean } = {}) => {
     const vp = vpRef.current;
     const key = live.current.navEdit;
     const n = live.current.navmeshes?.find((m) => m.formKey === key);
     if (!vp || !key || !n) return;
     const sel = vp.navSelection;
-    if (!sel.length) return;
+    if (!sel.length && opts.needsSelection !== false) return;
     const nav = structuredClone(n.geometry);
     fn(nav, sel);
     const issues = await engine((c) => c.call('updateNavmesh', key, nav));
@@ -260,7 +272,7 @@ export default function SceneView() {
           <div className="viewport-overlay viewport-hint">
             {navEdit ? (
               <>
-                Click/drag select triangles · <span className="kbd">X</span> delete · <span className="kbd">A</span> all · <span className="kbd">Tab</span> done
+                Click/drag select triangles · <span className="kbd">G</span> move · <span className="kbd">D</span> draw · <span className="kbd">X</span> delete · <span className="kbd">A</span> all · <span className="kbd">Tab</span> done
               </>
             ) : (
               <>
@@ -272,7 +284,7 @@ export default function SceneView() {
             )}
           </div>
           {dropping && <div className="drop-hint">Drop to place it here</div>}
-          {navEdit && <NavEditPanel count={navmeshes?.find((n) => n.formKey === navEdit)?.geometry.triangles.length ?? 0} selected={navSel} onFlag={(flag, on) => void editNav((nav, sel) => setTriangleFlags(nav, sel, flag, on), 'Set navmesh flags')} onDelete={() => void editNav((nav, sel) => deleteTriangles(nav, sel), 'Delete navmesh triangles')} onDone={toggleNavEdit} />}
+          {navEdit && <NavEditPanel count={navmeshes?.find((n) => n.formKey === navEdit)?.geometry.triangles.length ?? 0} selected={navSel} drawing={navDrawing} onDraw={() => vpRef.current?.setNavDraw(!vpRef.current.isNavDrawing)} onFlag={(flag, on) => void editNav((nav, sel) => setTriangleFlags(nav, sel, flag, on), 'Set navmesh flags')} onDelete={() => void editNav((nav, sel) => deleteTriangles(nav, sel), 'Delete navmesh triangles')} onDone={toggleNavEdit} />}
         </div>
         {outliner && <Outliner refs={refs ?? []} hiddenTick={hiddenTick} viewport={vpRef} />}
       </div>
@@ -374,7 +386,7 @@ function GenerateNavmesh({ cell, interior }: { cell: FormKey; interior: boolean 
   );
 }
 
-function NavEditPanel({ count, selected, onFlag, onDelete, onDone }: { count: number; selected: number[]; onFlag: (flag: number, on: boolean) => void; onDelete: () => void; onDone: () => void }) {
+function NavEditPanel({ count, selected, drawing, onDraw, onFlag, onDelete, onDone }: { count: number; selected: number[]; drawing: boolean; onDraw: () => void; onFlag: (flag: number, on: boolean) => void; onDelete: () => void; onDone: () => void }) {
   return (
     <div className="card" style={{ position: 'absolute', right: 10, top: 40, width: 220, zIndex: 5 }}>
       <div className="card-title">Navmesh</div>
@@ -382,6 +394,10 @@ function NavEditPanel({ count, selected, onFlag, onDelete, onDone }: { count: nu
         {count} triangles · {selected.length} selected
       </div>
       <div className="col" style={{ gap: 4 }}>
+        <button className={`btn small ${drawing ? 'active' : ''}`} onClick={onDraw} title="Click three points to add a triangle; keeps going as a strip. Snaps to existing vertices. (D)" data-testid="nav-draw">
+          <Icon name="plus" size={12} /> {drawing ? 'Drawing… (Esc to stop)' : 'Draw triangles'}
+        </button>
+        <div className="dim small">Select triangles, then press G to move their vertices (X/Y/Z to lock an axis).</div>
         <button className="btn small" disabled={!selected.length} onClick={onDelete}>
           <Icon name="trash" size={12} /> Delete triangles
         </button>

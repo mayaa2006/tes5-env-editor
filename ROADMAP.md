@@ -17,7 +17,7 @@ Tested means unit tests (`npm test`) plus the Playwright run of the browser demo
 | Rendering fidelity | 🟡 | Diffuse textures and alpha are supported. Normal/specular maps, LOD, water, sky and weather are not. |
 | Exterior terrain (LAND) | 🟡 | Heights and vertex colours are shown. Texture layers and terrain editing are not. |
 | Navmesh generation, door linking, exterior stitching | 🟡 | Works on the demo. The NVNM grid cell ordering and triangle winding rules are inferred from xEdit and need in-game confirmation, which is why the grid divisor defaults to 1. Cover data isn't generated. |
-| Navmesh manual editing | 🟡 | You can delete triangles and set flags. You can't draw or move vertices yet. |
+| Navmesh manual editing | ✅ | Tab enters edit mode, with Blender-style select / box / all. You can draw triangles (click 3 points, snapping to existing vertices, continuing as a strip), move vertices with G and X/Y/Z axis locks, delete triangles, and set the preferred / water / no-large-creatures flags. Edge links inside the mesh and the search grid are rebuilt after each edit. |
 | Character creator | 🟡 | Head parts, sliders, colours and tints are edited correctly. The preview uses the race-agnostic chargen morph names, so check them against real head TRIs. **FaceGen export (Ctrl+F4) is not implemented**: the editor detects missing FaceGen and tells you to export it from the CK. |
 | Quests: stages, objectives, aliases, fragments | ✅ | Alias fill types beyond unique actor, specific reference and location must be set in the properties panel. |
 | Dialogue: topics, responses, conditions, begin/end scripts, voice names | ✅ | Scenes (SCEN) and packages (PACK) are only partly supported (raw fields). The voice-file truncation rule matches community documentation and should be confirmed. |
@@ -58,5 +58,5 @@ Tested means unit tests (`npm test`) plus the Playwright run of the browser demo
 1. Open a vanilla Skyrim SE install and a large MO2 setup. Confirm the synthetic benchmark numbers hold, then verify that saving unchanged plugins produces identical files.
 2. FaceGen export: bake head meshes with morphs and write the facetint DDS.
 3. Render skinned actors and armour; add normal maps.
-4. Navmesh vertex editing and cover generation.
+4. Navmesh cover generation, and merging or splitting vertices.
 5. Scene (SCEN) and AI package editors.

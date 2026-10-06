@@ -71,6 +71,25 @@ test('world editing: open a cell, select, move with G, drag & drop, navmesh', as
   await expect(page.locator('.toast').filter({ hasText: /Navmesh: \d+ triangles/ })).toBeVisible();
   await page.waitForTimeout(800);
   await shot(page, '02-world-navmesh');
+
+  // Navmesh edit mode: move all vertices up with G Z 8, then draw a triangle.
+  await page.mouse.move(cx, cy);
+  await page.keyboard.press('Tab');
+  await expect(page.locator('.viewport-mode')).toContainText('Navmesh edit mode');
+  const triCount = async () => Number((await page.locator('.card', { hasText: 'triangles ·' }).locator('.dim').first().textContent())!.split(' ')[0]);
+  const n0 = await triCount();
+  await page.keyboard.press('a');
+  await page.keyboard.press('g');
+  await page.keyboard.press('z');
+  await page.keyboard.type('8');
+  await page.keyboard.press('Enter');
+  await expect(page.getByTitle(/Undo Edit navmesh/)).toBeEnabled();
+  await page.getByTestId('nav-draw').click();
+  await page.mouse.move(cx, cy);
+  for (const [dx, dy] of [[-120, 60], [-40, 140], [-160, 160]]) await page.mouse.click(cx + dx, cy + dy);
+  await page.keyboard.press('Escape');
+  await expect.poll(triCount).toBe(n0 + 1);
+  await shot(page, '02b-navmesh-edit');
   expect(errors).toEqual([]);
 });
 
