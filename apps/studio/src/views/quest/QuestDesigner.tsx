@@ -10,6 +10,7 @@ import type { InfoModel, QuestModel, TopicModel } from '@tes5/workspace';
 import { Checkbox, DragNumber, Field, FormLink, FormPicker, Icon, Modal, Select, Tabs, TextInput, useDebounced, useQuery, useSummaries, useUniqueEditorId } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 import { ConditionList } from '../record/ConditionEditor';
+import { TriggersSection } from '../record/TriggersEditor';
 import { CodeEditor } from '../script/CodeEditor';
 
 const QuestMap = lazy(() => import('./QuestMap'));
@@ -420,6 +421,7 @@ function Aliases({ q }: { q: QuestModel }) {
   const [kind, setKind] = useState<'actor' | 'ref' | 'loc'>('actor');
   const [target, setTarget] = useState<FormKey | null>(null);
   const sums = useSummaries(q.aliases.flatMap((a) => Object.values(a.fill).filter((v): v is FormKey => typeof v === 'string' && v.includes(':'))));
+  const [triggersFor, setTriggersFor] = useState<number | null>(null);
   return (
     <div className="col" style={{ gap: 8, maxWidth: 860 }}>
       <table className="grid card" style={{ padding: 0 }}>
@@ -429,6 +431,7 @@ function Aliases({ q }: { q: QuestModel }) {
             <th>Name</th>
             <th>Filled by</th>
             <th>Flags</th>
+            <th />
           </tr>
         </thead>
         <tbody>
@@ -455,17 +458,29 @@ function Aliases({ q }: { q: QuestModel }) {
                   </div>
                 )}
               </td>
+              <td>
+                {a.kind === 'ref' && (
+                  <button className="btn small ghost" onClick={() => setTriggersFor(a.id)} title="What happens when the player interacts with whoever fills this alias">
+                    <Icon name="auto" size={12} /> Triggers
+                  </button>
+                )}
+              </td>
             </tr>
           ))}
           {!q.aliases.length && (
             <tr>
-              <td colSpan={4} className="faint">
+              <td colSpan={5} className="faint">
                 No aliases. Aliases let scripts and dialogue refer to the actors and objects a quest uses.
               </td>
             </tr>
           )}
         </tbody>
       </table>
+      {triggersFor !== null && (
+        <Modal title={`Triggers on alias ${q.aliases.find((a) => a.id === triggersFor)?.name ?? triggersFor}`} onClose={() => setTriggersFor(null)} width={560}>
+          <TriggersSection host={{ kind: 'alias', quest: q.formKey, alias: triggersFor }} actor />
+        </Modal>
+      )}
       <div className="card row wrap" style={{ gap: 8 }}>
         <div style={{ width: 160 }}>
           <TextInput value={name} onCommit={setName} placeholder="Alias name" mono />

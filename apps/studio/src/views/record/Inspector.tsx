@@ -9,6 +9,7 @@ import type { RecordSummary, RecordView, Transform } from '@tes5/workspace';
 import { DragNumber, Field, Icon, Section, useQuery } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 import { RecordForm } from './RecordForm';
+import { TriggersSection } from './TriggersEditor';
 
 const DEG = 180 / Math.PI;
 const REF_SIGS = new Set(['REFR', 'ACHR', 'PGRE', 'PMIS', 'PHZD', 'PARW', 'PBAR', 'PBEA', 'PCON', 'PFLA']);
@@ -92,6 +93,13 @@ export function Inspector() {
           </div>
         )}
         {isRef && <TransformEditor view={view} />}
+        {(view.sig === 'REFR' || view.sig === 'ACHR') && (
+          <div className="pad" style={{ paddingTop: 0 }}>
+            <Section title="Triggers">
+              <TriggersSection host={{ kind: 'ref', ref: view.formKey }} actor={view.sig === 'ACHR'} />
+            </Section>
+          </div>
+        )}
         {!view.hasSchema ? (
           <RawView view={view} note="This record type has no form editor yet. Its data is preserved exactly as is." />
         ) : !view.lossless ? (
