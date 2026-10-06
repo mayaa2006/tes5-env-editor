@@ -1,0 +1,16 @@
+{
+  "name": "@tes5/navmesh",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Navmesh (NVNM) codec and automatic generation",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@tes5/esp": "*",
+    "recast-navigation": "^0.43.1"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "name": "tes5-env-editor",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A modern, automation-first alternative to the Skyrim Creation Kit: quests, NPCs, environments, scripting and plugin cleaning.",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p apps/studio/tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "cli": "tsx packages/cli/src/main.ts",
+    "dev": "npm run dev -w @tes5/studio",
+    "dev:web": "npm run dev:web -w @tes5/studio",
+    "build": "npm run build -w @tes5/studio",
+    "check": "npm run typecheck && npm run test",
+    "test:e2e": "npm run test:e2e -w @tes5/studio",
+    "bench": "node --expose-gc --import tsx packages/workspace/bench/large-load-order.ts",
+    "test:stress": "npm run test:stress -w @tes5/studio"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.3"
+  }
+}

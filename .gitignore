@@ -1,0 +1,12 @@
+node_modules/
+dist/
+out/
+release/
+coverage/
+*.log
+.DS_Store
+.vite/
+test-results/
+playwright-report/
+*.tsbuildinfo
+dist-electron/
