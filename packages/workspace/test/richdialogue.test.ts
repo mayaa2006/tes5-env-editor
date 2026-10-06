@@ -2,12 +2,18 @@ import { describe, expect, it } from 'vitest';
 import { conditionFunction, type FormKey } from '@tes5/esp';
 import { DialogueService, MemoryFileSystem, QuestGraphService, QuestService, ScriptService, TriggerService, Workspace, createDemoData, lintScreenplay, parseIf, readScene } from '../src';
 
-async function setup() {
+async function setup(withExtra = false) {
   const fs = new MemoryFileSystem();
   const demo = createDemoData(fs);
   const ws = new Workspace(fs, { game: 'SkyrimSE', roots: [demo.dataDir], outputDir: demo.dataDir, loadOrder: [{ name: 'DemoWorld.esm', active: true }] });
   await ws.scan();
   await ws.load();
+  // Another plugin that loads first and isn't a master of Rich.esp yet.
+  let extra: FormKey | undefined;
+  if (withExtra) {
+    ws.createPlugin('Extra.esp');
+    extra = ws.createRecord('MISC', { editorId: 'ExtraThing', name: 'Thing', data: { value: 1, weight: 1 } });
+  }
   ws.createPlugin('Rich.esp');
   const scripts = new ScriptService(ws);
   scripts.refresh();
@@ -17,7 +23,7 @@ async function setup() {
   const q = quests.createQuest('RichQuest', 'Rich', { startGameEnabled: true });
   for (const st of [0, 10, 20, 30]) quests.addStage(q, st, '', { startUp: st === 0 });
   const run = (text: string) => dialogue.importScreenplay(q, text, (info, code, which) => quests.setInfoFragment(info, which, code), { aliasFor: (qq, npc) => graphs.aliasFor(qq, npc), appendStageCode: (qq, st, lines) => graphs.appendStageCode(qq, st, lines) });
-  return { fs, demo, ws, quests, graphs, dialogue, scripts, q, run, k: (e: string) => ws.byEditorId(e)! };
+  return { fs, demo, ws, quests, graphs, dialogue, scripts, q, run, extra, k: (e: string) => ws.byEditorId(e)! };
 }
 
 const fn = (c: { function: number }) => conditionFunction(c.function)!.name;
@@ -92,12 +98,28 @@ describe('greetings, chatter and scenes', () => {
     expect(sceneTopics[0]!.infos[0]!.responses.map((x) => x.text)).toEqual(['You still owe me for last week.', 'And the week before.']);
     expect(dialogue.graph(q).topics.every((t) => t.kind === 'scene')).toBe(true);
     expect(await graphs.fragmentCode(q, 20)).toMatch(/^\(Game\.GetFormFromFile\(0x[0-9A-F]{6}, "Rich\.esp"\) as Scene\)\.Start\(\)$/);
+    // Fully typed (so FormIDs inside are kept right when masters change).
+    expect(ws.view(scene)!).toMatchObject({ hasSchema: true, lossless: true, unknown: [] });
     // Survives saving and loading.
     await ws.save();
     const ws2 = new Workspace(fs, { game: 'SkyrimSE', roots: [demo.dataDir], outputDir: demo.dataDir, loadOrder: [{ name: 'DemoWorld.esm', active: true }, { name: 'Rich.esp', active: true }] });
     await ws2.scan();
     await ws2.load();
     expect(readScene(ws2, scene)!.turns).toEqual(read.turns);
+  });
+
+  it('keeps a scene pointing at the right forms when the plugin gains a master', async () => {
+    const { run, ws, quests, q, extra } = await setup(true);
+    await run('SCENE: Chat [start]\nDemoInnkeeper: Hello there.\nDemoBlacksmith: Hello yourself.');
+    const scene = ws.byEditorId('RichQuestSceneChat')!;
+    const before = readScene(ws, scene)!;
+    expect(before.beginOnQuestStart).toBe(true);
+    // Pointing at something in Extra.esp makes it a new master, which renumbers the plugin's own FormIDs.
+    expect(ws.active!.plugin!.masters).not.toContain('Extra.esp');
+    ws.createRecord('FLST', { editorId: 'RichList', forms: [extra!] });
+    expect(ws.active!.plugin!.masters).toContain('Extra.esp');
+    expect(readScene(ws, scene)).toEqual(before);
+    expect(quests.topics(q).filter((t) => t.subtype === 'SCEN').map((t) => t.formKey)).toEqual(before.turns.map((t) => t.topic));
   });
 
   it('checks blocks: a scene that never starts, an unknown condition', () => {
