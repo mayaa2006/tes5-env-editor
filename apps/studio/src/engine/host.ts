@@ -8,6 +8,7 @@ import { decodeToRgba, flattenMeshes, isCompressed, parseDds, parseNif, parseTri
 import { allConditionFunctions, isFormKey, newCondition, parseFormKey, recordTypeName, type FormKey, type Navmesh, type VmadProperty } from '@tes5/esp';
 import { validateNavmesh } from '@tes5/navmesh';
 import {
+  DialogueService,
   NpcService,
   QuestGraphService,
   QuestService,
@@ -101,6 +102,7 @@ export class EngineHost {
   scripts?: ScriptService;
   triggers?: TriggerService;
   graphs?: QuestGraphService;
+  dialogue?: DialogueService;
   private source?: string;
   private listeners = new Set<Listener>();
   private meshCache = new Map<string, MeshPayload>();
@@ -157,6 +159,7 @@ export class EngineHost {
     this.quests = new QuestService(ws, this.scripts);
     this.triggers = new TriggerService(ws, this.scripts);
     this.graphs = new QuestGraphService(ws, this.quests, this.scripts, this.triggers);
+    this.dialogue = new DialogueService(ws, this.quests);
     this.meshCache.clear();
     ws.on((e) => {
       if (e.type === 'filesRestored') return; // internal to the engine
@@ -617,6 +620,28 @@ export class EngineHost {
 
   async saveQuestLayout(quest: FormKey, layout: Record<string, { x: number; y: number }>) {
     await this.graphs!.saveLayout(quest, layout);
+  }
+
+  // ---------------------------------------------------------------- dialogue graph
+
+  dialogueGraph(quest: FormKey) {
+    return this.dialogue!.graph(quest);
+  }
+
+  addDialogueChoice(info: FormKey, text: string) {
+    return this.dialogue!.addChoice(info, text);
+  }
+
+  setDialogueChoice(info: FormKey, topic: FormKey, linked: boolean) {
+    this.dialogue!.setChoice(info, topic, linked);
+  }
+
+  async importScreenplay(quest: FormKey, text: string) {
+    return this.dialogue!.importScreenplay(quest, text, (info, code) => this.quests!.setInfoFragment(info, 'end', code));
+  }
+
+  dialogueScreenplay(quest: FormKey) {
+    return this.dialogue!.toScreenplay(quest);
   }
 
   // ---------------------------------------------------------------- visual triggers

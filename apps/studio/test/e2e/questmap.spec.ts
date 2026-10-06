@@ -77,5 +77,32 @@ test('build a quest on the map', async ({ page }) => {
   await expect(page.locator('.qedge-label', { hasText: /Pick up/ })).toHaveCount(0);
   await page.keyboard.press('Control+z');
   await expect(page.locator('.qedge-label', { hasText: /Pick up/ })).toBeVisible();
+
+  // Dialogue: write a conversation as a script, then add a choice by dragging.
+  await page.getByRole('tab', { name: /Dialogue/ }).click();
+  await expect(page.getByTestId('dialogue-graph')).toBeVisible();
+  await page.getByTestId('dlg-script').click();
+  await page.getByTestId('dlg-script-text').fill(
+    ['PLAYER: Seen anything odd?', 'Brynja: Someone has been in the cellar.', '    PLAYER: Who?', '      Brynja: No idea. [goodbye]', '    PLAYER: Thanks.', '      Brynja: Mind the rats. [goodbye] [stage 100]'].join('\n'),
+  );
+  await expect(page.getByRole('dialog')).toContainText('Will add 3 player line(s) and 3 response(s)');
+  await page.getByTestId('dlg-import').click();
+  await expect(page.getByTestId('dlg-info').filter({ hasText: 'Mind the rats.' })).toBeVisible();
+  const answer = page.getByTestId('dlg-info').filter({ hasText: 'Someone has been in the cellar.' });
+  const h = (await answer.locator('.react-flow__handle-right').boundingBox())!;
+  const pane = (await page.locator('[data-testid=dialogue-graph] .react-flow').boundingBox())!;
+  await page.mouse.move(h.x + h.width / 2, h.y + h.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(pane.x + pane.width - 60, pane.y + pane.height - 60, { steps: 10 });
+  await page.mouse.up();
+  await page.getByRole('dialog').getByPlaceholder('What the player can say next').fill('Can I help?');
+  await page.getByRole('dialog').getByPlaceholder('What the player can say next').blur();
+  await page.getByTestId('dlg-create-choice').click();
+  await expect(page.getByTestId('dlg-topic').filter({ hasText: 'Can I help?' })).toBeVisible();
+  if (shots) await page.screenshot({ path: `${shots}/08-dialogue-graph.png` });
+
+  // The [stage 100] line now shows up on the quest map as a talk connection.
+  await page.getByRole('tab', { name: 'Map' }).click();
+  await expect(page.locator('.qedge-label', { hasText: 'Thanks.' })).toBeVisible();
   expect(errors).toEqual([]);
 });

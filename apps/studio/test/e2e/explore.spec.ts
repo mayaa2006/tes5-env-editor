@@ -284,6 +284,7 @@ test('exploratory sweep of every workspace', async ({ page }) => {
     }
     await expect(page.locator('table.grid')).toContainText('Aliasloc');
     await page.getByRole('tab', { name: /Dialogue/ }).click();
+    await page.getByRole('button', { name: 'List view' }).click();
     await page.getByTestId('add-topic').click();
     await page.getByPlaceholder(/What the player picks/).fill('Any rumors?');
     await page.getByPlaceholder(/What the player picks/).press('Enter');

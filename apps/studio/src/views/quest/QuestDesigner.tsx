@@ -13,6 +13,7 @@ import { ConditionList } from '../record/ConditionEditor';
 import { CodeEditor } from '../script/CodeEditor';
 
 const QuestMap = lazy(() => import('./QuestMap'));
+const DialogueGraphView = lazy(() => import('./DialogueGraph'));
 
 type Tab = 'map' | 'overview' | 'stages' | 'objectives' | 'aliases' | 'dialogue' | 'voice';
 
@@ -131,6 +132,8 @@ function QuestEditor({ quest }: { quest: FormKey }) {
   const client = useStore((s) => s.client);
   const { data: q } = useQuery(() => client?.call('quest', quest), [quest]);
   const [tab, setTab] = useState<Tab>('map');
+  const [dialogueView, setDialogueView] = useState<'graph' | 'list'>('graph');
+  const [focusTopic, setFocusTopic] = useState<FormKey | null>(null);
   if (!q) return <div className="empty grow">Loading…</div>;
   return (
     <div className="col" style={{ flex: 1, minWidth: 0, minHeight: 0 }}>
@@ -162,15 +165,35 @@ function QuestEditor({ quest }: { quest: FormKey }) {
       />
       {tab === 'map' && (
         <Suspense fallback={<div className="empty">Loading…</div>}>
-          <QuestMap quest={quest} onOpenDialogue={() => setTab('dialogue')} onOpenStages={() => setTab('stages')} />
+          <QuestMap
+            quest={quest}
+            onOpenDialogue={(topic) => {
+              setFocusTopic(topic);
+              setDialogueView('graph');
+              setTab('dialogue');
+            }}
+            onOpenStages={() => setTab('stages')}
+          />
         </Suspense>
       )}
-      <div className="scroll pad" style={{ flex: 1, display: tab === 'map' ? 'none' : undefined }}>
+      {tab === 'dialogue' && dialogueView === 'graph' && (
+        <Suspense fallback={<div className="empty">Loading…</div>}>
+          <DialogueGraphView quest={quest} questEditorId={q.editorId} focus={focusTopic} onListView={() => setDialogueView('list')} />
+        </Suspense>
+      )}
+      <div className="scroll pad" style={{ flex: 1, display: tab === 'map' || (tab === 'dialogue' && dialogueView === 'graph') ? 'none' : undefined }}>
         {tab === 'overview' && <Overview q={q} />}
         {tab === 'stages' && <Stages q={q} />}
         {tab === 'objectives' && <Objectives q={q} />}
         {tab === 'aliases' && <Aliases q={q} />}
-        {tab === 'dialogue' && <Dialogue q={q} />}
+        {tab === 'dialogue' && dialogueView === 'list' && (
+          <>
+            <button className="btn small ghost" style={{ marginBottom: 10 }} onClick={() => setDialogueView('graph')}>
+              ← Graph view
+            </button>
+            <Dialogue q={q} />
+          </>
+        )}
         {tab === 'voice' && <Voice q={q} />}
       </div>
     </div>
@@ -612,7 +635,7 @@ function Info({ q, info }: { q: QuestModel; info: InfoModel }) {
   );
 }
 
-function InfoConditions({ info }: { info: InfoModel }) {
+export function InfoConditions({ info }: { info: Pick<InfoModel, 'formKey'> }) {
   const client = useStore((s) => s.client);
   const { data: view } = useQuery(() => client?.call('view', info.formKey), [info.formKey]);
   if (!view) return null;
@@ -624,7 +647,7 @@ function InfoConditions({ info }: { info: InfoModel }) {
   );
 }
 
-function InfoFragmentEditor({ q, info, which, onClose }: { q: QuestModel; info: InfoModel; which: 'begin' | 'end'; onClose: () => void }) {
+export function InfoFragmentEditor({ q, info, which, onClose }: { q: Pick<QuestModel, 'editorId'>; info: Pick<InfoModel, 'formKey'>; which: 'begin' | 'end'; onClose: () => void }) {
   const client = useStore((s) => s.client);
   const { data: code } = useQuery(() => client?.call('infoFragment', info.formKey, which), [info.formKey, which], { revision: false });
   const [draft, setDraft] = useState<string | null>(null);
@@ -660,7 +683,7 @@ function InfoFragmentEditor({ q, info, which, onClose }: { q: QuestModel; info: 
   );
 }
 
-function NewResponse({ topic, onDone }: { topic: TopicModel; onDone: () => void }) {
+export function NewResponse({ topic, onDone }: { topic: Pick<TopicModel, 'formKey'>; onDone: () => void }) {
   const [text, setText] = useState('');
   const [speaker, setSpeaker] = useState<FormKey | null>(null);
   const [goodbye, setGoodbye] = useState(false);

@@ -136,7 +136,8 @@ test('characters, quests, scripts, cleaning and saving', async ({ page }) => {
   await page.getByRole('button', { name: 'Save script' }).first().click();
   await expect(page.locator('.toast').filter({ hasText: /script saved/ })).toBeVisible();
   await page.getByRole('tab', { name: /Dialogue/ }).click();
-  await expect(page.getByTestId('dialogue')).toBeVisible();
+  await expect(page.getByTestId('dialogue-graph')).toBeVisible();
+  await expect(page.getByTestId('dlg-topic').first()).toBeVisible();
   await shot(page, '04-quest');
 
   // Script editor with live diagnostics.
