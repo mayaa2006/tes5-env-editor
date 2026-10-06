@@ -46,7 +46,7 @@ describe('screenplay dialogue', () => {
     const q = quests.createQuest('TalkQuest', 'Talk', { startGameEnabled: true });
     quests.addStage(q, 10);
     const res = await dialogue.importScreenplay(q, SCRIPT, (info, code) => quests.setInfoFragment(info, 'end', code));
-    expect(res).toEqual({ topics: 4, responses: 4 });
+    expect(res).toEqual({ topics: 4, responses: 4, greetings: 0, scenes: 0 });
     const g = dialogue.graph(q);
     const top = g.topics.filter((t) => t.topLevel).map((t) => t.text);
     expect(top).toEqual(expect.arrayContaining(['Got any work?', 'Seen anything strange?']));

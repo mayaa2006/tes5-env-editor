@@ -693,7 +693,10 @@ export class EngineHost {
   }
 
   async importScreenplay(quest: FormKey, text: string) {
-    return this.dialogue!.importScreenplay(quest, text, (info, code, which) => this.quests!.setInfoFragment(info, which, code));
+    return this.dialogue!.importScreenplay(quest, text, (info, code, which) => this.quests!.setInfoFragment(info, which, code), {
+      aliasFor: (q, npc) => this.graphs!.aliasFor(q, npc),
+      appendStageCode: (q, stage, lines) => this.graphs!.appendStageCode(q, stage, lines),
+    });
   }
 
   /** Problems in a quest's dialogue (the Dialogue tab's check). */

@@ -32,12 +32,24 @@ import { InfoConditions, InfoFragmentEditor, NewResponse, patchRecord } from './
 type TopicData = { t: DialogueTopicNode };
 type InfoData = { i: DialogueInfoNode; speaker?: string };
 
+const KIND_LABEL = { player: 'Player', greeting: 'Greeting', idle: 'Chatter', scene: 'Scene line' } as const;
+const KIND_HINT = { player: '', greeting: 'Said when the player comes up to them', idle: 'Said to nobody in particular', scene: 'Part of a scene between characters' } as const;
+
 function TopicNodeView({ data, selected }: NodeProps<Node<TopicData>>) {
   return (
     <div className={`dnode player ${selected ? 'selected' : ''}`} data-testid="dlg-topic">
       <Handle type="target" position={Position.Left} />
-      <div className="who">Player {data.t.topLevel && <span className="chip accent">opens</span>}</div>
-      <div>{data.t.text || <span className="faint">(no text)</span>}</div>
+      {data.t.kind === 'player' ? (
+        <>
+          <div className="who">Player {data.t.topLevel && <span className="chip accent">opens</span>}</div>
+          <div>{data.t.text || <span className="faint">(no text)</span>}</div>
+        </>
+      ) : (
+        <>
+          <div className="who">{KIND_LABEL[data.t.kind]}</div>
+          <div className="faint small">{KIND_HINT[data.t.kind]}</div>
+        </>
+      )}
       <Handle type="source" position={Position.Right} />
     </div>
   );
@@ -504,7 +516,13 @@ function ScreenplayDialog({ quest, onClose }: { quest: FormKey; onClose: () => v
           </p>
           <p>Indent player lines under an answer to make them choices after it.</p>
           <p>
-            Tags: <span className="mono">[goodbye]</span> ends the talk, <span className="mono">[stage 20]</span> sets a quest stage after the line, <span className="mono">[if stage 10]</span> only at that stage, <span className="mono">[emotion happy]</span>, <span className="mono">[gives gold x100]</span> / <span className="mono">[takes Ring x1]</span>, <span className="mono">[gesture wave]</span> plays an animation.
+            Tags: <span className="mono">[goodbye]</span> ends the talk, <span className="mono">[stage 20]</span> sets a quest stage after the line, <span className="mono">[if stage 10]</span> only at that stage, <span className="mono">[emotion happy]</span>, <span className="mono">[gives gold x100]</span> / <span className="mono">[takes Ring x1]</span>, <span className="mono">[gesture wave]</span> plays an animation, <span className="mono">[once]</span> says it only once, <span className="mono">[persuade 50]</span> on a player line makes the first answer a Speech check.
+          </p>
+          <p>
+            Conditions: <span className="mono">[if has Ring]</span>, <span className="mono">[if done 20]</span>, <span className="mono">[if gold 100]</span>, <span className="mono">[if speech 50]</span>, <span className="mono">[if level 10]</span>, <span className="mono">[if female]</span>, <span className="mono">[if race Nord]</span>, <span className="mono">[if quest MyQuest done]</span>.
+          </p>
+          <p>
+            Lines nobody prompts: <span className="mono">GREETING:</span> (said as the player comes up), <span className="mono">IDLE:</span> (chatter), and <span className="mono">SCENE: name [at stage 20]</span> for characters talking to each other; put their lines under it.
           </p>
           <GesturePicker value={null} none="Add a gesture to this line…" onChange={insertGesture} testId="dlg-insert-gesture" />
           <p>New lines are added; existing dialogue is kept.</p>
