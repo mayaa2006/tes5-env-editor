@@ -12,6 +12,8 @@ import {
   CLUTTER_THEMES,
   DialogueService,
   EnvironmentService,
+  ReleaseService,
+  type FindingFix,
   type ArrayOptions,
   type CellMood,
   type ClutterOptions,
@@ -119,6 +121,7 @@ export class EngineHost {
   graphs?: QuestGraphService;
   dialogue?: DialogueService;
   env?: EnvironmentService;
+  release?: ReleaseService;
   private source?: string;
   /** Game folder (where SkyrimSE.exe lives) and MO2 instance, for test launches. */
   private gameDir?: string;
@@ -184,6 +187,7 @@ export class EngineHost {
     this.graphs = new QuestGraphService(ws, this.quests, this.scripts, this.triggers);
     this.dialogue = new DialogueService(ws, this.quests);
     this.env = new EnvironmentService(ws);
+    this.release = new ReleaseService(ws, this.scripts, this.npcs, this.quests, this.graphs, this.env);
     this.meshCache.clear();
     ws.on((e) => {
       if (e.type === 'filesRestored') return; // internal to the engine
@@ -702,6 +706,45 @@ export class EngineHost {
     return { batPath, lines, consoleCommand: `bat ${TEST_BAT_NAME}`, launched, how, viaMo2: !!this.mo2 };
   }
 
+  // ---------------------------------------------------------------- release
+
+  releaseCheck() {
+    return this.release!.check();
+  }
+
+  /** Apply the one-click fix offered with a pre-release finding. */
+  async releaseFix(fix: FindingFix) {
+    switch (fix.kind) {
+      case 'autofill':
+        return (await this.scripts!.autofill(fix.form)).length;
+      case 'updateBounds':
+        return (await updateBounds(this.requireWs())).length;
+      case 'generateNavmesh':
+        return (await this.generateNavmesh(fix.cell)).triangles;
+      case 'dropToSurface':
+        return (await this.env!.dropToSurface(fix.refs)).moved.length;
+    }
+  }
+
+  /** Your records that other plugins also change (the Release tab's conflict report). */
+  conflictReport() {
+    return this.release!.conflicts();
+  }
+
+  packageFiles(opts: { scriptSources?: boolean } = {}) {
+    return this.release!.packageFiles(opts);
+  }
+
+  async packBsa(opts: { scriptSources?: boolean } = {}) {
+    const r = await this.release!.buildBsa(opts);
+    await this.requireWs().vfs.build();
+    return r;
+  }
+
+  packZip(opts: { bsa?: boolean; scriptSources?: boolean; returnData?: boolean } = {}) {
+    return this.release!.buildZip(opts);
+  }
+
   // ---------------------------------------------------------------- environment tools
 
   envDrop(refs: FormKey[], align = false) {
@@ -809,6 +852,11 @@ export class EngineHost {
 
   scriptList() {
     return this.scripts!.list();
+  }
+
+  /** Is there a compiled .pex for this script (what the game actually runs)? */
+  scriptCompiled(name: string) {
+    return this.requireWs().vfs.has(`scripts\\${name.toLowerCase()}.pex`);
   }
 
   async scriptRead(name: string) {

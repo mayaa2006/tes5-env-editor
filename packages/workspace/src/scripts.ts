@@ -326,6 +326,28 @@ export class ScriptService {
     return filled;
   }
 
+  /**
+   * Auto properties a form's scripts declare but never set (they'll be None in
+   * game). `canAutofill` says whether Auto-fill would find a value.
+   */
+  async emptyProperties(key: FormKey): Promise<{ script: string; property: string; type: string; canAutofill: boolean }[]> {
+    const out: { script: string; property: string; type: string; canAutofill: boolean }[] = [];
+    for (const s of this.scriptsOf(key).scripts) {
+      if (!this.has(s.name)) continue;
+      const parsed = parse(await this.read(s.name)).script;
+      await this.ensure([parsed.extends ?? ''].filter(Boolean));
+      const declared = [...parsed.properties, ...this.index.chain(parsed.extends).scripts.flatMap((x) => x.properties)];
+      for (const decl of declared) {
+        if (!decl.isAuto || decl.isAutoReadOnly || decl.init || PROPERTY_TYPE_SIGNATURES[decl.type.lower] === undefined || decl.type.isArray) continue;
+        const p = s.properties.find((x) => x.name.toLowerCase() === decl.lower);
+        const set = p && (p.type !== VmadPropertyType.Object || (p.value && (p.value as { form?: unknown }).form));
+        if (set) continue;
+        out.push({ script: s.name, property: decl.name, type: decl.type.name, canAutofill: !!this.findAutofillTarget(decl.name, decl.type.lower) });
+      }
+    }
+    return out;
+  }
+
   findAutofillTarget(name: string, typeLower: string): FormKey | undefined {
     const key = this.ws.byEditorId(name);
     if (!key && name.toLowerCase() === 'playerref' && (typeLower === 'actor' || typeLower === 'objectreference')) return '000014:Skyrim.esm';

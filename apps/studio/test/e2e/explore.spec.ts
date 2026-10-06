@@ -336,7 +336,9 @@ test('exploratory sweep of every workspace', async ({ page }) => {
     await page.keyboard.press('Control+s');
     await expect(page.locator('.toast').filter({ hasText: 'Saved MyScript.psc' })).toBeVisible();
     await page.getByTestId('compile').click();
-    await page.waitForTimeout(300);
+    // No compiler set yet: Compile asks for one instead of failing.
+    await expect(page.getByRole('dialog')).toContainText('Choose a compiler');
+    await page.getByRole('dialog').getByRole('button', { name: 'Done' }).click();
     await page.getByTestId('script-list').getByText('DemoChestScript').click();
     await page.locator('.panel', { hasText: 'Outline' }).locator('.list-item').first().click();
   });
@@ -362,8 +364,16 @@ test('exploratory sweep of every workspace', async ({ page }) => {
   });
   await run('automations', async () => {
     await ws('Automations');
+    await expect(page.getByTestId('on-save')).toBeVisible();
+    await page.locator('.help').first().hover();
+    await expect(page.getByRole('tooltip')).toBeVisible();
+  });
+  await run('release: check, fixes, light plugin', async () => {
+    await ws('Release');
     await expect(page.getByTestId('esl-card')).toBeVisible();
-    await page.getByRole('button', { name: /Recalculate bounds/ }).click();
+    await page.getByTestId('run-check').click();
+    await expect(page.getByTestId('run-check')).toHaveText(/Check again/);
+    for (const fix of await page.getByTestId('fix').all()) if (await fix.isVisible()) await fix.click().catch(() => undefined);
     const compact = page.getByRole('button', { name: 'Compact FormIDs' });
     if (await compact.isEnabled()) await compact.click();
   });

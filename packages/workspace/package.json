@@ -15,6 +15,7 @@
     "@tes5/cleaner": "*",
     "@tes5/papyrus": "*",
     "@tes5/assets": "*",
-    "@tes5/navmesh": "*"
+    "@tes5/navmesh": "*",
+    "fflate": "^0.8.3"
   }
 }

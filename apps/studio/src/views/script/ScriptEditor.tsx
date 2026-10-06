@@ -5,7 +5,8 @@
  * leaves a half-saved script.
  */
 import { useEffect, useState } from 'react';
-import { Icon, useQuery } from '../../components/ui';
+import { Help, Icon, Modal, useQuery } from '../../components/ui';
+import { CompilerSettings } from './CompilerSettings';
 import { engine, useStore } from '../../state/store';
 import { CodeEditor } from './CodeEditor';
 
@@ -22,12 +23,14 @@ export default function ScriptEditor() {
   const settings = useStore((s) => s.settings);
   const { data: list } = useQuery(() => client?.call('scriptList'), [client]);
   const info = list?.find((s) => s.name.toLowerCase() === name?.toLowerCase());
+  const { data: compiled } = useQuery(() => (name ? client?.call('scriptCompiled', name) : undefined), [name]);
   const { data: source } = useQuery(() => (name && info ? client?.call('scriptRead', name) : undefined), [name, !!info], { revision: false });
   const [draft, setDraft] = useState<string | null>(null);
   const [diag, setDiag] = useState({ errors: 0, warnings: 0 });
   const [compile, setCompile] = useState<CompileOutput[] | null>(null);
   const [reveal, setReveal] = useState<number | undefined>();
   const [outline, setOutline] = useState(true);
+  const [compilerOpen, setCompilerOpen] = useState(false);
   const { data: symbols } = useQuery(() => (draft ?? source ? client?.call('scriptOutline', draft ?? source ?? '') : undefined), [draft ?? source], { revision: false });
 
   useEffect(() => {
@@ -50,6 +53,11 @@ export default function ScriptEditor() {
     return !!ok;
   };
   const runCompile = async () => {
+    if (!useStore.getState().settings.compilerPath) {
+      // Nothing to compile with yet: ask for it right here.
+      setCompilerOpen(true);
+      return;
+    }
     if (dirty && !(await save())) return;
     const res = await engine((c) => c.call('scriptCompile', [name]), { busy: `Compiling ${name}…`, refreshSession: false });
     if (res) {
@@ -60,17 +68,32 @@ export default function ScriptEditor() {
 
   return (
     <div className="col" style={{ flex: 1, minHeight: 0 }}>
+      {compilerOpen && (
+        <Modal title="Papyrus compiler" onClose={() => setCompilerOpen(false)} width={520} footer={<button className="btn primary" onClick={() => setCompilerOpen(false)}>Done</button>}>
+          {!settings.compilerPath && <p className="warn small" style={{ marginTop: 0 }}>Choose a compiler to turn scripts into the .pex files the game runs.</p>}
+          <CompilerSettings />
+        </Modal>
+      )}
       <div className="viewport-toolbar">
         <strong>{name}</strong>
         <span className="dim small">{info?.path}</span>
         {info?.origin !== 'mod' && <span className="chip warn" title="Saving writes a copy into your output folder">from the game / another mod</span>}
         <span className={`chip ${diag.errors ? 'err' : diag.warnings ? 'warn' : 'ok'}`}>{diag.errors ? `${diag.errors} error(s)` : diag.warnings ? `${diag.warnings} warning(s)` : 'No problems'}</span>
+        {compiled === false && (
+          <span className="chip warn" title="There's no compiled .pex for this script, so the game won't run it yet. Compile it (needs a compiler, see Compiler)." data-testid="not-compiled">
+            not compiled
+          </span>
+        )}
         <span className="spacer" />
         <button className="btn small" onClick={() => void save()} disabled={!dirty} title="Save (Ctrl+S)">
           <Icon name="save" size={12} /> Save
         </button>
-        <button className="btn small primary" onClick={() => void runCompile()} title={settings.compilerPath ? 'Compile to .pex' : 'Set the compiler path in Automations → Settings first'} data-testid="compile">
+        <button className="btn small primary" onClick={() => void runCompile()} title={settings.compilerPath ? 'Compile to .pex (what the game runs)' : 'Choose a compiler first (opens the compiler settings)'} data-testid="compile">
           <Icon name="play" size={12} /> Compile
+        </button>
+        <Help text="Errors are shown as you type without a compiler. The game, though, runs compiled .pex files, which need the Creation Kit's PapyrusCompiler.exe or Caprica." />
+        <button className="btn small ghost" onClick={() => setCompilerOpen(true)} title="Choose the Papyrus compiler" data-testid="compiler-settings">
+          <Icon name="sliders" size={12} /> Compiler
         </button>
         <button className={`btn small ${outline ? 'active' : 'ghost'}`} onClick={() => setOutline(!outline)} title="Outline">
           <Icon name="records" size={12} />

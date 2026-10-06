@@ -137,12 +137,11 @@ export async function computeBounds(ws: Workspace, key: FormKey): Promise<{ x1: 
   return { x1: clamp(Math.floor(b.min[0])), y1: clamp(Math.floor(b.min[1])), z1: clamp(Math.floor(b.min[2])), x2: clamp(Math.ceil(b.max[0])), y2: clamp(Math.ceil(b.max[1])), z2: clamp(Math.ceil(b.max[2])) };
 }
 
-/** Recompute bounds of base objects in the active plugin whose OBND doesn't match their model. */
-export async function updateBounds(ws: Workspace): Promise<FormKey[]> {
+/** Base objects in the active plugin whose OBND doesn't match their model, with the correct bounds. */
+export async function boundsMismatches(ws: Workspace): Promise<{ key: FormKey; bounds: NonNullable<Awaited<ReturnType<typeof computeBounds>>> }[]> {
   const a = ws.active;
   if (!a?.plugin) return [];
-  const changed: FormKey[] = [];
-  const updates: { key: FormKey; bounds: NonNullable<Awaited<ReturnType<typeof computeBounds>>> }[] = [];
+  const out: { key: FormKey; bounds: NonNullable<Awaited<ReturnType<typeof computeBounds>>> }[] = [];
   for (const r of a.plugin.records()) {
     if (!BOUNDED.has(r.sig)) continue;
     const key = ws.keyOf(a, r.formId)!;
@@ -150,8 +149,15 @@ export async function updateBounds(ws: Workspace): Promise<FormKey[]> {
     if (!bounds) continue;
     const cur = (ws.view(key)?.data as any)?.bounds;
     if (cur && ['x1', 'y1', 'z1', 'x2', 'y2', 'z2'].every((k) => cur[k] === (bounds as any)[k])) continue;
-    updates.push({ key, bounds });
+    out.push({ key, bounds });
   }
+  return out;
+}
+
+/** Recompute bounds of base objects in the active plugin whose OBND doesn't match their model. */
+export async function updateBounds(ws: Workspace): Promise<FormKey[]> {
+  const changed: FormKey[] = [];
+  const updates = await boundsMismatches(ws);
   if (updates.length) {
     ws.transaction('Update object bounds', () => {
       for (const u of updates) {

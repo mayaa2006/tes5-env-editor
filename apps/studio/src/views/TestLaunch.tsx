@@ -118,7 +118,7 @@ export function TestLaunchDialog({ onClose }: { onClose: () => void }) {
             <FormPicker value={null} sigs={['MISC', 'WEAP', 'ARMO', 'BOOK', 'KEYM', 'ALCH', 'INGR', 'AMMO', 'SLGM', 'SCRL']} onChange={(item) => item && setItems([...items, { item, count: 1 }])} placeholder="+ Add an item" />
           </div>
         </Field>
-        <Checkbox checked={god} onChange={setGod} label="God mode (tgm)" />
+        <Checkbox checked={god} onChange={setGod} label="God mode (tgm)" help="You can't be hurt and have unlimited magicka and stamina, so testing isn't interrupted." />
         <Checkbox checked={launch} onChange={setLaunch} disabled={client?.mode !== 'electron'} label={client?.mode === 'electron' ? `Start the game now${viaMo2 ? ' through Mod Organizer 2' : ''}` : 'Start the game (desktop app only)'} />
         {launch && viaMo2 && (
           <div className="row" style={{ gap: 6 }}>

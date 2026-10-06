@@ -10,6 +10,7 @@ import { Checkbox, Field, Icon, Menu, MenuItem, Modal, Select, useQuery } from '
 import { engine, useStore } from '../../state/store';
 import { EnvTools, type ToolHandlers } from './EnvTools';
 import { NewCellDialog } from './NewCellDialog';
+import { SnapSettings } from './SnapSettings';
 import { Viewport, type Tool } from './viewport';
 
 const NAV_FLAGS = { preferred: 0x0040, water: 0x0200, noLarge: 0x0010 } as const;
@@ -37,6 +38,7 @@ export default function SceneView() {
   const [dock, setDock] = useState<'outliner' | 'tools' | null>('outliner');
   const [generate, setGenerate] = useState(false);
   const [help, setHelp] = useState(false);
+  const [snapOpen, setSnapOpen] = useState(false);
   const toolHandlers = useRef<ToolHandlers>({});
   const framedCell = useRef<string | undefined>(undefined);
 
@@ -232,7 +234,7 @@ export default function SceneView() {
         {toolBtn('rotate', 'redo', 'Rotate', 'R')}
         {toolBtn('scale', 'frame', 'Scale', 'S')}
         <span className="sep" />
-        <button className={`btn small ${snap ? 'active' : 'ghost'}`} aria-pressed={snap} title={`Grid snapping is ${snap ? 'on' : 'off'}: moves in steps of ${settings.snapMove} units, turns in ${settings.snapRotateDeg}° steps. Hold Ctrl while transforming to flip it. Step sizes are under Automations.`} onClick={() => setSnap(!snap)}>
+        <button className={`btn small ${snap ? 'active' : 'ghost'}`} aria-pressed={snap} title={`Grid snapping is ${snap ? 'on' : 'off'}: moves in steps of ${settings.snapMove} units, turns in ${settings.snapRotateDeg}° steps. Hold Ctrl while transforming to flip it. Step sizes: View → Snapping settings.`} onClick={() => setSnap(!snap)}>
           <Icon name="magnet" size={13} /> Grid
         </button>
         <button
@@ -279,6 +281,7 @@ export default function SceneView() {
                 Navmesh
               </MenuItem>
               <div className="menu-sep" />
+              <MenuItem onClick={() => (setSnapOpen(true), close())}>Snapping settings…</MenuItem>
               <MenuItem hint="?" onClick={() => (setHelp(true), close())}>
                 Keyboard and mouse shortcuts
               </MenuItem>
@@ -377,6 +380,11 @@ export default function SceneView() {
       </div>
       {generate && <GenerateNavmeshDialog cell={cell} interior={info?.interior ?? true} onClose={() => setGenerate(false)} />}
       {help && <ShortcutsHelp onClose={() => setHelp(false)} />}
+      {snapOpen && (
+        <Modal title="Snapping" onClose={() => setSnapOpen(false)} width={460} footer={<button className="btn primary" onClick={() => setSnapOpen(false)}>Done</button>}>
+          <SnapSettings />
+        </Modal>
+      )}
       {newCell && <NewCellDialog onClose={() => setNewCell(false)} />}
     </div>
   );

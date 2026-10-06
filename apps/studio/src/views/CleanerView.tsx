@@ -53,9 +53,9 @@ export default function CleanerView() {
         </Field>
         <Field label="Fixes">
           <div className="col" style={{ gap: 4 }}>
-            <Checkbox checked={removeItms} onChange={setRemoveItms} label="Remove identical-to-master records" />
-            <Checkbox checked={undelete} onChange={setUndelete} label="Undelete and disable deleted references" />
-            <Checkbox checked={fixNav} onChange={setFixNav} label="Restore deleted navmeshes (experimental)" />
+            <Checkbox checked={removeItms} onChange={setRemoveItms} label="Remove identical-to-master records" help="Records copied from a master without any change ('dirty edits'). They do nothing except undo other mods' changes to the same records." />
+            <Checkbox checked={undelete} onChange={setUndelete} label="Undelete and disable deleted references" help="Deleted placed objects crash the game when something else still uses them. They're brought back, disabled and moved out of sight, which is just as invisible but safe." />
+            <Checkbox checked={fixNav} onChange={setFixNav} label="Restore deleted navmeshes (experimental)" help="Deleted navmeshes can crash the game. This replaces them with a tiny navmesh out of the way. The exact layout xEdit uses isn't confirmed, so test in game." />
           </div>
         </Field>
         {isOfficial && (

@@ -93,7 +93,7 @@ function PlaceTab() {
         >
           Drop to surface
         </button>
-        <Checkbox checked={align} onChange={setAlign} label="Tilt to slope" />
+        <Checkbox checked={align} onChange={setAlign} label="Tilt to slope" help="Lean each object to match the surface under it (good for rocks on hills; leave off for furniture)." />
       </div>
       <h4 className="env-h">Array</h4>
       <Field label="Copies">
@@ -109,7 +109,7 @@ function PlaceTab() {
       <Field label="Turn each °">
         <DragNumber value={turn} precision={1} onCommit={setTurn} />
       </Field>
-      <Checkbox checked={drop} onChange={setDrop} label="Rest each copy on the surface" />
+      <Checkbox checked={drop} onChange={setDrop} label="Rest each copy on the surface" help="Each copy is dropped onto whatever is below it, so a row of fence posts follows a hill." />
       <button
         className="btn small"
         disabled={none}
@@ -212,7 +212,7 @@ function PaintTab({ cell, viewport, handlers }: { cell: FormKey; viewport: React
       <Field label="Sink" title="Push into the ground by this fraction of the height (rocks, roots)">
         <Slider value={sink} min={0} max={0.5} onCommit={setSink} />
       </Field>
-      <Checkbox checked={terrainOnly} onChange={setTerrainOnly} label="Only on terrain" />
+      <Checkbox checked={terrainOnly} onChange={setTerrainOnly} label="Only on terrain" help="Outdoors: paint only on the ground, not on rocks, buildings or other objects." />
       <button className={`btn small ${painting ? 'active' : 'primary'}`} onClick={toggle} data-testid="env-paint">
         <Icon name="palette" size={12} /> {painting ? 'Painting… (Esc to stop)' : 'Paint in the view'}
       </button>
@@ -504,7 +504,7 @@ function RoomTab({ cell, viewport, handlers }: { cell: FormKey; viewport: React.
           Pick spot
         </button>
       </div>
-      <Checkbox checked={navmesh} onChange={setNavmesh} label="Then generate the navmesh" />
+      <Checkbox checked={navmesh} onChange={setNavmesh} label="Then generate the navmesh" help="NPCs need a navmesh to walk around. It's built from the new room's floor and walls straight away." />
       <button className="btn small primary" disabled={!ready} onClick={build} data-testid="env-build-room">
         <Icon name="grid" size={12} /> Build room ({tiles.size} tile{tiles.size === 1 ? '' : 's'})
       </button>
