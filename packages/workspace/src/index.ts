@@ -28,3 +28,4 @@ export * from './routines';
 export * from './placement';
 export * from './faceshape';
 export * from './facegen';
+export * from './facekit';
