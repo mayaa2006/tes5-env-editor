@@ -56,6 +56,9 @@ export interface HeadPartInfo {
 
 export const FEMALE_FLAG = 0x1;
 
+/** A real slider value (not NaN, and not the CK's FLT_MAX "unset" marker). */
+export const isSliderValue = (v: number) => Number.isFinite(v) && Math.abs(v) <= 10;
+
 export function emptyMorphs(): Record<FaceMorphKey, number> {
   return Object.fromEntries(FACE_MORPHS.map(([k]) => [k, 0])) as Record<FaceMorphKey, number>;
 }
@@ -68,7 +71,8 @@ export class NpcService {
     if (!v || v.sig !== 'NPC_') throw new WorkspaceError(`${npc} is not an NPC`);
     const d = v.data as Record<string, any>;
     const morphs = emptyMorphs();
-    for (const [k] of FACE_MORPHS) if (typeof d.faceMorph?.[k] === 'number') morphs[k] = d.faceMorph[k];
+    // The CK stores FLT_MAX for sliders it never set (always the vampire morph on vanilla NPCs): read those as 0.
+    for (const [k] of FACE_MORPHS) if (typeof d.faceMorph?.[k] === 'number' && isSliderValue(d.faceMorph[k])) morphs[k] = d.faceMorph[k];
     return {
       race: d.race ?? null,
       female: ((d.config?.flags ?? 0) & FEMALE_FLAG) !== 0,
@@ -107,7 +111,13 @@ export class NpcService {
           else delete d.headTexture;
         }
         if (a.skinTone) d.textureLighting = { ...a.skinTone };
-        if (a.morphs) d.faceMorph = { ...emptyMorphs(), ...(d.faceMorph ?? {}), ...a.morphs };
+        if (a.morphs) {
+          const prev: Record<string, number> = d.faceMorph ?? {};
+          const next: Record<string, number> = { ...emptyMorphs(), ...prev, ...a.morphs };
+          // Leave the CK's "unset" marker alone unless the slider was actually moved.
+          for (const [k, v] of Object.entries(a.morphs)) if (v === 0 && typeof prev[k] === 'number' && !isSliderValue(prev[k])) next[k] = prev[k];
+          d.faceMorph = next;
+        }
         if (a.faceParts) d.faceParts = { ...a.faceParts };
         if (a.tints) d.tintLayers = a.tints.map((t) => ({ index: t.index, color: { ...t.color }, value: Math.round(t.value), preset: t.preset }));
       },
@@ -151,6 +161,61 @@ export class NpcService {
       extraParts: d.extraParts ?? [],
       tris: (d.parts ?? []).map((p: any) => ({ type: p.type ?? 0, file: p.file })),
     };
+  }
+
+  /**
+   * The race's default head parts and face texture for one sex (RACE head
+   * data: INDX/HEAD pairs and DFTM/DFTF after the MNAM or FNAM marker).
+   * Vanilla characters only list what differs from these — usually not even
+   * the head itself.
+   */
+  raceHeadData(race: FormKey | null, female: boolean): { parts: FormKey[]; faceTexture: FormKey | null } {
+    const out = { parts: [] as FormKey[], faceTexture: null as FormKey | null };
+    if (!race) return out;
+    const versions = this.ws.versions(race);
+    const v = versions[versions.length - 1];
+    if (!v) return out;
+    let inHead = false;
+    let sex: 'm' | 'f' | undefined;
+    for (const s of v.record.subrecords) {
+      if (s.sig === 'NAM0') inHead = true;
+      else if (inHead && s.sig === 'MNAM') sex = 'm';
+      else if (inHead && s.sig === 'FNAM') sex = 'f';
+      if (!inHead || sex !== (female ? 'f' : 'm') || s.data.byteLength < 4) continue;
+      const id = new DataView(s.data.buffer, s.data.byteOffset, s.data.byteLength).getUint32(0, true);
+      if (s.sig === 'HEAD' && id) {
+        const k = this.ws.keyOf(v.slot, id);
+        if (k) out.parts.push(k);
+      } else if ((s.sig === 'DFTM' || s.sig === 'DFTF') && id) out.faceTexture = this.ws.keyOf(v.slot, id) ?? null;
+    }
+    return out;
+  }
+
+  /**
+   * Every head part that makes up a character's face: the race's defaults,
+   * replaced type by type by the character's own, each with its extra parts.
+   */
+  faceParts(npc: FormKey): HeadPartInfo[] {
+    const a = this.appearance(npc);
+    const own = a.headParts.map((k) => this.headPart(k)).filter((p): p is HeadPartInfo => !!p);
+    // Misc and Scar parts stack; every other type replaces the race's part of that type.
+    const ownTypes = new Set<string>(own.map((p) => p.type).filter((t) => t !== 'Misc' && t !== 'Scar'));
+    const defaults = this.raceHeadData(a.race, a.female)
+      .parts.map((k) => this.headPart(k))
+      .filter((p): p is HeadPartInfo => !!p && !ownTypes.has(p.type));
+    const out: HeadPartInfo[] = [];
+    const seen = new Set<string>();
+    const add = (p: HeadPartInfo) => {
+      if (seen.has(p.formKey)) return;
+      seen.add(p.formKey);
+      out.push(p);
+      for (const e of p.extraParts) {
+        const x = this.headPart(e);
+        if (x) add(x);
+      }
+    };
+    for (const p of [...defaults, ...own]) add(p);
+    return out;
   }
 
   /** Head parts usable by a race/sex (via the part's "valid races" form list). */

@@ -320,6 +320,9 @@ function buildDemoMaster(): Plugin {
     const z = (t: string) => new TextEncoder().encode(`${t}\0`);
     for (const sex of ['MNAM', 'FNAM']) {
       r.subrecords.push({ sig: 'NAM0', data: new Uint8Array(0) }, { sig: sex, data: new Uint8Array(0) });
+      // Default head and eyes, like vanilla races: characters only list what differs.
+      const u32 = (v: number) => new Uint8Array(new Uint32Array([v]).buffer);
+      [sex === 'MNAM' ? headM : headF, eyes].forEach((part, i) => r.subrecords.push({ sig: 'INDX', data: u32(i) }, { sig: 'HEAD', data: u32(part) }));
       for (const m of DEMO_TINT_MASKS) r.subrecords.push({ sig: 'TINI', data: u16(m.index) }, { sig: 'TINT', data: z(`demo\\tintmasks\\${m.file}.dds`) }, { sig: 'TINP', data: u16(m.type) });
     }
     r.markModified();
@@ -356,7 +359,8 @@ function buildDemoMaster(): Plugin {
     });
   const smith = npc('DemoBlacksmith', 'Halvar the Smith', false, [headM, hairShort, eyes, brows, beard], hairBrown, { noseLongShort: -0.3, jawNarrowWide: 0.6, chinUnderbiteOverbite: 0.2 }, [0.85, 0.7, 0.6]);
   const keeper = npc('DemoInnkeeper', 'Brynja', true, [headF, hairLong, eyes, brows], hairBlack, { noseUpDown: 0.3, cheeksUpDown: 0.4, lipsInOut: 0.2 }, [0.9, 0.78, 0.7]);
-  npc('DemoGuard', 'Town Guard', false, [headM, hairShort, eyes, brows], hairBrown, {}, [0.8, 0.65, 0.55]);
+  // Like vanilla characters: no head or eyes listed (the race's defaults are used), and the CK's FLT_MAX "unset" vampire slider.
+  npc('DemoGuard', 'Town Guard', false, [hairShort, brows], hairBrown, { vampireMorph: 3.4028234663852886e38 }, [0.8, 0.65, 0.55]);
 
   const stat = (edid: string, file: string, b: [number, number, number], flags = 0) => rec(p, 'STAT', id(), { editorId: edid, bounds: bounds(...b), model: model(file), directionalMaterial: dirMat }, {}, flags);
   const floor = stat('DemoFloorWood', 'demo\\floor.nif', [128, 128, 0]);

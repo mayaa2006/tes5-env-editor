@@ -554,6 +554,11 @@ export class EngineHost {
     return this.npcs!.faceGenProblems();
   }
 
+  /** Every head part the face is made of (race defaults included), for the preview. */
+  npcFaceParts(npc: FormKey) {
+    return this.faces!.headPartsOf(npc);
+  }
+
   /** The look the record can't hold: extended sliders, extra morphs, region shaping. */
   faceSculpt(npc: FormKey) {
     return this.faces!.sculpt(npc);

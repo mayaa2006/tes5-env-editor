@@ -162,21 +162,9 @@ export class FaceGenService {
 
   // ---------------------------------------------------------------- inputs
 
-  /** Head parts the face is made of: the NPC's own, each with its extra parts (eyes sockets, mouth, teeth…). */
+  /** Head parts the face is made of: the race defaults, replaced by the NPC's own, with extra parts. */
   headPartsOf(npc: FormKey): HeadPartInfo[] {
-    const a = this.npcs.appearance(npc);
-    const out: HeadPartInfo[] = [];
-    const seen = new Set<string>();
-    const add = (k: FormKey) => {
-      if (seen.has(k)) return;
-      seen.add(k);
-      const info = this.npcs.headPart(k);
-      if (!info) return;
-      out.push(info);
-      for (const e of info.extraParts) add(e);
-    };
-    for (const k of a.headParts) add(k);
-    return out;
+    return this.npcs.faceParts(npc);
   }
 
   /** The race's tint masks for one sex (from the RACE head data). */
@@ -300,7 +288,8 @@ export class FaceGenService {
     // Colours and textures.
     const paths = this.npcs.faceGenPaths(npc);
     const hair = a.hairColor ? (this.ws.view(a.hairColor)?.data as any)?.color : undefined;
-    const faceTex = a.headTexture ? this.textureSet(a.headTexture) : undefined;
+    const faceTexKey = a.headTexture ?? this.npcs.raceHeadData(a.race, a.female).faceTexture;
+    const faceTex = faceTexKey ? this.textureSet(faceTexKey) : undefined;
     let k = 0;
     for (const p of parts) {
       for (let i = 0; i < p.shapes.length; i++, k++) {

@@ -157,21 +157,12 @@ function Creator({ npc }: { npc: FormKey }) {
     await engine((c) => c.call('setNpcLook', npc, p, next));
   };
 
-  const partsByKey = useMemo(() => new Map((allParts ?? []).map((p) => [p.formKey, p])), [allParts]);
-  const previewParts = useMemo(() => {
-    if (!a) return [];
-    const out: PreviewPart[] = [];
-    const seen = new Set<string>();
-    const add = (k: FormKey) => {
-      const p = partsByKey.get(k);
-      if (!p || seen.has(k)) return;
-      seen.add(k);
-      out.push({ key: k, type: p.type, model: p.model, tris: p.tris.filter((t) => t.type !== 1 && t.file).map((t) => t.file) });
-      for (const x of p.extraParts) add(x);
-    };
-    for (const k of a.headParts) add(k);
-    return out;
-  }, [a?.headParts.join(','), partsByKey]);
+  // The race's default head, eyes and mouth are part of the face too (vanilla characters list only what differs).
+  const { data: faceParts } = useQuery(() => client?.call('npcFaceParts', npc), [npc, a?.headParts.join(','), a?.race, a?.female]);
+  const previewParts = useMemo<PreviewPart[]>(
+    () => (faceParts ?? []).map((p) => ({ key: p.formKey, type: p.type, model: p.model, tris: p.tris.filter((t) => t.type !== 1 && t.file).map((t) => t.file) })),
+    [faceParts],
+  );
 
   useEffect(() => {
     if (!previewEl.current || !client) return;
@@ -205,7 +196,7 @@ function Creator({ npc }: { npc: FormKey }) {
       for (const w of r[0].warnings) useStore.getState().toast('warning', w);
     }
   };
-  const hasFace = a?.headParts.some((k) => partsByKey.get(k)?.type === 'Face');
+  const hasFace = !faceParts || faceParts.some((p) => p.type === 'Face' && !!p.model);
 
   return (
     <>
@@ -232,7 +223,7 @@ function Creator({ npc }: { npc: FormKey }) {
             </span>
           )}
           {!!missing.length && <div className="small faint">Preview: {missing.slice(0, 3).join(' · ')}</div>}
-          {a && !hasFace && <div className="small faint">This character uses the race's default head shape (not shown in the preview).</div>}
+          {a && !hasFace && <div className="small warn">Neither this character nor their race has a head mesh, so there's no face to show or generate.</div>}
         </div>
       </div>
       <div className="panel" style={{ width: 340, flex: 'none', borderLeft: '1px solid var(--border)', background: 'var(--panel)' }}>
