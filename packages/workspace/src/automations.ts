@@ -239,6 +239,18 @@ export async function cellGeometry(ws: Workspace, refs: PlacedRef[]): Promise<Tr
   return out;
 }
 
+/** Add LAND terrain triangles (counter-clockwise from above, i.e. walkable side up). */
+export function appendTerrain(out: TriangleMesh, land: ReturnType<WorldService['terrain']>): void {
+  if (!land) return;
+  const base = out.vertices.length / 3;
+  for (let r = 0; r < 33; r++) for (let c = 0; c < 33; c++) out.vertices.push(land.origin.x + c * 128, land.origin.y + r * 128, land.heights[r * 33 + c]!);
+  for (let r = 0; r < 32; r++)
+    for (let c = 0; c < 32; c++) {
+      const a = base + r * 33 + c;
+      out.triangles.push(a, a + 1, a + 34, a, a + 34, a + 33);
+    }
+}
+
 /**
  * Generate (or regenerate) the navmesh of a cell from its geometry, link doors
  * and neighbouring exterior navmeshes, and store it in the active plugin.
@@ -249,6 +261,7 @@ export async function generateCellNavmesh(ws: Workspace, cell: FormKey, opts: { 
   if (!cellInfo) throw new WorkspaceError(`Cell ${cell} not found`);
   const refs = world.references(cell);
   const geometry = await cellGeometry(ws, refs);
+  if (!cellInfo.interior) appendTerrain(geometry, world.terrain(cell));
   if (!geometry.triangles.length) throw new WorkspaceError('No solid geometry in this cell to build a navmesh from');
   const preset = NAVMESH_PRESETS[opts.preset ?? (cellInfo.interior ? 'interior' : 'exterior')];
   const settings: GenerateSettings = { ...preset, ...opts.settings };

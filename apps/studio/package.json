@@ -1,0 +1,72 @@
+{
+  "name": "@tes5/studio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TES5 Env Editor Studio: the desktop editor (Electron + React + three.js)",
+  "type": "module",
+  "main": "dist-electron/main.cjs",
+  "scripts": {
+    "dev:web": "vite",
+    "build:web": "vite build",
+    "build:electron": "node scripts/build-electron.mjs",
+    "build": "vite build && node scripts/build-electron.mjs",
+    "dev": "node scripts/build-electron.mjs && concurrently -k \"vite\" \"wait-on http://localhost:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
+    "start": "electron .",
+    "dist": "npm run build && electron-builder --win nsis portable",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56",
+    "@tes5/assets": "*",
+    "@tes5/cleaner": "*",
+    "@tes5/esp": "*",
+    "@tes5/navmesh": "*",
+    "@tes5/papyrus": "*",
+    "@tes5/workspace": "*",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/three": "^0.186.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "@xyflow/react": "^12.12.0",
+    "concurrently": "^10.0.5",
+    "cross-env": "^10.1.0",
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
+    "monaco-editor": "^0.57.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "three": "^0.186.1",
+    "vite": "^8.3.2",
+    "wait-on": "^9.5.1",
+    "zustand": "^5.0.15"
+  },
+  "build": {
+    "appId": "dev.tes5envedit.studio",
+    "productName": "TES5 Env Editor",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

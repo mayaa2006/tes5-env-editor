@@ -216,6 +216,27 @@ function posRot(x: number, y: number, z: number, rz = 0) {
   return { position: { x, y, z }, rotation: { x: 0, y: 0, z: rz } };
 }
 
+/** LAND for a demo exterior cell: rolling hills that match the ground mesh's style. */
+function landData(gx: number, gy: number): Record<string, unknown> {
+  const h = (x: number, y: number) => 60 * (Math.sin((x + 37) / 600) * Math.cos((y - 13) / 500) + 0.3 * Math.sin((x * 1.7 + y) / 260));
+  const H: number[] = [];
+  for (let r = 0; r < 33; r++) for (let c = 0; c < 33; c++) H.push(Math.round(h(gx * 4096 + c * 128, gy * 4096 + r * 128) / 8));
+  const vhgt = new Uint8Array(4 + 33 * 33 + 3);
+  const dv = new DataView(vhgt.buffer);
+  dv.setFloat32(0, H[0]!, true);
+  for (let r = 0; r < 33; r++)
+    for (let c = 0; c < 33; c++) {
+      const prev = c > 0 ? H[r * 33 + c - 1]! : r > 0 ? H[(r - 1) * 33]! : H[0]!;
+      dv.setInt8(4 + r * 33 + c, H[r * 33 + c]! - prev);
+    }
+  const vclr = new Uint8Array(33 * 33 * 3);
+  for (let i = 0; i < 33 * 33; i++) {
+    const t = 0.85 + 0.15 * Math.sin(i * 0.37);
+    vclr.set([Math.round(200 * t), Math.round(230 * t), Math.round(180 * t)], i * 3);
+  }
+  return { flags: 0x1 | 0x2, heights: vhgt, colors: vclr };
+}
+
 function rec(p: Plugin, sig: string, id: number, data: Record<string, unknown>, where: PlaceOptions = {}, flags = 0): number {
   const r = PluginRecord.create(sig, id, [], flags);
   applyTyped(r, data);
@@ -384,8 +405,13 @@ function buildDemoMaster(): Plugin {
     const c = cellId++;
     const xclc = { x: gx, y: 0, forceHideLand: 0 };
     rec(p, 'CELL', c, { editorId: `DemoValley${gx}_0`, flags: 0, grid: xclc }, { worldspace: world, grid: { x: gx, y: 0 } });
-    const r = refId++;
-    rec(p, 'REFR', r, { base: ground, placement: posRot(gx * 4096, 0, 0) }, { cell: c });
+    if (gx === 0) {
+      // Cell (0,0) uses a ground mesh; cell (1,0) uses real LAND terrain.
+      const r = refId++;
+      rec(p, 'REFR', r, { base: ground, placement: posRot(gx * 4096, 0, 0) }, { cell: c });
+    } else {
+      rec(p, 'LAND', cellId + 0x40, landData(gx, 0), { cell: c });
+    }
     for (let k = 0; k < 4; k++) {
       const rr = refId++;
       rec(p, 'REFR', rr, { base: rock, placement: posRot(gx * 4096 + 600 + k * 800, 900 + ((k * 1300) % 2000), 30, k), scale: 0.8 + k * 0.2 }, { cell: c });

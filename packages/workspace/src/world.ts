@@ -146,6 +146,44 @@ export class WorldService {
     return [...refs.values()];
   }
 
+  /**
+   * Terrain of an exterior cell (winning LAND): 33×33 heights in game units,
+   * rows south→north, columns west→east, 128 units apart; optional vertex colours.
+   */
+  terrain(cell: FormKey): { origin: { x: number; y: number }; heights: Float32Array; colors?: Uint8Array } | undefined {
+    const info = this.cells().find((c) => c.formKey === cell);
+    if (!info?.grid) return undefined;
+    for (let i = this.ws.slots.length - 1; i >= 0; i--) {
+      const s = this.ws.slots[i]!;
+      const local = s.plugin && s.mapper?.toLocal(cell);
+      const cellRec = local !== undefined && local !== null ? s.plugin!.getRecord(local) : undefined;
+      const children = cellRec ? s.plugin!.childGroupOf(cellRec) : undefined;
+      if (!children) continue;
+      for (const g of children.groups)
+        for (const r of g.records) {
+          if (r.sig !== 'LAND' || r.isDeleted) continue;
+          const vhgt = r.get('VHGT');
+          if (!vhgt || vhgt.data.byteLength < 4 + 33 * 33) continue;
+          const dv = new DataView(vhgt.data.buffer, vhgt.data.byteOffset, vhgt.data.byteLength);
+          const heights = new Float32Array(33 * 33);
+          let rowStart = dv.getFloat32(0, true);
+          for (let row = 0; row < 33; row++) {
+            rowStart += dv.getInt8(4 + row * 33);
+            let h = rowStart;
+            heights[row * 33] = h * 8;
+            for (let col = 1; col < 33; col++) {
+              h += dv.getInt8(4 + row * 33 + col);
+              heights[row * 33 + col] = h * 8;
+            }
+          }
+          const vclr = r.get('VCLR');
+          const colors = vclr && vclr.data.byteLength >= 33 * 33 * 3 ? vclr.data.slice(0, 33 * 33 * 3) : undefined;
+          return { origin: { x: info.grid.x * 4096, y: info.grid.y * 4096 }, heights, colors };
+        }
+    }
+    return undefined;
+  }
+
   private describeRef(s: PluginSlot, r: PluginRecord, key: FormKey, persistent: boolean): PlacedRef {
     const baseLocal = readFormIdSub(r, 'NAME');
     const base = baseLocal !== undefined ? this.ws.keyOf(s, baseLocal) : null;

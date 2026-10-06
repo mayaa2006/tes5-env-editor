@@ -160,6 +160,26 @@ describe('world editing', () => {
     expect(ws.view(pillar.formKey)!.parent.cell).toBe(tavern);
   });
 
+  it('reads LAND terrain and builds exterior navmeshes on it', async () => {
+    const { ws } = await openDemo();
+    const world = new WorldService(ws);
+    const cell = key(ws, 'DemoValley1_0');
+    const land = world.terrain(cell)!;
+    expect(land.origin).toEqual({ x: 4096, y: 0 });
+    expect(land.heights).toHaveLength(33 * 33);
+    const expected = 60 * (Math.sin((4096 + 128 * 5 + 37) / 600) * Math.cos((128 * 7 - 13) / 500) + 0.3 * Math.sin(((4096 + 128 * 5) * 1.7 + 128 * 7) / 260));
+    expect(Math.abs(land.heights[7 * 33 + 5]! - expected)).toBeLessThanOrEqual(4);
+    expect(land.colors).toHaveLength(33 * 33 * 3);
+    expect(world.terrain(key(ws, 'DemoTavern'))).toBeUndefined();
+    const res = await generateCellNavmesh(ws, cell);
+    expect(res.triangles).toBeGreaterThan(20);
+    const nav = ws.view(res.navmesh)!.data.geometry as Navmesh;
+    for (const v of nav.vertices) {
+      expect(v.x).toBeGreaterThanOrEqual(4096 - 1);
+      expect(v.x).toBeLessThanOrEqual(8192 + 1);
+    }
+  });
+
   it('generates a navmesh for a cell', async () => {
     const { ws } = await openDemo();
     const res = await generateCellNavmesh(ws, key(ws, 'DemoTavern'));
