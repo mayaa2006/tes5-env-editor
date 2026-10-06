@@ -3,7 +3,7 @@ import type { FormKey } from '@tes5/esp';
 import type { EngineClient } from '../engine/client';
 import type { SessionInfo } from '../engine/host';
 
-export type WorkspaceTab = 'scene' | 'npc' | 'quest' | 'script' | 'records' | 'clean' | 'automations' | 'plugins';
+export type WorkspaceTab = 'scene' | 'npc' | 'quest' | 'script' | 'records' | 'clean' | 'automations' | 'plugins' | 'release';
 
 export interface Toast {
   id: number;

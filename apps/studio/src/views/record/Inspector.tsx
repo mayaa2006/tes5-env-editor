@@ -144,10 +144,11 @@ function Header({ view }: { view: RecordView }) {
           from {view.owner}
         </span>
         {view.overrides.length > 1 && (
-          <span className="chip warn" title={view.overrides.join(' → ')}>
+          <span className="chip warn" title={`Changed by: ${view.overrides.join(' → ')}. The game uses the version from the plugin that loads last.`}>
             {view.overrides.length - 1} override{view.overrides.length > 2 ? 's' : ''} · winner {view.winner}
           </span>
         )}
+        {view.inActive && <ReplacedWarning winner={view.winner} />}
         {view.inActive && <span className="chip accent">in your plugin</span>}
         {view.deleted && <span className="chip err">deleted</span>}
         {(view.flags & 0x800) !== 0 && <span className="chip">initially disabled</span>}
@@ -235,6 +236,17 @@ function References({ refs, onClose }: { refs: RecordSummary[]; onClose: () => v
           {!refs.length && <li className="empty">Nothing references this form.</li>}
         </ul>
       </div>
+    </div>
+  );
+}
+
+/** Your change exists, but a plugin loading after yours replaces it. */
+function ReplacedWarning({ winner }: { winner: string }) {
+  const active = useStore((s) => s.session.activePlugin);
+  if (!active || winner === active) return null;
+  return (
+    <div className="small warn" style={{ marginTop: 6, width: '100%' }} data-testid="replaced-warning">
+      <Icon name="warn" size={12} /> {winner} loads after your plugin and changes this too, so your change won't show in game with it installed. See Release → Conflicts.
     </div>
   );
 }

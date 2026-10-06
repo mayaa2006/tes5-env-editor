@@ -396,6 +396,26 @@ export class EnvironmentService {
     return { transform: { position: { x: pos.x, y: pos.y, z: z - bottom - sink }, rotation, scale }, hit };
   }
 
+  /**
+   * How far each reference sits above (+) or below (−) where it would rest on
+   * the surface under it; skips references with nothing below.
+   */
+  async restingOffsets(cell: FormKey, refs: FormKey[]): Promise<{ ref: FormKey; offset: number; height: number }[]> {
+    const surfaces = await this.surfaces(cell);
+    const all = new Map(this.world.references(cell).map((r) => [r.formKey, r]));
+    const ignore = new Set(refs);
+    const out: { ref: FormKey; offset: number; height: number }[] = [];
+    for (const key of refs) {
+      const r = all.get(key);
+      if (!r) continue;
+      const b = r.base ? this.boundsOf(r.base) : undefined;
+      const res = this.rest(surfaces, r.base, r.transform.position, r.transform.rotation, r.transform.scale, { ignore: (o) => o !== null && ignore.has(o) });
+      if (!res) continue;
+      out.push({ ref: key, offset: r.transform.position.z - res.transform.position.z, height: b ? (b.max.z - b.min.z) * r.transform.scale : 0 });
+    }
+    return out;
+  }
+
   // ---------------------------------------------------------------- drop
 
   /** Drop references onto whatever is below them (one undo step). */

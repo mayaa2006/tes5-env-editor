@@ -225,7 +225,7 @@ function TriggerDialog({ host, actor, initial, onSave, onClose }: { host: Trigge
           ))}
           <AddMenu label="Add action" items={ACTIONS} onPick={(m) => setSpec({ ...spec, actions: [...spec.actions, m()] })} testId="add-action" />
         </div>
-        <Checkbox checked={!!spec.once} onChange={(once) => setSpec({ ...spec, once })} label="Only the first time" />
+        <Checkbox checked={!!spec.once} onChange={(once) => setSpec({ ...spec, once })} label="Only the first time" help="After it has run once, the trigger is ignored (the game remembers this in the save)." />
         {preview !== null && <pre className="mono small code-frame" style={{ padding: 8, maxHeight: 220, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{preview || 'Generating…'}</pre>}
       </div>
     </Modal>

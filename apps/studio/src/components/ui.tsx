@@ -117,10 +117,48 @@ export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: { id: 
   );
 }
 
+/** A small (?) that explains a control on hover, focus or click. */
+export function Help({ text }: { text: ReactNode }) {
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  const ref = useRef<HTMLSpanElement>(null);
+  const show = () => {
+    const r = ref.current?.getBoundingClientRect();
+    if (r) setAt({ x: Math.min(r.left, window.innerWidth - 300), y: r.bottom + 6 });
+  };
+  return (
+    <span
+      ref={ref}
+      className="help"
+      tabIndex={0}
+      role="button"
+      aria-label="What does this do?"
+      onMouseEnter={show}
+      onMouseLeave={() => setAt(null)}
+      onFocus={show}
+      onBlur={() => setAt(null)}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        at ? setAt(null) : show();
+      }}
+    >
+      ?
+      {at && (
+        <span className="help-pop" role="tooltip" style={{ left: at.x, top: at.y }}>
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+
 export function Field({ label, children, stack, title }: { label: ReactNode; children: ReactNode; stack?: boolean; title?: string }) {
   return (
-    <div className={`field ${stack ? 'stack' : ''}`} title={title}>
-      <label>{label}</label>
+    <div className={`field ${stack ? 'stack' : ''}`}>
+      <label>
+        {label}
+        {title && <Help text={title} />}
+      </label>
       <div>{children}</div>
     </div>
   );
@@ -229,11 +267,12 @@ export function DragNumber({ value, onCommit, step = 1, precision = 2, min, max,
   );
 }
 
-export function Checkbox({ checked, onChange, label, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: ReactNode; disabled?: boolean }) {
+export function Checkbox({ checked, onChange, label, disabled, help }: { checked: boolean; onChange: (v: boolean) => void; label: ReactNode; disabled?: boolean; help?: ReactNode }) {
   return (
     <label className="checkbox">
       <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
       {label}
+      {help && <Help text={help} />}
     </label>
   );
 }

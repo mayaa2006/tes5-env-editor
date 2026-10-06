@@ -121,8 +121,8 @@ function Conflicts({ formKey }: { formKey: FormKey }) {
         <span className="dim small mono">{formKey}</span>
         <span className={`chip ${diffCount ? 'warn' : 'ok'}`}>{versions.length < 2 ? 'Single version' : diffCount ? `${diffCount} differing field(s)` : 'All versions identical (ITM)'}</span>
         <span className="spacer" />
-        <Checkbox checked={onlyDiff} onChange={setOnlyDiff} label="Only differences" />
-        <Checkbox checked={raw} onChange={setRaw} label="Raw fields" />
+        <Checkbox checked={onlyDiff} onChange={setOnlyDiff} label="Only differences" help="Hide fields that are the same in every plugin, so you only see what each mod changes." />
+        <Checkbox checked={raw} onChange={setRaw} label="Raw fields" help="Show the record's raw subrecords (four-letter codes and sizes), like xEdit, instead of named fields." />
       </div>
       <div className="scroll" style={{ flex: 1 }} data-testid="conflicts">
         <table className="grid">

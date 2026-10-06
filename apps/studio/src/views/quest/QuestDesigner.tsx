@@ -135,7 +135,7 @@ function NewQuestDialog({ onClose }: { onClose: () => void }) {
         <Checkbox checked={sge} onChange={setSge} label="Running from game start (an SEQ file is generated automatically if it has dialogue)" />
       </Field>
       <Field label="">
-        <Checkbox checked={runOnce} onChange={setRunOnce} label="Run once" />
+        <Checkbox checked={runOnce} onChange={setRunOnce} label="Run once" help="Once it has stopped, the quest can never start again." />
       </Field>
       <p className="dim small">Starts with stages 0 (start-up), 10 and 100 (completes the quest). Change them freely.</p>
     </Modal>
@@ -231,10 +231,10 @@ function Overview({ q }: { q: QuestModel }) {
       </Field>
       <Field label="Flags">
         <div className="col" style={{ gap: 4 }}>
-          <Checkbox checked={(q.flags & QuestFlag.StartGameEnabled) !== 0} onChange={(v) => flag(QuestFlag.StartGameEnabled, v)} label="Start game enabled" />
-          <Checkbox checked={(q.flags & QuestFlag.RunOnce) !== 0} onChange={(v) => flag(QuestFlag.RunOnce, v)} label="Run once" />
-          <Checkbox checked={(q.flags & QuestFlag.AllowRepeatedStages) !== 0} onChange={(v) => flag(QuestFlag.AllowRepeatedStages, v)} label="Allow repeated stages" />
-          <Checkbox checked={(q.flags & QuestFlag.WarnOnAliasFillFailure) !== 0} onChange={(v) => flag(QuestFlag.WarnOnAliasFillFailure, v)} label="Warn on alias fill failure" />
+          <Checkbox checked={(q.flags & QuestFlag.StartGameEnabled) !== 0} onChange={(v) => flag(QuestFlag.StartGameEnabled, v)} label="Start game enabled" help="The quest runs from the moment a new game (or a save without your mod) loads. Needed for most dialogue-only quests. An SEQ file is written for it when it has dialogue." />
+          <Checkbox checked={(q.flags & QuestFlag.RunOnce) !== 0} onChange={(v) => flag(QuestFlag.RunOnce, v)} label="Run once" help="Once it has stopped, the quest can never start again." />
+          <Checkbox checked={(q.flags & QuestFlag.AllowRepeatedStages) !== 0} onChange={(v) => flag(QuestFlag.AllowRepeatedStages, v)} label="Allow repeated stages" help="Setting a stage that's already done runs its script again. Off by default: repeats are ignored." />
+          <Checkbox checked={(q.flags & QuestFlag.WarnOnAliasFillFailure) !== 0} onChange={(v) => flag(QuestFlag.WarnOnAliasFillFailure, v)} label="Warn on alias fill failure" help="Writes a warning to the Papyrus log when an alias can't be filled, which helps when a quest silently fails to start." />
         </div>
       </Field>
       <Field label="Scripts">
@@ -262,10 +262,10 @@ function Overview({ q }: { q: QuestModel }) {
 
 // ------------------------------------------------------------------ stages
 
-const STAGE_FLAGS: [number, string][] = [
-  [0x02, 'Start-up stage'],
-  [0x04, 'Shut-down stage'],
-  [0x08, 'Keep instance data'],
+const STAGE_FLAGS: [number, string, string][] = [
+  [0x02, 'Start-up stage', 'Set automatically the moment the quest starts. Usually stage 0 or 10.'],
+  [0x04, 'Shut-down stage', 'Set automatically when the quest stops (for clean-up scripts).'],
+  [0x08, 'Keep instance data', 'Keeps text replacement data (like <Alias=...> names) from the previous run when the quest restarts.'],
 ];
 
 function Stages({ q }: { q: QuestModel }) {
@@ -283,8 +283,8 @@ function Stages({ q }: { q: QuestModel }) {
           </div>
           <div className="col" style={{ gap: 6 }}>
             <div className="row wrap" style={{ gap: 10 }}>
-              {STAGE_FLAGS.map(([bit, label]) => (
-                <Checkbox key={bit} checked={(s.flags & bit) !== 0} label={label} onChange={(on) => patchRecord(q.formKey, `Stage ${s.index} flags`, (d) => (d.stages[si].index.flags = on ? d.stages[si].index.flags | bit : d.stages[si].index.flags & ~bit))} />
+              {STAGE_FLAGS.map(([bit, label, help]) => (
+                <Checkbox key={bit} checked={(s.flags & bit) !== 0} label={label} help={help} onChange={(on) => patchRecord(q.formKey, `Stage ${s.index} flags`, (d) => (d.stages[si].index.flags = on ? d.stages[si].index.flags | bit : d.stages[si].index.flags & ~bit))} />
               ))}
             </div>
             {(s.logEntries.length ? s.logEntries : [{ flags: 0, text: '', fragment: undefined }]).map((le, li) => (
@@ -421,12 +421,12 @@ function Objectives({ q }: { q: QuestModel }) {
 
 // ------------------------------------------------------------------ aliases
 
-const ALIAS_FLAGS: [number, string][] = [
-  [0x2, 'Optional'],
-  [0x4, 'Quest object'],
-  [0x10, 'Allow dead'],
-  [0x40, 'Essential'],
-  [0x80, 'Allow disabled'],
+const ALIAS_FLAGS: [number, string, string][] = [
+  [0x2, 'Optional', "The quest can start even if this alias can't be filled. Leave it off for anything the quest really needs."],
+  [0x4, 'Quest object', "Items can't be dropped, sold or put away while the quest runs (shown as quest items)."],
+  [0x10, 'Allow dead', 'The alias can be filled by a dead actor. Otherwise dead actors are skipped.'],
+  [0x40, 'Essential', "The actor can't be killed while in this alias; they're knocked down instead."],
+  [0x80, 'Allow disabled', 'The alias can be filled by a disabled (hidden) reference.'],
 ];
 
 function Aliases({ q }: { q: QuestModel }) {
@@ -465,8 +465,8 @@ function Aliases({ q }: { q: QuestModel }) {
               <td>
                 {a.kind === 'ref' && (
                   <div className="row wrap" style={{ gap: 8 }}>
-                    {ALIAS_FLAGS.map(([bit, label]) => (
-                      <Checkbox key={bit} checked={(a.flags & bit) !== 0} label={label} onChange={(on) => patchRecord(q.formKey, `Alias ${a.name} flags`, (d) => (d.aliases[ai].value.flags = on ? (d.aliases[ai].value.flags ?? 0) | bit : (d.aliases[ai].value.flags ?? 0) & ~bit))} />
+                    {ALIAS_FLAGS.map(([bit, label, help]) => (
+                      <Checkbox key={bit} checked={(a.flags & bit) !== 0} label={label} help={help} onChange={(on) => patchRecord(q.formKey, `Alias ${a.name} flags`, (d) => (d.aliases[ai].value.flags = on ? (d.aliases[ai].value.flags ?? 0) | bit : (d.aliases[ai].value.flags ?? 0) & ~bit))} />
                     ))}
                   </div>
                 )}
@@ -568,7 +568,7 @@ function NewTopic({ q, onDone }: { q: QuestModel; onDone: () => void }) {
       <Field label="Editor ID">
         <TextInput value={edid} onCommit={setEdid} mono />
       </Field>
-      <Checkbox checked={topLevel} onChange={setTopLevel} label="Show in the NPC's first dialogue menu (top-level branch)" />
+      <Checkbox checked={topLevel} onChange={setTopLevel} label="Show in the NPC's first dialogue menu (top-level branch)" help="Top-level lines appear when you first talk to someone. Turn it off for lines that should only appear as a choice after another line." />
       <div className="row" style={{ gap: 6 }}>
         <button
           className="btn primary small"

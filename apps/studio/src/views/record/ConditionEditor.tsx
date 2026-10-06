@@ -121,8 +121,8 @@ export function ConditionRow({ item, fns, onChange, onRemove }: { item: Item; fn
             <DragNumber value={Number(c.value ?? 0)} step={1} precision={2} onCommit={(value) => set({ value })} />
           )}
         </div>
-        <Checkbox checked={c.useGlobal} onChange={(useGlobal) => set({ useGlobal, value: useGlobal ? null : 1 })} label="global" />
-        <Checkbox checked={c.or} onChange={(or) => set({ or })} label="OR" />
+        <Checkbox checked={c.useGlobal} onChange={(useGlobal) => set({ useGlobal, value: useGlobal ? null : 1 })} label="global" help="Compare with the value of a global variable instead of a fixed number." />
+        <Checkbox checked={c.or} onChange={(or) => set({ or })} label="OR" help="Join this condition to the next one with OR instead of AND. Conditions are read top to bottom; OR binds tighter than AND." />
         {c.runOn === 2 && (
           <div style={{ minWidth: 140 }}>
             <FormPicker value={typeof c.reference === 'string' ? c.reference : null} sigs={['REFR', 'ACHR', 'PLYR']} onChange={(v) => set({ reference: v })} placeholder="Reference" />

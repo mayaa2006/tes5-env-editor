@@ -263,7 +263,7 @@ function QuestMapInner({ quest, onOpenDialogue, onOpenStages }: { quest: FormKey
           Tidy up
         </button>
         <span className="sep" />
-        <Checkbox checked={g.startGameEnabled} onChange={(on) => engine((c) => c.call('setQuestStartGameEnabled', quest, on))} label="Running from game start" />
+        <Checkbox checked={g.startGameEnabled} onChange={(on) => engine((c) => c.call('setQuestStartGameEnabled', quest, on))} label="Running from game start" help="The quest runs from the moment the game loads. Dialogue-only quests usually need this, or their lines never appear." />
         <span className="spacer" />
         <span className="dim small">Drag from a stage’s right edge to another stage, or into empty space for a new one.</span>
         <button className={`btn small ${g.problems.length ? 'warn' : 'ghost'}`} onClick={() => setShowProblems(!showProblems)} data-testid="map-problems">

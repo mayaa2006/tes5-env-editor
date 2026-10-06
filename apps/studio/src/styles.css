@@ -1079,6 +1079,15 @@ table.grid tr.diff td {
   .workspace-tab {
     padding: 5px 9px;
   }
+  /* Labels say enough on small windows; the icons make the tab row too wide. */
+  .workspace-tab svg {
+    display: none;
+  }
+  .topbar .chip {
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 }
 @media (max-width: 1180px) {
   .workspace-tab {
@@ -1200,4 +1209,94 @@ table.grid tr.diff td {
   background: rgba(232, 182, 71, 0.15);
   border-color: var(--warn);
   color: var(--warn);
+}
+
+/* ---- (?) help */
+.help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  margin-left: 5px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: help;
+  vertical-align: middle;
+  flex: none;
+  user-select: none;
+}
+.help:hover,
+.help:focus {
+  color: var(--text);
+  border-color: var(--accent);
+  outline: none;
+}
+.help-pop {
+  position: fixed;
+  z-index: 200;
+  width: 280px;
+  padding: 8px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  text-transform: none;
+  letter-spacing: normal;
+  white-space: normal;
+  cursor: default;
+}
+
+/* ---- release tab */
+.release-group {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-faint);
+  margin: 4px 0;
+}
+.release-list .release-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.release-item .chip {
+  margin-top: 1px;
+}
+.chip.dim {
+  opacity: 0.45;
+}
+.ok {
+  color: var(--ok);
+}
+.always-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.always-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.always-list li svg {
+  color: var(--ok);
+  flex: none;
+}
+
+/* Cards laid out in a grid line up (no stacked-card spacing). */
+.card-grid > .card + .card {
+  margin-top: 0;
 }

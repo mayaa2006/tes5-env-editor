@@ -15,6 +15,7 @@ const ScriptEditor = lazy(() => import('./views/script/ScriptEditor'));
 const RecordsView = lazy(() => import('./views/record/RecordsView'));
 const CleanerView = lazy(() => import('./views/CleanerView'));
 const AutomationsView = lazy(() => import('./views/AutomationsView'));
+const ReleaseView = lazy(() => import('./views/ReleaseView'));
 const ScriptList = lazy(() => import('./views/script/ScriptList'));
 
 const TABS: { id: WorkspaceTab; label: string; icon: string; key: string }[] = [
@@ -26,6 +27,7 @@ const TABS: { id: WorkspaceTab; label: string; icon: string; key: string }[] = [
   { id: 'clean', label: 'Clean', icon: 'clean', key: '6' },
   { id: 'automations', label: 'Automations', icon: 'auto', key: '7' },
   { id: 'plugins', label: 'Plugins', icon: 'plugins', key: '8' },
+  { id: 'release', label: 'Release', icon: 'flag', key: '9' },
 ];
 
 export function App() {
@@ -119,6 +121,7 @@ export function App() {
             {tab === 'clean' && <CleanerView />}
             {tab === 'automations' && <AutomationsView />}
             {tab === 'plugins' && <PluginsView />}
+            {tab === 'release' && <ReleaseView />}
           </Suspense>
           {hasInspector(tab) && <BottomLog />}
         </main>
