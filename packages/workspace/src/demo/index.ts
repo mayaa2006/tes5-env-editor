@@ -173,6 +173,19 @@ function meshesAndTextures(): Record<string, Uint8Array> {
   files['meshes\\demo\\chest.nif'] = nif(['Chest', merge(box(-40, -24, 0, 40, 24, 40), box(-41, -25, 40, 41, 25, 52)), [T('wood')]]);
   files['meshes\\demo\\torch.nif'] = nif(['Torch', cylinder(3, 40, 8), [T('wood')]], ['Flame', translate(ellipsoid(5, 5, 9, 0, 6, 8), 0, 0, 46), [T('marker')], { alphaBlend: true }]);
   files['meshes\\demo\\xmarker.nif'] = nif(['Marker', box(-8, -8, 0, 8, 8, 16), [T('marker')]]);
+  files['meshes\\demo\\tankard.nif'] = nif(['Tankard', cylinder(4, 10, 12), [T('wood')]]);
+  files['meshes\\demo\\plate.nif'] = nif(['Plate', cylinder(8, 1.5, 16), [T('stone')]]);
+  files['meshes\\demo\\bowl.nif'] = nif(['Bowl', cylinder(6, 4, 12), [T('wood')]]);
+  files['meshes\\demo\\bottle.nif'] = nif(['Bottle', merge(cylinder(3, 10, 10), cylinder(1.2, 4, 8, 10)), [T('marker')]]);
+  files['meshes\\demo\\sack.nif'] = nif(['Sack', ellipsoid(14, 10, 11, 11, 8, 12), [T('fabric')]]);
+  files['meshes\\demo\\candle.nif'] = nif(['Candle', cylinder(2, 12, 8), [T('fabric')]], ['Flame', translate(ellipsoid(1.2, 1.2, 2.5, 0, 6, 8), 0, 0, 14), [T('marker')], { alphaBlend: true }]);
+  files['meshes\\demo\\brazier.nif'] = nif(['Brazier', merge(cylinder(24, 8, 16, 30), box(-3, -3, 0, 3, 3, 30)), [T('stone')]], ['Fire', translate(ellipsoid(14, 14, 10, 0, 6, 10), 0, 0, 40), [T('marker')], { alphaBlend: true }]);
+  files['meshes\\demo\\bush.nif'] = nif(['Bush', ellipsoid(40, 40, 25, 25, 8, 12), [T('grass')]]);
+  files['meshes\\demo\\fern.nif'] = nif(['Fern', ellipsoid(20, 20, 9, 9, 6, 10), [T('grass')]]);
+  files['meshes\\demo\\wallcorner.nif'] = nif(['WallCorner', box(-12, -12, 0, 12, 12, 256), [T('plaster')]]);
+  files['meshes\\demo\\walldoorway.nif'] = nif(['WallDoorway', merge(box(-128, -8, 0, -48, 8, 256), box(48, -8, 0, 128, 8, 256), box(-48, -8, 192, 48, 8, 256)), [T('plaster')]]);
+  files['meshes\\demo\\road.nif'] = nif(['Road', box(-128, -64, 0, 128, 64, 2, 1 / 128), [T('stone')]]);
+  files['meshes\\demo\\fence.nif'] = nif(['Fence', merge(box(-64, -4, 0, -58, 4, 60), box(58, -4, 0, 64, 4, 60), box(-64, -2, 20, 64, 2, 26), box(-64, -2, 44, 64, 2, 50)), [T('wood')]]);
   files['meshes\\demo\\ground.nif'] = nif(['Ground', terrain(4096, 16, 60), [T('grass')]]);
   const male = headMesh(false);
   const female = headMesh(true);
@@ -341,6 +354,29 @@ function buildDemoMaster(): Plugin {
     scripts: { version: 5, objectFormat: 2, scripts: [{ name: 'DemoChestScript', flags: 0, properties: [{ name: 'DemoWelcomeMsg', type: VmadPropertyType.Object, flags: 1, value: { form: msg, alias: -1 } }] }] },
   });
 
+  // Clutter, plants, light sources and kit pieces for the environment tools (added last so earlier FormIDs stay put).
+  const misc = (edid: string, name: string, file: string, b: [number, number, number], value: number, weight: number) =>
+    rec(p, 'MISC', id(), { editorId: edid, bounds: bounds(...b), name, model: model(file), data: { value, weight } });
+  misc('DemoTankard', 'Tankard', 'demo\\tankard.nif', [4, 4, 10], 2, 1);
+  misc('DemoPlate', 'Plate', 'demo\\plate.nif', [8, 8, 2], 2, 1);
+  misc('DemoBowl', 'Bowl', 'demo\\bowl.nif', [6, 6, 4], 1, 1);
+  misc('DemoBottle', 'Bottle of Mead', 'demo\\bottle.nif', [3, 3, 14], 5, 0.5);
+  misc('DemoSack', 'Sack', 'demo\\sack.nif', [14, 10, 22], 1, 2);
+  const candle = stat('DemoCandleStick', 'demo\\candle.nif', [3, 3, 16]);
+  stat('DemoBrazier', 'demo\\brazier.nif', [24, 24, 40]);
+  stat('DemoBush', 'demo\\bush.nif', [40, 40, 50]);
+  stat('DemoFern', 'demo\\fern.nif', [20, 20, 18]);
+  stat('DemoWallCorner', 'demo\\wallcorner.nif', [12, 12, 256]);
+  stat('DemoWallDoorway', 'demo\\walldoorway.nif', [128, 8, 256]);
+  stat('DemoRoad', 'demo\\road.nif', [128, 64, 2]);
+  stat('DemoFence', 'demo\\fence.nif', [64, 4, 60]);
+  rec(p, 'LIGH', id(), {
+    editorId: 'DemoCandleLight',
+    bounds: bounds(0, 0, 0),
+    data: { time: -1, radius: 256, color: { r: 255, g: 200, b: 140, unused: new Uint8Array(1) }, flags: 0, falloffExponent: 1, fov: 90, nearClip: 0, flickerPeriod: 0, flickerIntensityAmplitude: 0, flickerMovementAmplitude: 0, value: 0, weight: 0 },
+    fadeValue: 1,
+  });
+
   // ---- interior cell: the Demo Tavern
   const tavern = 0xa00;
   rec(p, 'CELL', tavern, {
@@ -417,6 +453,9 @@ function buildDemoMaster(): Plugin {
       rec(p, 'REFR', rr, { base: rock, placement: posRot(gx * 4096 + 600 + k * 800, 900 + ((k * 1300) % 2000), 30, k), scale: 0.8 + k * 0.2 }, { cell: c });
     }
   }
+
+  // An unlit candle on a table (for the lighting pass).
+  place(candle, -200, 150, 78);
 
   // ---- a quest with dialogue
   const quest = 0xc00;

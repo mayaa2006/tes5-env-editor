@@ -1065,6 +1065,24 @@ export class Workspace {
     });
   }
 
+  /**
+   * Make a placed reference persistent (or temporary): sets the flag and moves
+   * the active plugin's copy into the cell's matching child group.
+   */
+  setPersistent(key: FormKey, persistent: boolean): void {
+    this.transaction(persistent ? `Make ${key} persistent` : `Make ${key} temporary`, () => {
+      const a = this.requireActive();
+      const rec = this.ensureInActive(key);
+      const where = this.placementFor(a, rec);
+      rec.setFlag(RecordFlags.Persistent, persistent);
+      rec.markModified();
+      if (where.cell && where.persistent !== persistent) {
+        a.plugin.removeRecord(rec.formId);
+        this.placeInActive(rec, { ...where, persistent });
+      }
+    });
+  }
+
   /** Create a new record in the active plugin. */
   createRecord(sig: string, data: Record<string, unknown>, where: { cell?: FormKey; topic?: FormKey; worldspace?: FormKey; persistent?: boolean } = {}, flags = 0): FormKey {
     if (!getRecordDef(sig)) throw new WorkspaceError(`Creating ${sig} records is not supported yet (no schema)`);
