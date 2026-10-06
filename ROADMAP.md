@@ -22,11 +22,12 @@ Tested means unit tests (`npm test`) plus the Playwright run of the browser demo
 | Navmesh manual editing | ✅ | Tab enters edit mode, with Blender-style select / box / all. You can draw triangles (click 3 points, snapping to existing vertices, continuing as a strip), move vertices with G and X/Y/Z axis locks, delete triangles, and set the preferred / water / no-large-creatures flags. Edge links inside the mesh and the search grid are rebuilt after each edit. |
 | Character creator | 🟡 | Head parts, sliders, colours and tints are edited correctly. The preview uses the race-agnostic chargen morph names, so check them against real head TRIs. **FaceGen export (Ctrl+F4) is not implemented**: the editor detects missing FaceGen and tells you to export it from the CK. |
 | Quests: stages, objectives, aliases, fragments | ✅ | Alias fill types beyond unique actor, specific reference and location must be set in the properties panel. |
-| Dialogue: topics, responses, conditions, begin/end scripts, voice names | ✅ | Scenes (SCEN) and packages (PACK) are only partly supported (raw fields). The voice-file truncation rule matches community documentation and should be confirmed. |
+| Dialogue: topics, responses, conditions, begin/end scripts, voice names | ✅ | Scenes (SCEN) and packages (PACK) have typed schemas for what this editor writes; vanilla records with unusual layouts still show as raw fields. The voice-file truncation rule matches community documentation and should be confirmed. |
 | Quest map (stages connected by what advances them) | ✅ | Connections are stored as ordinary dialogue, alias scripts and stage fragments, so the CK and xEdit see normal data. Stage changes made by hand-written scripts are only shown when they're a literal `SetStage(N)`. |
 | Gestures in dialogue and at quest stages | 🟡 | The list of common gestures uses vanilla idle names (IdleWave, IdlePointClose, IdleApplaud2, …) that should be checked in game. A gesture uses PlayIdle when the IDLE form exists in the load order, and Debug.SendAnimationEvent otherwise. A gesture at a stage plays only if the character is loaded nearby. |
 | Dialogue check | ✅ | The thresholds (80 characters for player lines, 150 for responses) are guidelines, not engine limits. "Still chosen after it moved the quest on" only counts a GetStage == N condition. |
 | Journal & objective writer | ✅ | Template drafts use the first step out of each stage; when a stage has several ways forward, edit the draft or ask Claude. |
+| Routines (AI packages from templates) | 🟡 | Packages are made from the load order's Sandbox / Sleep / Eat / Travel / Follow / ForceGreet templates. The template's data inputs are copied, and the place (in a cell, or near the editor location), target (the player) or topic is filled in, with hours and stage conditions. The layout follows xEdit and is fully typed, but packages haven't been loaded in the CK or the game yet. The demo's templates are synthetic stand-ins. Escort (follow plus travel) and patrols aren't offered yet. |
 | Visual triggers and templates | 🟡 | Generates Papyrus with a marker line so it can be read back; hand edits to a generated script are overwritten the next time its triggers are saved in the visual editor. Compiles cleanly with the built-in checker, but in-game behaviour of every action hasn't been tried. |
 | Dialogue graph and screenplay import | ✅ | Speakers are matched by NPC name or Editor ID. |
 | Greetings, chatter, scenes, conditions in scripts | 🟡 | Greetings and chatter use the quest's Hello (HELO) and Idle (IDLE) topics, and conditions are standard CK functions run on the player. Scenes are written as SCEN records following xEdit's layout (one phase per turn, actors as quest aliases) and read back the same way, but haven't been opened in the CK or played in game yet. Forcegreets need an AI package and come with AI routines. Scenes aren't written back when dialogue is exported as a script. |
@@ -66,8 +67,9 @@ Tested means unit tests (`npm test`) plus the Playwright run of the browser demo
 6. **Generated trigger scripts:** each trigger action in game (especially `movePlayerTo`, `lock` and `arrive` via OnCellAttach).
 7. **MO2 launch:** the `moshortcut://` argument form and the profile switch.
 8. **Scenes:** that generated SCEN records open in the CK and play in game (phases, actor behaviour flags, the missing VNAM).
-9. **Gestures:** that the listed vanilla idle names play as expected from dialogue and stage scripts.
-10. **Linked doors:** that arrival points land on the correct side for vanilla door meshes, and that the generated light forms (radius, flicker) look right in game.
+9. **Routines:** that generated packages behave like CK-made ones from the same templates (data input values, schedule, alias packages).
+10. **Gestures:** that the listed vanilla idle names play as expected from dialogue and stage scripts.
+11. **Linked doors:** that arrival points land on the correct side for vanilla door meshes, and that the generated light forms (radius, flicker) look right in game.
 
 ## Next steps
 
@@ -75,4 +77,4 @@ Tested means unit tests (`npm test`) plus the Playwright run of the browser demo
 2. FaceGen export: bake head meshes with morphs and write the facetint DDS.
 3. Render skinned actors and armour; add normal maps.
 4. Navmesh cover generation, and merging or splitting vertices.
-5. Scene (SCEN) and AI package editors.
+5. Full scene and AI package editors (beyond what scripts and plans generate).

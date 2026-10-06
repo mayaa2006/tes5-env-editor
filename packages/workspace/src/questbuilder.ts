@@ -14,6 +14,7 @@ import { emptyMorphs, FEMALE_FLAG, type NpcService } from './npc';
 import type { QuestService } from './quest';
 import type { NewQuestEdge, QuestGraphService } from './questgraph';
 import { lintQuestDialogue } from './dialoguelint';
+import { createPackage, stageConditions, type PackageSpec } from './routines';
 import { validatePlan, type PlanCharacter, type PlanItem, type PlanLocation, type QuestPlan } from './questplan';
 import { WorldService, type Vec3 } from './world';
 
@@ -43,7 +44,7 @@ export interface QuestBuildReport {
   /** The quest, or null for a plan that only changes characters, places and items. */
   quest: FormKey | null;
   editorId: string;
-  created: { kind: PlanEntryKind | 'quest' | 'placed' | 'outfit'; formKey: FormKey; label: string }[];
+  created: { kind: PlanEntryKind | 'quest' | 'placed' | 'outfit' | 'package'; formKey: FormKey; label: string }[];
   /** Existing characters that were changed. */
   changed: { formKey: FormKey; label: string; changes: string[] }[];
   reused: { kind: PlanEntryKind; formKey: FormKey; label: string }[];
@@ -338,6 +339,7 @@ export class QuestBuilder {
     if (playerGets.length && quest) await this.graphs.appendStageCode(quest, startStage, playerGets);
     if (!quest) {
       if (playerGets.length) report.warnings.push('Items the player should start with need a quest to give them; they were left out.');
+      await this.buildRoutines(plan, null, npcs, cells, prefix, report);
       this.finishNotes(plan, report);
       return report;
     }
@@ -414,6 +416,9 @@ export class QuestBuilder {
       await this.graphs.addEdge(quest, { from: s.from, to: s.to, kind: s.kind, target } as NewQuestEdge);
     }
 
+    // Routines and quest behaviour (AI packages).
+    await this.buildRoutines(plan, quest, npcs, cells, prefix, report);
+
     // Gestures at quest events.
     for (const a of plan.animations) await this.graphs.addStageGesture(quest, a.atStage, npcs.get(a.characterKey)!, a.gesture);
 
@@ -432,6 +437,64 @@ export class QuestBuilder {
     report.problems = (await this.graphs.graph(quest)).problems;
     for (const l of await lintQuestDialogue(quest, { quests: this.quests, dialogue: this.dialogue, graphs: this.graphs })) report.warnings.push(`Dialogue: ${l.message}`);
     return report;
+  }
+
+  /**
+   * Each routine activity becomes a package: everyday ones on the character,
+   * quest-bound ones (follow, forcegreet, limited to some stages) on their quest alias.
+   */
+  private async buildRoutines(plan: QuestPlan, quest: FormKey | null, npcs: Map<string, FormKey>, cells: Map<string, FormKey>, prefix: string, report: QuestBuildReport): Promise<void> {
+    for (const c of plan.characters) {
+      if (!c.routine?.length) continue;
+      const npc = npcs.get(c.key)!;
+      const base: FormKey[] = [];
+      const alias: FormKey[] = [];
+      for (const [n, r] of c.routine.entries()) {
+        let location: PackageSpec['location'] = { kind: 'editor' };
+        if (r.where) {
+          const cell = cells.get(r.where) ?? this.findForm(['CELL'], r.where);
+          if (cell) location = { kind: 'cell', cell };
+          else report.notes.push(`${c.name}: no place called “${r.where}”, so they ${r.activity} around where they stand.`);
+        }
+        const questBound = !!quest && (r.fromStage !== null || r.untilStage !== null || r.activity === 'follow' || r.activity === 'forcegreet');
+        let topic: FormKey | undefined;
+        if (r.activity === 'forcegreet' && quest) {
+          topic = this.quests.miscTopic(quest, 'forcegreet', `${prefix}${pascal(c.name)}ForceGreet`);
+          this.quests.addResponse(topic, { text: r.line ?? '', speaker: npc, conditions: stageConditions(quest, r.fromStage, r.untilStage) });
+        }
+        try {
+          const pk = createPackage(this.ws, {
+            editorId: this.ws.uniqueEditorId(`${prefix}${pascal(c.name)}${pascal(r.activity)}${n + 1}`),
+            activity: r.activity,
+            hours: r.hours,
+            conditions: questBound && quest ? stageConditions(quest, r.fromStage, r.untilStage) : [],
+            location,
+            topic,
+            ownerQuest: questBound && quest ? quest : undefined,
+          });
+          (questBound ? alias : base).push(pk);
+          report.created.push({ kind: 'package', formKey: pk, label: `${c.name}: ${this.characters.describe({ ...c, outfit: null, inventory: [], factions: [], className: null, level: null, look: null, essential: null, existing: null, routine: [r] }).join('')}` });
+        } catch (e) {
+          if (e instanceof WorkspaceError) report.warnings.push(`${c.name}: ${e.message}`);
+          else throw e;
+        }
+      }
+      if (base.length) {
+        // Timed activities first: a character does the first package whose time and conditions fit.
+        const timed = (k: FormKey) => ((this.ws.view(k)!.data as any).schedule?.hour ?? -1) >= 0;
+        const ordered = [...base.filter(timed), ...base.filter((k) => !timed(k))];
+        this.ws.editRecord(npc, (d: any) => void (d.packages = [...ordered, ...(d.packages ?? [])]), `${c.name}'s routine`);
+        if (parseFormKey(npc).plugin !== this.ws.activeName) report.notes.push(`${c.name}'s new routine comes before their old packages, and overrides them as a character from ${parseFormKey(npc).plugin}.`);
+      }
+      if (alias.length && quest) {
+        const id = this.graphs.aliasFor(quest, npc);
+        this.ws.editRecord(quest, (d: any) => {
+          const a = (d.aliases ?? []).find((x: any) => x.value?.id === id);
+          if (a) a.value.packages = [...(a.value.packages ?? []), ...alias];
+        });
+        report.notes.push(`${c.name}'s quest behaviour is on their quest alias, so it only applies while the quest runs.`);
+      }
+    }
   }
 
   private sceneHooks() {

@@ -5,11 +5,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FACE_MORPHS, type FormKey } from '@tes5/esp';
 import type { HeadPartInfo, NpcAppearance } from '@tes5/workspace';
-import { Field, FormPicker, Icon, Modal, Select, Slider, Tabs, TextInput, useDebounced, useQuery, DragNumber, useUniqueEditorId } from '../../components/ui';
+import { Checkbox, Field, FormPicker, Icon, Modal, Select, Slider, Tabs, TextInput, useDebounced, useQuery, DragNumber, useUniqueEditorId } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 import { HeadPreview, type PreviewPart } from './headPreview';
 
-type Tab = 'body' | 'head' | 'face' | 'colors' | 'tints';
+type Tab = 'body' | 'head' | 'face' | 'colors' | 'tints' | 'routine';
 
 const FACE_GROUPS: { title: string; keys: (typeof FACE_MORPHS)[number][0][] }[] = [
   { title: 'Nose', keys: ['noseLongShort', 'noseUpDown'] },
@@ -216,6 +216,7 @@ function Creator({ npc }: { npc: FormKey }) {
             { id: 'face', label: 'Face' },
             { id: 'colors', label: 'Colours' },
             { id: 'tints', label: 'Paint' },
+            { id: 'routine', label: 'Routine' },
           ]}
           value={tab}
           onChange={setTab}
@@ -231,6 +232,8 @@ function Creator({ npc }: { npc: FormKey }) {
             <FaceTab a={a} setA={setA} commit={commit} />
           ) : tab === 'colors' ? (
             <ColorsTab a={a} colors={colors ?? []} commit={commit} />
+          ) : tab === 'routine' ? (
+            <RoutineTab npc={npc} />
           ) : (
             <TintsTab a={a} commit={commit} />
           )}
@@ -418,6 +421,81 @@ function TintsTab({ a, commit }: { a: NpcAppearance; commit: (p: Partial<NpcAppe
       <button className="btn small" onClick={() => commit({ tints: [...a.tints, { index: (a.tints.reduce((m, t) => Math.max(m, t.index), 0) || 0) + 1, color: { r: 128, g: 128, b: 128, a: 0 }, value: 50, preset: 0 }] })}>
         <Icon name="plus" size={12} /> Add layer
       </button>
+    </div>
+  );
+}
+
+const ACTIVITY_LABELS: Record<string, string> = { sandbox: 'Go about their business', stay: 'Stay put', sleep: 'Sleep', eat: 'Eat', travel: 'Travel to' };
+
+/** What the character does with their day: their AI packages, in words, and a quick way to add one. */
+function RoutineTab({ npc }: { npc: FormKey }) {
+  const client = useStore((s) => s.client);
+  const { data } = useQuery(() => client?.call('npcRoutine', npc), [npc]);
+  const [activity, setActivity] = useState<'sandbox' | 'stay' | 'sleep' | 'eat' | 'travel'>('sandbox');
+  const [cell, setCell] = useState<FormKey | null>(null);
+  const [timed, setTimed] = useState(false);
+  const [from, setFrom] = useState(8);
+  const [to, setTo] = useState(20);
+  const available = data?.activities.find((a) => a.activity === activity)?.available ?? false;
+  return (
+    <div className="col" style={{ gap: 10 }} data-testid="npc-routine">
+      <p className="dim small" style={{ margin: 0 }}>
+        A character does the first activity whose hours fit; untimed ones fill the rest of the day. Quest behaviour (following the player, walking up to talk) comes from quests and isn't listed here.
+      </p>
+      {data?.packages.length ? (
+        <ul className="list">
+          {data.packages.map((p) => (
+            <li key={p.formKey} className="list-item" title={p.editorId}>
+              <span className="grow" style={{ whiteSpace: 'normal' }}>
+                {p.text}
+              </span>
+              <button className="btn icon ghost" title="Remove from their routine (the package itself is kept)" onClick={() => engine((c) => c.call('removeNpcPackage', npc, p.formKey))}>
+                <Icon name="close" size={11} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="dim small">No routine: they stand where they're placed. Add an activity below.</div>
+      )}
+      <div className="card col" style={{ gap: 6 }}>
+        <div className="card-title">Add an activity</div>
+        <Field label="Activity">
+          <Select
+            value={activity}
+            options={Object.entries(ACTIVITY_LABELS).map(([value, label]) => ({ value: value as typeof activity, label }))}
+            onChange={(a) => {
+              setActivity(a);
+              // Sensible hours for each activity.
+              const [f, t] = a === 'sleep' ? [22, 6] : a === 'eat' ? [12, 13] : [8, 20];
+              setFrom(f);
+              setTo(t);
+              if (a === 'sleep' || a === 'eat') setTimed(true);
+            }}
+          />
+        </Field>
+        <Field label="Where" title="Leave empty to do it around where they were placed in the world">
+          <FormPicker value={cell} sigs={['CELL']} onChange={setCell} placeholder="Around where they stand" />
+        </Field>
+        <Checkbox checked={timed} onChange={setTimed} label="Only at certain hours" />
+        {timed && (
+          <div className="row" style={{ gap: 6 }}>
+            <DragNumber value={from} min={0} max={23} step={1} precision={0} onCommit={setFrom} suffix=":00" />
+            <span className="dim">to</span>
+            <DragNumber value={to} min={0} max={23} step={1} precision={0} onCommit={setTo} suffix=":00" />
+          </div>
+        )}
+        {!available && <div className="small warn">No “{activity}” package template in the load order.</div>}
+        <button
+          className="btn primary"
+          disabled={!available || (activity === 'travel' && !cell)}
+          title={activity === 'travel' && !cell ? 'Choose where they travel to' : 'Makes a package from the game’s template and adds it to their routine'}
+          onClick={() => engine((c) => c.call('addNpcRoutine', npc, { activity, cell, hours: timed ? { from, to } : null }), { success: 'Added to their routine' })}
+          data-testid="add-routine"
+        >
+          <Icon name="plus" size={12} /> Add
+        </button>
+      </div>
     </div>
   );
 }

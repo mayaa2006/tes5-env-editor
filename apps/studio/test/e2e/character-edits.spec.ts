@@ -24,7 +24,7 @@ const PLAN = {
       look: { weight: null, height: null, hair: null, hairColor: 'grey', facialHair: null, eyes: null, scar: null },
       voice: null, locationKey: null, essential: null, className: null, level: null,
       outfit: { items: ['Blue Fine Clothes', 'Brown Hood', 'Leather Boots'], saveAs: 'HalvarSundayBest' },
-      factions: [{ faction: 'Merchants', rank: 0 }], inventory: [],
+      factions: [{ faction: 'Merchants', rank: 0 }], inventory: [], routine: [],
     },
   ],
   locations: [], items: [], stages: [], objectives: [], steps: [], conversations: [], rewards: [], animations: [],

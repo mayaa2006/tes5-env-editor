@@ -388,6 +388,32 @@ function buildDemoMaster(): Plugin {
   armo('DemoHoodBrown', 'Brown Hood', 0x1 | 0x2, 5);
   rec(p, 'OTFT', id(), { editorId: 'DemoFarmerOutfit', items: [shirt, boots] });
   rec(p, 'FACT', id(), { editorId: 'DemoMerchantFaction', name: 'Merchants', relations: [], flags: 0 });
+  // AI package templates (synthetic stand-ins for the game's Sandbox, Sleep, Eat, Travel, Follow and ForceGreet templates).
+  const none = new Uint8Array(0);
+  const boolIn = (on: number) => ({ type: 'Bool', value: new Uint8Array([on]), topics: [] });
+  const floatIn = (f: number) => ({ type: 'Float', value: new Uint8Array(new Float32Array([f]).buffer), topics: [] });
+  const locIn = () => ({ type: 'Location', topics: [], location: { type: 3, value: 0, radius: 512 } });
+  const refIn = () => ({ type: 'SingleRef', topics: [], target: { type: 6, value: 0, count: 0 } });
+  const topicIn = () => ({ type: 'Topic', topics: [{ type: 1, value: 'CUST' }] });
+  const template = (edid: string, procedure: string, values: Record<string, unknown>[], names: string[]) =>
+    rec(p, 'PACK', id(), {
+      editorId: edid,
+      data: { flags: 0, type: 19, interruptOverride: 0, speed: 0, unknown: new Uint8Array(1), interruptFlags: 0x1ff, unknown2: new Uint8Array(2) },
+      schedule: { month: -1, dayOfWeek: -1, date: 0, hour: -1, minute: -1, unused: new Uint8Array(3), duration: 0 },
+      counter: { inputCount: values.length, template: null, version: 1 },
+      packageData: { values, inputs: names.map((name, index) => ({ index, name, flags: 1 })) },
+      marker: none,
+      tree: [{ type: 'Procedure', root: { count: 0, flags: 0 }, procedure, flags: 0, inputIndexes: values.map((_, index) => ({ index })) }],
+      onBegin: { marker: none, idle: null, topics: [] },
+      onEnd: { marker: none, idle: null, topics: [] },
+      onChange: { marker: none, idle: null, topics: [] },
+    });
+  template('Sandbox', 'Sandbox', [locIn(), boolIn(1), boolIn(1), boolIn(1), boolIn(1), boolIn(1), floatIn(50)], ['Location', 'AllowEating', 'AllowSleeping', 'AllowConversation', 'AllowIdleMarkers', 'AllowSitting', 'Energy']);
+  template('Sleep', 'Sleep', [locIn(), boolIn(1)], ['Location', 'LockDoors']);
+  template('Eat', 'Eat', [locIn(), boolIn(1)], ['Location', 'AllowAlreadyHeld']);
+  template('Travel', 'Travel', [locIn()], ['PlaceToTravelTo']);
+  template('Follow', 'Follow', [refIn(), floatIn(150), floatIn(300)], ['TargetToFollow', 'MinRadius', 'MaxRadius']);
+  template('ForceGreet', 'ForceGreet', [refIn(), topicIn()], ['ForceGreetTarget', 'Topic']);
   // ---- interior cell: the Demo Tavern
   const tavern = 0xa00;
   rec(p, 'CELL', tavern, {

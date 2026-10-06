@@ -49,6 +49,18 @@ export const PlanCharacterSchema = z.object({
     .describe('Their worn clothing (their default outfit); null to leave it'),
   factions: z.array(z.object({ faction: z.string().describe('Faction name or Editor ID'), rank: z.number().int() })).describe('Factions to add them to'),
   inventory: z.array(z.object({ item: z.string().describe('Item key from this plan, or the name/Editor ID of an existing item'), count: z.number().int() })).describe('Extra things they carry (not quest items, which use items.startsWith)'),
+  routine: z
+    .array(
+      z.object({
+        activity: z.enum(['sandbox', 'sleep', 'eat', 'stay', 'travel', 'follow', 'forcegreet']).describe('sandbox: go about their business (sit, chat, work); stay: stay put; travel: go to a place; follow: follow the player; forcegreet: walk up to the player and speak'),
+        where: z.string().nullable().describe('Location key from this plan or an existing cell name; null = around where they stand'),
+        hours: z.object({ from: z.number().int(), to: z.number().int() }).nullable().describe('Hours of the day, e.g. 22 to 6 for sleeping; null = any time'),
+        fromStage: z.number().int().nullable().describe('Only once the quest reaches this stage'),
+        untilStage: z.number().int().nullable().describe('Only until the quest reaches this stage'),
+        line: z.string().nullable().describe('For forcegreet: what they say when they reach the player'),
+      }),
+    )
+    .describe('What they do: their daily routine, and what the quest makes them do (follow the player, come and talk). Empty to leave it'),
 });
 
 export const PlanLocationSchema = z.object({
@@ -191,6 +203,12 @@ export function validatePlan(plan: QuestPlan): PlanIssue[] {
     if (c.existing && c.basedOn) warn(`${c.name} already exists, so “based on ${c.basedOn}” is ignored`);
     for (const i of c.inventory ?? []) if (i.count < 1) err(`${c.name} carries ${i.count} × ${i.item}`);
     if (c.outfit && !c.outfit.items.length) err(`${c.name}'s outfit has nothing in it`);
+    for (const r of c.routine ?? []) {
+      if (r.activity === 'forcegreet' && !r.line?.trim()) err(`${c.name} walks up to the player but has nothing to say (forcegreet needs a line)`);
+      if ((r.activity === 'follow' || r.activity === 'forcegreet') && !(plan.stages ?? []).length) err(`${c.name} can only ${r.activity === 'follow' ? 'follow the player' : 'walk up to the player'} as part of a quest`);
+      for (const st of [r.fromStage, r.untilStage]) if (st !== null && !(plan.stages ?? []).some((x) => x.index === st)) err(`${c.name}'s routine mentions stage ${st}, which doesn't exist`);
+      if (r.hours && (r.hours.from < 0 || r.hours.from > 23 || r.hours.to < 0 || r.hours.to > 24)) err(`${c.name}'s routine hours must be 0–23`);
+    }
     if (c.outfit?.saveAs && !/^[A-Za-z][A-Za-z0-9_]*$/.test(c.outfit.saveAs)) err(`The outfit name “${c.outfit.saveAs}” must be an Editor ID (letters, digits and _)`);
   }
   for (const c of plan.characters ?? []) if (c.locationKey && !isKind(c.locationKey, 'location')) err(`${c.name} stands in "${c.locationKey}", which isn't a location in the plan`);

@@ -13,6 +13,10 @@ import {
   DialogueService,
   EnvironmentService,
   EXAMPLE_QUEST_DOCUMENT,
+  createPackage,
+  describePackage,
+  findTemplate,
+  type RoutineActivity,
   applyJournalToPlan,
   draftJournal,
   journalContextFromGraph,
@@ -711,6 +715,36 @@ export class EngineHost {
 
   dialogueScreenplay(quest: FormKey) {
     return this.dialogue!.toScreenplay(quest);
+  }
+
+  // ---------------------------------------------------------------- routines (AI packages)
+
+  /** A character's packages, in the order they're tried, in words. */
+  npcRoutine(npc: FormKey) {
+    const ws = this.requireWs();
+    const list = ((ws.view(npc)?.data as any)?.packages ?? []) as FormKey[];
+    const activities = (['sandbox', 'stay', 'sleep', 'eat', 'travel'] as RoutineActivity[]).map((a) => ({ activity: a, available: !!findTemplate(ws, a) }));
+    return { packages: list.map((k) => ({ formKey: k, text: describePackage(ws, k), editorId: ws.summary(k)?.editorId })), activities };
+  }
+
+  /** Add an everyday activity (a new package from the game's template) to a character. */
+  addNpcRoutine(npc: FormKey, spec: { activity: RoutineActivity; cell: FormKey | null; hours: { from: number; to: number } | null }) {
+    const ws = this.requireWs();
+    return ws.transaction('Add to routine', () => {
+      const id = (ws.view(npc)?.editorId ?? 'Npc').replace(/[^A-Za-z0-9_]/g, '');
+      const pk = createPackage(ws, { editorId: ws.uniqueEditorId(`${id}${spec.activity[0]!.toUpperCase()}${spec.activity.slice(1)}`), activity: spec.activity, hours: spec.hours, conditions: [], location: spec.cell ? { kind: 'cell', cell: spec.cell } : { kind: 'editor' } });
+      // Timed activities go first: the character does the first one whose time fits.
+      ws.editRecord(npc, (d: any) => {
+        const list: FormKey[] = d.packages ?? [];
+        const timed = (k: FormKey) => ((ws.view(k)?.data as any)?.schedule?.hour ?? -1) >= 0;
+        d.packages = spec.hours ? [pk, ...list] : [...list.filter(timed), pk, ...list.filter((k) => !timed(k))];
+      });
+      return pk;
+    });
+  }
+
+  removeNpcPackage(npc: FormKey, pk: FormKey) {
+    this.requireWs().editRecord(npc, (d: any) => void (d.packages = (d.packages ?? []).filter((k: FormKey) => k !== pk)), 'Remove from routine');
   }
 
   // ---------------------------------------------------------------- gestures
