@@ -124,6 +124,8 @@ test('characters, quests, scripts, cleaning and saving', async ({ page }) => {
   // Quest designer: write a stage script in the inline editor.
   await workspace(page, 'Quests').click();
   await page.getByTestId('quest-list').getByText('DemoTavernQuest').click();
+  await expect(page.getByTestId('quest-map')).toBeVisible();
+  await page.getByRole('tab', { name: /Stages/ }).click();
   await expect(page.getByTestId('stages')).toBeVisible();
   const first = page.getByTestId('stages').getByRole('button', { name: /script/ }).first();
   await first.click();

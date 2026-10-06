@@ -265,6 +265,8 @@ test('exploratory sweep of every workspace', async ({ page }) => {
     await ws('Quests');
     await page.getByTestId('new-quest').click();
     await page.getByRole('dialog').getByRole('button', { name: 'Create' }).click();
+    await expect(page.getByTestId('quest-map')).toBeVisible();
+    await page.getByRole('tab', { name: /Stages/ }).click();
     await expect(page.getByTestId('stages')).toBeVisible();
     await page.getByTestId('add-stage').click();
     await page.locator('.card', { has: page.getByPlaceholder('Journal entry (optional)') }).getByRole('button', { name: 'Add', exact: true }).click();
@@ -306,11 +308,11 @@ test('exploratory sweep of every workspace', async ({ page }) => {
   await run('quests: overview, flow, voice', async () => {
     await page.getByRole('tab', { name: 'Overview' }).click();
     await page.getByLabel('Allow repeated stages').check();
-    await page.getByRole('tab', { name: 'Flow' }).click();
-    await expect(page.getByTestId('quest-flow')).toBeVisible();
+    await page.getByRole('tab', { name: 'Map' }).click();
+    await expect(page.getByTestId('quest-map')).toBeVisible();
     await page.getByRole('tab', { name: 'Voice files' }).click();
     await page.getByTestId('quest-list').getByText('DemoTavernQuest').click();
-    await page.getByRole('tab', { name: 'Flow' }).click();
+    await page.getByRole('tab', { name: 'Map' }).click();
     await page.waitForTimeout(300);
   });
 

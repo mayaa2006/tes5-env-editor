@@ -1,0 +1,81 @@
+/** Building a quest visually: connect stages on the map and check what was created. */
+import { expect, test, type Page } from '@playwright/test';
+
+const shots = process.env.SCREENSHOT_DIR;
+
+async function dragHandle(page: Page, fromStage: number, to: { stage: number } | { x: number; y: number }) {
+  const src = page.getByTestId(`stage-node-${fromStage}`).locator('.react-flow__handle-right');
+  const a = (await src.boundingBox())!;
+  await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+  await page.mouse.down();
+  let tx: number;
+  let ty: number;
+  if ('stage' in to) {
+    const b = (await page.getByTestId(`stage-node-${to.stage}`).locator('.react-flow__handle-left').boundingBox())!;
+    tx = b.x + b.width / 2;
+    ty = b.y + b.height / 2;
+  } else ({ x: tx, y: ty } = to);
+  await page.mouse.move(tx, ty, { steps: 12 });
+  await page.mouse.up();
+}
+
+async function pickForm(page: Page, label: RegExp, query: string, pick: string) {
+  const field = page.getByRole('dialog').locator('.field', { hasText: label });
+  await field.locator('button.input').click();
+  await field.locator('.searchbox input').fill(query);
+  await field.locator('.list-item', { hasText: pick }).first().click();
+}
+
+test('build a quest on the map', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto('/');
+  await page.getByRole('button', { name: /Explore the demo/ }).click();
+  await page.getByTestId('load-plugins').click();
+  await page.locator('.workspace-tab', { hasText: 'Quests' }).click();
+  await page.getByTestId('new-quest').click();
+  await page.getByRole('dialog').getByLabel(/Running from game start/).check().catch(() => undefined);
+  await page.getByRole('dialog').getByRole('button', { name: 'Create' }).click();
+  await expect(page.getByTestId('quest-map')).toBeVisible();
+  await expect(page.getByTestId('stage-node-10')).toBeVisible();
+
+  // Stage 0 → 10 by talking to the innkeeper.
+  await dragHandle(page, 0, { stage: 10 });
+  await page.getByTestId('connection-kinds').getByText('Talk to someone').click();
+  await pickForm(page, /Who/, 'Innkeeper', 'DemoInnkeeper');
+  await page.getByRole('dialog').getByPlaceholder('The line in the dialogue menu').fill('Got any work?');
+  await page.getByRole('dialog').getByPlaceholder('The line in the dialogue menu').blur();
+  await page.getByRole('dialog').getByPlaceholder('One line per row').fill('A crate went missing.\nFind it.');
+  await page.getByRole('dialog').getByPlaceholder('One line per row').blur();
+  await page.getByTestId('create-connection').click();
+  await expect(page.locator('.qedge-label', { hasText: 'Got any work?' })).toBeVisible();
+
+  // Stage 10 → a new stage, dropped on empty canvas: picking up the chest's key… (any placed object).
+  const map = (await page.locator('.react-flow').boundingBox())!;
+  await dragHandle(page, 10, { x: map.x + map.width * 0.75, y: map.y + map.height * 0.75 });
+  await page.getByTestId('connection-kinds').getByText('Pick up an object').click();
+  await pickForm(page, /Which object/, 'Barrel', 'Demo');
+  await page.getByTestId('create-connection').click();
+  await expect(page.locator('.qedge-label', { hasText: /Pick up/ })).toBeVisible();
+  await expect(page.getByTestId('stage-node-110')).toBeVisible();
+
+  // An objective shown at stage 10.
+  await page.getByTestId('stage-node-10').click();
+  await page.getByPlaceholder('New objective…').fill('Find the missing crate');
+  await page.getByPlaceholder('New objective…').blur();
+  await page.getByRole('button', { name: 'Add & show here' }).click();
+  await expect(page.getByTestId('stage-node-10')).toContainText('Find the missing crate');
+
+  // The quest check notices stage 100 can't be reached.
+  await page.getByTestId('map-problems').click();
+  await expect(page.locator('.card', { hasText: 'Quest check' })).toContainText('Nothing leads to stage 100');
+  if (shots) await page.screenshot({ path: `${shots}/07-quest-map.png` });
+
+  // Remove the pick-up connection, then undo it.
+  await page.locator('.qedge-label', { hasText: /Pick up/ }).click();
+  await page.getByTestId('remove-connection').click();
+  await expect(page.locator('.qedge-label', { hasText: /Pick up/ })).toHaveCount(0);
+  await page.keyboard.press('Control+z');
+  await expect(page.locator('.qedge-label', { hasText: /Pick up/ })).toBeVisible();
+  expect(errors).toEqual([]);
+});

@@ -151,8 +151,12 @@ export class Workspace {
   readonly slots: PluginSlot[] = [];
   readonly vfs: VirtualData;
   activeName?: string;
-  private undoStack: { label: string; bytes: Uint8Array }[] = [];
-  private redoStack: { label: string; bytes: Uint8Array }[] = [];
+  private undoStack: UndoEntry[] = [];
+  private redoStack: UndoEntry[] = [];
+  /** Generated files (scripts) written since the last undo step; attached to the next one. */
+  private pendingFiles: FileChange[] = [];
+  /** File writes from undo/redo still in flight (save waits for them). */
+  private io: Promise<unknown> = Promise.resolve();
   private dirty = false;
   private listeners = new Set<(e: WorkspaceEvent) => void>();
   /**
@@ -727,7 +731,7 @@ export class Workspace {
     this.txDepth++;
     try {
       const result = fn();
-      this.undoStack.push({ label, bytes: before });
+      this.undoStack.push({ label, bytes: before, files: this.takePendingFiles() });
       if (this.undoStack.length > 200) this.undoStack.shift();
       this.redoStack = [];
       this.dirty = true;
@@ -735,6 +739,9 @@ export class Workspace {
       return result;
     } catch (e) {
       this.restore(before);
+      // Generated files written for this edit are rolled back too.
+      const files = this.takePendingFiles();
+      if (files) this.applyFiles(files, 'before');
       throw e;
     } finally {
       this.txDepth--;
@@ -742,6 +749,34 @@ export class Workspace {
   }
 
   private txDepth = 0;
+
+  /**
+   * Like transaction(), for edits that await (writing generated scripts):
+   * everything inside, including nested transactions and script writes,
+   * becomes one undo step.
+   */
+  async transactionAsync<T>(label: string, fn: () => Promise<T>): Promise<T> {
+    if (this.txDepth > 0) return fn();
+    const a = this.requireActive();
+    const before = a.plugin.serialize();
+    this.txDepth++;
+    try {
+      const result = await fn();
+      this.undoStack.push({ label, bytes: before, files: this.takePendingFiles() });
+      if (this.undoStack.length > 200) this.undoStack.shift();
+      this.redoStack = [];
+      this.dirty = true;
+      this.emit({ type: 'changed', label });
+      return result;
+    } catch (e) {
+      this.restore(before);
+      const files = this.takePendingFiles();
+      if (files) this.applyFiles(files, 'before');
+      throw e;
+    } finally {
+      this.txDepth--;
+    }
+  }
 
   get canUndo(): boolean {
     return this.undoStack.length > 0;
@@ -760,8 +795,9 @@ export class Workspace {
     const a = this.requireActive();
     const entry = this.undoStack.pop();
     if (!entry) return false;
-    this.redoStack.push({ label: entry.label, bytes: a.plugin.serialize() });
+    this.redoStack.push({ label: entry.label, bytes: a.plugin.serialize(), files: entry.files });
     this.restore(entry.bytes);
+    if (entry.files) this.applyFiles(entry.files, 'before');
     this.emit({ type: 'changed', label: `Undo ${entry.label}` });
     return true;
   }
@@ -770,10 +806,36 @@ export class Workspace {
     const a = this.requireActive();
     const entry = this.redoStack.pop();
     if (!entry) return false;
-    this.undoStack.push({ label: entry.label, bytes: a.plugin.serialize() });
+    this.undoStack.push({ label: entry.label, bytes: a.plugin.serialize(), files: entry.files });
     this.restore(entry.bytes);
+    if (entry.files) this.applyFiles(entry.files, 'after');
     this.emit({ type: 'changed', label: `Redo ${entry.label}` });
     return true;
+  }
+
+  /**
+   * Record that a generated file (fragment or trigger script) was written as
+   * part of the edit in progress, so undo/redo restore it with the plugin.
+   */
+  trackFileChange(change: FileChange): void {
+    const prev = this.pendingFiles.find((f) => f.path.toLowerCase() === change.path.toLowerCase());
+    if (prev) prev.after = change.after;
+    else this.pendingFiles.push({ ...change });
+  }
+
+  private takePendingFiles(): FileChange[] | undefined {
+    const files = this.pendingFiles;
+    this.pendingFiles = [];
+    return files.length ? files : undefined;
+  }
+
+  private applyFiles(files: FileChange[], which: 'before' | 'after'): void {
+    const list = (which === 'before' ? [...files].reverse() : files).map((f) => ({ path: f.path, data: f[which] }));
+    // Listeners (the script service) update their caches right away; disk follows.
+    this.emit({ type: 'filesRestored', files: list });
+    this.io = this.io.then(() =>
+      Promise.all(list.map((f) => (f.data ? this.fs.writeFile(f.path, f.data) : this.fs.remove(f.path).catch(() => undefined)))),
+    );
   }
 
   private restore(bytes: Uint8Array): void {
@@ -1148,6 +1210,7 @@ export class Workspace {
 
   /** Bytes of the active plugin as it would be saved (after automations). */
   async save(opts: SaveOptions = {}): Promise<SaveResult> {
+    await this.io;
     const a = this.requireActive();
     const warnings: string[] = [];
     const extraFiles: string[] = [];
@@ -1243,7 +1306,21 @@ export type WorkspaceEvent =
   | { type: 'activeChanged' }
   | { type: 'changed'; label: string }
   | { type: 'saved'; path: string }
-  | { type: 'warning'; message: string };
+  | { type: 'warning'; message: string }
+  | { type: 'filesRestored'; files: { path: string; data: Uint8Array | null }[] };
+
+export interface FileChange {
+  path: string;
+  /** Content before the edit (null = the file didn't exist). */
+  before: Uint8Array | null;
+  after: Uint8Array | null;
+}
+
+interface UndoEntry {
+  label: string;
+  bytes: Uint8Array;
+  files?: FileChange[];
+}
 
 function* walkGroups(plugin: Plugin) {
   const stack = [...plugin.groups];

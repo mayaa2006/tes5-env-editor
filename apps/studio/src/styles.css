@@ -800,3 +800,108 @@ table.grid tr.diff td {
 .rightbar .card a {
   word-break: break-all;
 }
+
+/* ---------------------------------------------------------------- quest map */
+
+.qmap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.qnode {
+  width: 220px;
+  background: var(--panel-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  padding: 8px 10px;
+  color: var(--text);
+  font-size: 12px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+.qnode.selected {
+  border-color: var(--select);
+  box-shadow: 0 0 0 2px rgba(255, 179, 64, 0.35);
+}
+.qnode.done {
+  border-left: 3px solid var(--ok);
+}
+.qnode.failed {
+  border-left: 3px solid var(--err);
+}
+.qnode.any {
+  width: 170px;
+  border-style: dashed;
+  background: var(--panel);
+}
+.qnode-head {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+.qnode-index {
+  font-family: var(--mono);
+  font-size: 15px;
+  color: var(--accent);
+  margin-right: 4px;
+}
+.qnode-text {
+  color: var(--text-dim);
+  max-height: 48px;
+  overflow: hidden;
+}
+.qnode-obj {
+  margin-top: 3px;
+  font-size: 11px;
+}
+.qnode-obj.done {
+  color: var(--ok);
+}
+.qnode .react-flow__handle {
+  width: 12px;
+  height: 12px;
+  background: var(--accent);
+  border: 2px solid var(--panel-2);
+}
+.qedge-label {
+  position: absolute;
+  pointer-events: all;
+  background: var(--panel);
+  border: 1px solid;
+  border-radius: 12px;
+  padding: 2px 8px;
+  font-size: 11px;
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+  cursor: pointer;
+}
+.qedge-label.selected {
+  box-shadow: 0 0 0 2px rgba(255, 179, 64, 0.5);
+}
+.kind-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.kind-card {
+  text-align: left;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 8px;
+  padding: 10px;
+  color: var(--text);
+  cursor: pointer;
+}
+.kind-card:hover {
+  background: var(--panel-3);
+}
+.btn.warn {
+  color: var(--warn);
+  border-color: var(--warn);
+}

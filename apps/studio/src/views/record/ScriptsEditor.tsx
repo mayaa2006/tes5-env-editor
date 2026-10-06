@@ -57,8 +57,10 @@ export function ScriptsEditor({ value, onChange }: { value: Vmad | undefined; on
             </button>
           </div>
           {s.properties.map((p, pi) => (
-            <div key={p.name} className="field">
-              <label title={`${VMAD_TYPE_NAMES[p.type]} ${p.name}`}>{p.name}</label>
+            <div key={p.name} className="field stack">
+              <label title={`${VMAD_TYPE_NAMES[p.type]} ${p.name}`}>
+                {p.name} <span className="faint">{VMAD_TYPE_NAMES[p.type]}</span>
+              </label>
               <PropValue
                 p={p}
                 onChange={(np) =>

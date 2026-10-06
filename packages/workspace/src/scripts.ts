@@ -57,7 +57,26 @@ export class ScriptService {
   runner?: ProcessRunner;
   compiler?: CompilerSettings;
 
-  constructor(readonly ws: Workspace) {}
+  constructor(readonly ws: Workspace) {
+    // Undo/redo of edits that generated scripts restores their sources.
+    ws.on((e) => {
+      if (e.type !== 'filesRestored') return;
+      for (const f of e.files) {
+        const m = /([^\\/]+)\.psc$/i.exec(f.path);
+        if (!m) continue;
+        const name = m[1]!;
+        if (f.data) {
+          const text = new TextDecoder().decode(f.data).replace(/\r\n/g, '\n');
+          this.loaded.set(name.toLowerCase(), text);
+          this.sources.set(name.toLowerCase(), { name, path: normalizePath(`${this.sourceFolder}/${name}.psc`), origin: 'mod' });
+          this.index.addSource(name, () => text, 'user');
+        } else {
+          this.loaded.delete(name.toLowerCase());
+          this.sources.delete(name.toLowerCase());
+        }
+      }
+    });
+  }
 
   /** Folder (relative to Data) new script sources are written to. */
   get sourceFolder(): string {
@@ -145,11 +164,20 @@ export class ScriptService {
   }
 
   /** Save a script source into the mod's output folder. */
-  async write(name: string, source: string): Promise<string> {
+  /**
+   * Write a script source into the output folder. `undoable` ties the write
+   * to the next undo step (used for generated scripts that go with an edit).
+   */
+  async write(name: string, source: string, opts: { undoable?: boolean } = {}): Promise<string> {
     const rel = `${this.sourceFolder}/${name}.psc`;
     const full = joinPath(this.ws.options.outputDir, rel);
     await this.ws.fs.mkdir(joinPath(this.ws.options.outputDir, this.sourceFolder));
-    await this.ws.fs.writeFile(full, new TextEncoder().encode(source.replace(/\r?\n/g, '\r\n')));
+    const bytes = new TextEncoder().encode(source.replace(/\r?\n/g, '\r\n'));
+    if (opts.undoable) {
+      const before = (await this.ws.fs.exists(full)) ? await this.ws.fs.readFile(full) : null;
+      this.ws.trackFileChange({ path: full, before, after: bytes });
+    }
+    await this.ws.fs.writeFile(full, bytes);
     this.ws.vfs.addLoose(this.ws.options.outputDir, rel);
     this.loaded.set(name.toLowerCase(), source);
     this.sources.set(name.toLowerCase(), { name, path: normalizePath(rel), origin: 'mod' });
@@ -158,7 +186,7 @@ export class ScriptService {
   }
 
   async writeFragment(model: FragmentScript): Promise<string> {
-    return this.write(model.scriptName, generateFragmentSource(model));
+    return this.write(model.scriptName, generateFragmentSource(model), { undoable: true });
   }
 
   /** Compile scripts with the configured compiler. */

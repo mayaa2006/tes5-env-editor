@@ -9,7 +9,11 @@ import { allConditionFunctions, isFormKey, newCondition, parseFormKey, recordTyp
 import { validateNavmesh } from '@tes5/navmesh';
 import {
   NpcService,
+  QuestGraphService,
   QuestService,
+  TRIGGER_EVENTS,
+  TRIGGER_TEMPLATES,
+  TriggerService,
   ScriptService,
   WorldService,
   Workspace,
@@ -29,6 +33,10 @@ import {
   type ProcessRunner,
   type SaveOptions,
   type Transform,
+  type NewQuestEdge,
+  type QuestEdge,
+  type TriggerHost,
+  type TriggerSpec,
   type WorkspaceEvent,
 } from '@tes5/workspace';
 import type { CleanOptions } from '@tes5/cleaner';
@@ -91,6 +99,8 @@ export class EngineHost {
   npcs?: NpcService;
   quests?: QuestService;
   scripts?: ScriptService;
+  triggers?: TriggerService;
+  graphs?: QuestGraphService;
   private source?: string;
   private listeners = new Set<Listener>();
   private meshCache = new Map<string, MeshPayload>();
@@ -145,8 +155,11 @@ export class EngineHost {
     this.scripts = new ScriptService(ws);
     this.scripts.runner = this.runner;
     this.quests = new QuestService(ws, this.scripts);
+    this.triggers = new TriggerService(ws, this.scripts);
+    this.graphs = new QuestGraphService(ws, this.quests, this.scripts, this.triggers);
     this.meshCache.clear();
     ws.on((e) => {
+      if (e.type === 'filesRestored') return; // internal to the engine
       for (const l of this.listeners) l(e);
     });
   }
@@ -575,6 +588,63 @@ export class EngineHost {
       }
     }
     return edges;
+  }
+
+  // ---------------------------------------------------------------- quest map
+
+  async questGraph(quest: FormKey) {
+    return this.graphs!.graph(quest);
+  }
+
+  async addQuestEdge(quest: FormKey, edge: NewQuestEdge) {
+    await this.graphs!.addEdge(quest, edge);
+    return this.graphs!.graph(quest);
+  }
+
+  async removeQuestEdge(quest: FormKey, edge: QuestEdge) {
+    await this.graphs!.removeEdge(quest, edge);
+    return this.graphs!.graph(quest);
+  }
+
+  async setStageObjectives(quest: FormKey, stage: number, shows: number[], completes: number[]) {
+    await this.graphs!.setStageObjectives(quest, stage, shows, completes);
+    return this.graphs!.graph(quest);
+  }
+
+  setQuestStartGameEnabled(quest: FormKey, on: boolean) {
+    this.graphs!.setStartGameEnabled(quest, on);
+  }
+
+  async saveQuestLayout(quest: FormKey, layout: Record<string, { x: number; y: number }>) {
+    await this.graphs!.saveLayout(quest, layout);
+  }
+
+  // ---------------------------------------------------------------- visual triggers
+
+  triggerEvents() {
+    return TRIGGER_EVENTS;
+  }
+
+  triggerTemplates() {
+    return TRIGGER_TEMPLATES.map(({ id, label, description }) => ({ id, label, description }));
+  }
+
+  makeTrigger(templateId: string, host: FormKey | null): TriggerSpec {
+    const t = TRIGGER_TEMPLATES.find((x) => x.id === templateId);
+    if (!t) throw new Error(`Unknown template ${templateId}`);
+    return t.make({ host });
+  }
+
+  async triggersOf(host: TriggerHost) {
+    return this.triggers!.list(host);
+  }
+
+  async setTriggers(host: TriggerHost, specs: TriggerSpec[]) {
+    return this.triggers!.set(host, specs);
+  }
+
+  previewTriggers(host: TriggerHost, specs: TriggerSpec[]) {
+    return this.triggers!.preview(host, specs);
   }
 
   // ---------------------------------------------------------------- scripts

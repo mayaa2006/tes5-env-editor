@@ -165,9 +165,9 @@ function ColorField({ value, float, onChange }: { value: any; float: boolean; on
   );
 }
 
-function Row({ label, children }: { label: string; children: ReactNode }) {
+function Row({ label, children, stack }: { label: string; children: ReactNode; stack?: boolean }) {
   return (
-    <div className="field">
+    <div className={`field ${stack ? 'stack' : ''}`}>
       <label title={label}>{label}</label>
       <div>{children}</div>
     </div>
@@ -183,7 +183,8 @@ function MemberEditor({ m, value, onChange, onRemove }: { m: UiMember; value: an
       if (isHidden(m.value)) return null;
       if (m.value.kind === 'custom' && m.value.name === 'Condition') return <ConditionList items={[{ data: value }]} onChange={(items) => onChange(items[0]?.data)} single />;
       return (
-        <Row label={m.label}>
+        // Wide editors (attached scripts, structs) get the full panel width.
+        <Row label={m.label} stack={m.value.kind === 'custom' || m.value.kind === 'struct'}>
           <div className="row">
             <div className="grow">
               <ValueEditor def={m.value} value={value} label={m.label} onChange={onChange} />

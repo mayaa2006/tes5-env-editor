@@ -12,9 +12,9 @@ import { engine, useStore } from '../../state/store';
 import { ConditionList } from '../record/ConditionEditor';
 import { CodeEditor } from '../script/CodeEditor';
 
-const QuestFlow = lazy(() => import('./QuestFlow'));
+const QuestMap = lazy(() => import('./QuestMap'));
 
-type Tab = 'overview' | 'stages' | 'objectives' | 'aliases' | 'dialogue' | 'flow' | 'voice';
+type Tab = 'map' | 'overview' | 'stages' | 'objectives' | 'aliases' | 'dialogue' | 'voice';
 
 /** Read-modify-write a record's typed data as one undo step. */
 export async function patchRecord(key: FormKey, label: string, fn: (d: Record<string, any>) => void): Promise<boolean> {
@@ -130,7 +130,7 @@ function NewQuestDialog({ onClose }: { onClose: () => void }) {
 function QuestEditor({ quest }: { quest: FormKey }) {
   const client = useStore((s) => s.client);
   const { data: q } = useQuery(() => client?.call('quest', quest), [quest]);
-  const [tab, setTab] = useState<Tab>('stages');
+  const [tab, setTab] = useState<Tab>('map');
   if (!q) return <div className="empty grow">Loading…</div>;
   return (
     <div className="col" style={{ flex: 1, minWidth: 0, minHeight: 0 }}>
@@ -149,28 +149,28 @@ function QuestEditor({ quest }: { quest: FormKey }) {
       </div>
       <Tabs<Tab>
         tabs={[
+          { id: 'map', label: 'Map' },
           { id: 'overview', label: 'Overview' },
           { id: 'stages', label: `Stages (${q.stages.length})` },
           { id: 'objectives', label: `Objectives (${q.objectives.length})` },
           { id: 'aliases', label: `Aliases (${q.aliases.length})` },
           { id: 'dialogue', label: `Dialogue (${q.topics.length})` },
-          { id: 'flow', label: 'Flow' },
           { id: 'voice', label: 'Voice files' },
         ]}
         value={tab}
         onChange={setTab}
       />
-      <div className="scroll pad" style={{ flex: 1 }}>
+      {tab === 'map' && (
+        <Suspense fallback={<div className="empty">Loading…</div>}>
+          <QuestMap quest={quest} onOpenDialogue={() => setTab('dialogue')} onOpenStages={() => setTab('stages')} />
+        </Suspense>
+      )}
+      <div className="scroll pad" style={{ flex: 1, display: tab === 'map' ? 'none' : undefined }}>
         {tab === 'overview' && <Overview q={q} />}
         {tab === 'stages' && <Stages q={q} />}
         {tab === 'objectives' && <Objectives q={q} />}
         {tab === 'aliases' && <Aliases q={q} />}
         {tab === 'dialogue' && <Dialogue q={q} />}
-        {tab === 'flow' && (
-          <Suspense fallback={<div className="empty">Loading…</div>}>
-            <QuestFlow q={q} onOpenStage={() => setTab('stages')} />
-          </Suspense>
-        )}
         {tab === 'voice' && <Voice q={q} />}
       </div>
     </div>
