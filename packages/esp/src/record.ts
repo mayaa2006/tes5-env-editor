@@ -128,6 +128,26 @@ export class PluginRecord {
     return this.subrecords.find((s) => s.sig === sig);
   }
 
+  /**
+   * First subrecord's data without parsing and caching the whole record —
+   * for scans over every record (search, indexes) that must not keep a
+   * parsed copy of a 250 MB master in memory.
+   */
+  peek(sig: string): Uint8Array | undefined {
+    if (this.subs || !this.stored) return this.get(sig)?.data;
+    if (this.isCompressedStored) return findSubrecord(decompressPayload(this.stored, this.storedFlags, this), sig);
+    return findSubrecord(this.stored, sig);
+  }
+
+  private get isCompressedStored(): boolean {
+    return (this.storedFlags & RecordFlags.Compressed) !== 0;
+  }
+
+  /** Drop the parsed subrecord cache of an unmodified record (it is re-parsed on demand). */
+  releaseParsed(): void {
+    if (!this.modified && this.stored) this.subs = null;
+  }
+
   getAll(sig: string): Subrecord[] {
     return this.subrecords.filter((s) => s.sig === sig);
   }
@@ -158,8 +178,8 @@ export class PluginRecord {
 
   /** Editor ID (EDID) or undefined. */
   get editorId(): string | undefined {
-    const s = this.get('EDID');
-    return s ? readZString(s.data) : undefined;
+    const d = this.peek('EDID');
+    return d ? readZString(d) : undefined;
   }
   set editorId(v: string | undefined) {
     if (v === undefined || v === '') this.remove('EDID');
@@ -267,6 +287,34 @@ export function parseSubrecords(payload: Uint8Array, rec?: PluginRecord): Subrec
     out.push({ sig, data: r.bytesView(size) });
   }
   return out;
+}
+
+/** Find a subrecord in a raw payload without materializing the others. */
+export function findSubrecord(payload: Uint8Array, sig: string): Uint8Array | undefined {
+  const a = sig.charCodeAt(0);
+  const b = sig.charCodeAt(1);
+  const c = sig.charCodeAt(2);
+  const d = sig.charCodeAt(3);
+  let pos = 0;
+  let bigSize = -1;
+  const n = payload.byteLength;
+  while (pos + 6 <= n) {
+    let size = payload[pos + 4]! | (payload[pos + 5]! << 8);
+    const isXXXX = payload[pos] === 0x58 && payload[pos + 1] === 0x58 && payload[pos + 2] === 0x58 && payload[pos + 3] === 0x58;
+    if (isXXXX && size === 4 && pos + 10 <= n) {
+      bigSize = (payload[pos + 6]! | (payload[pos + 7]! << 8) | (payload[pos + 8]! << 16) | (payload[pos + 9]! << 24)) >>> 0;
+      pos += 10;
+      continue;
+    }
+    if (bigSize >= 0) {
+      size = bigSize;
+      bigSize = -1;
+    }
+    if (pos + 6 + size > n) return undefined;
+    if (payload[pos] === a && payload[pos + 1] === b && payload[pos + 2] === c && payload[pos + 3] === d) return payload.subarray(pos + 6, pos + 6 + size);
+    pos += 6 + size;
+  }
+  return undefined;
 }
 
 export function encodeSubrecords(subs: readonly Subrecord[]): Uint8Array {

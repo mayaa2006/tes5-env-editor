@@ -27,6 +27,24 @@ Tested means unit tests (`npm test`) plus the Playwright run of the browser demo
 | Precombines/previs, LOD generation, Havok collision authoring, lip-sync generation | ❌ | Out of scope for now; use the CK or dedicated tools. |
 | Packaging (Windows installer) | 🟡 | electron-builder is configured; no signed build has been produced yet. |
 
+## Performance at Skyrim.esm scale
+
+`npm run bench` generates a synthetic master with about 915k records and groups (65 MB) and times the editor's operations. Typical results in the development container:
+
+| Operation | Time |
+| --- | --- |
+| Load the plugin | ~0.7 s |
+| Build lookup indexes once after loading | ~1.7 s |
+| Search a record type (each keystroke) | 20–50 ms |
+| List all cells | ~60 ms |
+| Open a cell's references | <5 ms |
+| Edit, place, undo or save a small plugin | <5 ms each |
+| List every record with no filter, sorted | ~0.6 s |
+
+- Edits never rebuild the indexes: the plugin being edited is merged in at query time.
+- Memory after loading is about 0.5 GB of heap.
+- The real Skyrim.esm is about 4× larger on disk, mostly because of compressed records, so expect parsing to take a few seconds. This hasn't been measured with the real file.
+
 ## Known uncertainties to verify in game
 
 1. **Rotations:** the reference rotation convention (clockwise, applied Z·Y·X) is used consistently by the viewport, bounds and navmesh. It should still be checked by placing an asymmetric object and comparing with the CK.
@@ -37,7 +55,7 @@ Tested means unit tests (`npm test`) plus the Playwright run of the browser demo
 
 ## Next steps
 
-1. Open a vanilla Skyrim SE install and a large MO2 setup. Profile load time, then verify that saving unchanged plugins produces identical files.
+1. Open a vanilla Skyrim SE install and a large MO2 setup. Confirm the synthetic benchmark numbers hold, then verify that saving unchanged plugins produces identical files.
 2. FaceGen export: bake head meshes with morphs and write the facetint DDS.
 3. Render skinned actors and armour; add normal maps.
 4. Navmesh vertex editing and cover generation.

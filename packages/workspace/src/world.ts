@@ -93,32 +93,35 @@ export class WorldService {
   /** All cells (winning versions), optionally only those of a worldspace or interiors. */
   cells(filter: { worldspace?: FormKey; interiorOnly?: boolean } = {}): CellSummary[] {
     const out = new Map<FormKey, CellSummary>();
+    const activeIdx = this.ws.activeName ? this.ws.slots.findIndex((s) => s.name === this.ws.activeName) : -1;
     for (let i = this.ws.slots.length - 1; i >= 0; i--) {
       const s = this.ws.slots[i]!;
       if (!s.plugin) continue;
-      for (const loc of s.plugin.walk()) {
-        if (loc.record.sig !== 'CELL') continue;
+      for (const loc of s.plugin.cellLocations()) {
         const key = this.ws.keyOf(s, loc.record.formId)!;
-        if (out.has(key)) continue;
-        const worldGroup = loc.path.find((g) => g.type === GroupType.WorldChildren);
-        const world = worldGroup ? this.ws.keyOf(s, worldGroup.label) ?? undefined : undefined;
+        const prev = out.get(key);
+        if (prev) {
+          // Winner already recorded; just note that the active plugin overrides it.
+          if (i === activeIdx) prev.inActive = true;
+          continue;
+        }
+        const world = loc.worldspace !== undefined ? (this.ws.keyOf(s, loc.worldspace) ?? undefined) : undefined;
         const interior = isInteriorCell(loc.record);
         if (filter.interiorOnly && !interior) continue;
         if (filter.worldspace && world !== filter.worldspace) continue;
-        const sum = this.ws.summary(key);
         out.set(key, {
           formKey: key,
           editorId: loc.record.editorId,
-          name: sum?.name,
+          name: loc.record.peek('FULL') ? this.ws.summary(key)?.name : undefined,
           interior,
           worldspace: world,
           grid: interior ? undefined : readCellGrid(loc.record),
           owner: parseFormKey(key).plugin,
-          inActive: s.name === this.ws.activeName || (sum?.inActive ?? false),
+          inActive: i === activeIdx,
         });
       }
     }
-    return [...out.values()].sort((a, b) => (a.editorId ?? '').localeCompare(b.editorId ?? ''));
+    return [...out.values()].sort((a, b) => ((a.editorId ?? '') < (b.editorId ?? '') ? -1 : (a.editorId ?? '') > (b.editorId ?? '') ? 1 : 0));
   }
 
   /** Placed references in a cell: merged across all plugins, winning versions only. */

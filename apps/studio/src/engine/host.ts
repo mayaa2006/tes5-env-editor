@@ -159,6 +159,7 @@ export class EngineHost {
     await ws.load();
     await ws.loadAllStrings();
     this.scripts!.refresh();
+    ws.warm();
     return this.session();
   }
 
@@ -192,11 +193,13 @@ export class EngineHost {
 
   createPlugin(name: string, opts: { author?: string; description?: string; light?: boolean } = {}): SessionInfo {
     this.requireWs().createPlugin(name, opts);
+    this.ws!.warm();
     return this.session();
   }
 
   setActivePlugin(name: string): SessionInfo {
     this.requireWs().setActivePlugin(name);
+    this.ws!.warm();
     return this.session();
   }
 

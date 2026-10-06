@@ -20,6 +20,7 @@ import {
   readPluginHeader,
   runtimeFormId,
   zstringBytes,
+  readZString,
   compressPayload,
 } from '../src';
 
@@ -220,5 +221,30 @@ describe('String tables', () => {
       expect(u.get(2)).toBe('');
       expect(u.nextId()).toBe(6);
     }
+  });
+});
+
+describe('PluginRecord.peek', () => {
+  it('finds subrecords in raw and compressed records without caching a parse', () => {
+    const p = Plugin.create('Peek.esp');
+    const big = new Uint8Array(70000).fill(7);
+    const plain = PluginRecord.create('STAT', 0x800, [
+      { sig: 'EDID', data: zstringBytes('PeekPlain') },
+      { sig: 'MODL', data: big },
+      { sig: 'FULL', data: zstringBytes('Plain name') },
+    ]);
+    const packed = PluginRecord.create('NPC_', 0x801, [{ sig: 'EDID', data: zstringBytes('PeekPacked') }], RecordFlags.Compressed);
+    p.ensureTopGroup('STAT').children.push(plain);
+    p.ensureTopGroup('NPC_').children.push(packed);
+    const back = parsePlugin(p.serialize(), 'Peek.esp');
+    const [r1] = [...back.recordsOfType('STAT')];
+    const [r2] = [...back.recordsOfType('NPC_')];
+    expect(r1!.editorId).toBe('PeekPlain');
+    expect(readZString(r1!.peek('FULL')!)).toBe('Plain name'); // after an XXXX-sized subrecord
+    expect(r1!.peek('MODL')!.byteLength).toBe(70000);
+    expect(r1!.peek('NONE')).toBeUndefined();
+    expect(r2!.editorId).toBe('PeekPacked');
+    // Still unmodified: writes back byte for byte.
+    expect(r1!.isModified).toBe(false);
   });
 });

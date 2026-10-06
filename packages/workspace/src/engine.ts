@@ -124,6 +124,26 @@ export class WorkspaceError extends Error {}
 
 const ZERO_KEY = null;
 
+interface WinnerEntry {
+  key: FormKey;
+  slot: PluginSlot;
+  slotIndex: number;
+  record: PluginRecord;
+  /** Cached EditorID / name (null = none); undefined until first read. */
+  edid?: string | null;
+  name?: string | null;
+}
+
+interface BaseIndex {
+  entries: WinnerEntry[];
+  byKey: Map<FormKey, WinnerEntry>;
+  bySig: Map<string, WinnerEntry[]>;
+  activeIdx: number;
+  byEdid?: Map<string, WinnerEntry>;
+}
+
+const LATIN1 = new TextDecoder('latin1');
+
 export class Workspace {
   readonly slots: PluginSlot[] = [];
   readonly vfs: VirtualData;
@@ -132,7 +152,12 @@ export class Workspace {
   private redoStack: { label: string; bytes: Uint8Array }[] = [];
   private dirty = false;
   private listeners = new Set<(e: WorkspaceEvent) => void>();
-  private edidIndex: Map<string, FormKey> | null = null;
+  /**
+   * Winning records of every loaded plugin except the active one, built on
+   * first use. The active plugin (small, constantly edited) is merged in at
+   * query time, so edits never invalidate this index.
+   */
+  private baseIndex: BaseIndex | null = null;
 
   constructor(
     readonly fs: FileSystem,
@@ -157,6 +182,7 @@ export class Workspace {
   }
 
   private emit(e: WorkspaceEvent): void {
+    if (e.type === 'loaded' || e.type === 'loadOrder' || e.type === 'activeChanged') this.baseIndex = null;
     for (const l of this.listeners) l(e);
   }
 
@@ -236,7 +262,6 @@ export class Workspace {
     }
     this.vfs.options.plugins = this.slots.filter((s) => s.active).map((s) => s.name);
     await this.vfs.build();
-    this.edidIndex = null;
     this.emit({ type: 'loaded' });
   }
 
@@ -459,6 +484,7 @@ export class Workspace {
 
   async loadAllStrings(): Promise<void> {
     for (const s of this.loaded()) await this.loadStrings(s);
+    this.baseIndex = null;
   }
 
   decode(slot: PluginSlot, record: PluginRecord): TypedRecord {
@@ -488,16 +514,16 @@ export class Workspace {
   }
 
   private readName(slot: PluginSlot, record: PluginRecord): string | undefined {
-    const s = record.get('FULL');
-    if (!s) return undefined;
+    const data = record.peek('FULL');
+    if (!data) return undefined;
     if (slot.plugin?.isLocalized) {
-      if (s.data.byteLength < 4) return undefined;
-      const id = new DataView(s.data.buffer, s.data.byteOffset, 4).getUint32(0, true);
+      if (data.byteLength < 4) return undefined;
+      const id = new DataView(data.buffer, data.byteOffset, 4).getUint32(0, true);
       return slot.strings?.STRINGS?.get(id);
     }
-    let end = s.data.indexOf(0);
-    if (end < 0) end = s.data.byteLength;
-    return new TextDecoder('latin1').decode(s.data.subarray(0, end));
+    let end = data.indexOf(0);
+    if (end < 0) end = data.byteLength;
+    return LATIN1.decode(data.subarray(0, end));
   }
 
   view(key: FormKey, fromPlugin?: string): RecordView | undefined {
@@ -531,60 +557,130 @@ export class Workspace {
     };
   }
 
-  /** Iterate winning records of the given signatures across the load order. */
-  *winners(sigs?: readonly string[]): Generator<{ key: FormKey; slot: PluginSlot; record: PluginRecord }> {
-    const seen = new Set<string>();
-    const wanted = sigs ? new Set(sigs) : undefined;
+  private getBaseIndex(): BaseIndex {
+    if (this.baseIndex) return this.baseIndex;
+    const activeIdx = this.activeName ? this.slotIndex(this.activeName) : -1;
+    const entries: WinnerEntry[] = [];
+    const byKey = new Map<FormKey, WinnerEntry>();
+    const bySig = new Map<string, WinnerEntry[]>();
     for (let i = this.slots.length - 1; i >= 0; i--) {
       const s = this.slots[i]!;
-      if (!s.plugin) continue;
-      const iter = wanted && wanted.size === 1 ? s.plugin.recordsOfType([...wanted][0]!) : s.plugin.records();
-      for (const r of iter) {
-        if (wanted && !wanted.has(r.sig)) continue;
+      if (!s.plugin || i === activeIdx) continue;
+      for (const r of s.plugin.records()) {
         const key = this.keyOf(s, r.formId);
-        if (!key || seen.has(key)) continue;
-        seen.add(key);
-        yield { key, slot: s, record: r };
+        if (!key || byKey.has(key)) continue;
+        const e: WinnerEntry = { key, slot: s, slotIndex: i, record: r };
+        byKey.set(key, e);
+        entries.push(e);
+        let list = bySig.get(r.sig);
+        if (!list) bySig.set(r.sig, (list = []));
+        list.push(e);
       }
     }
+    this.baseIndex = { entries, byKey, bySig, activeIdx };
+    return this.baseIndex;
+  }
+
+  /**
+   * Build the lookup indexes now (winner index, per-plugin FormID maps) so the
+   * first search or cell open doesn't pay for it. Call after loading.
+   */
+  warm(): void {
+    for (const s of this.loaded()) void s.plugin!.index;
+    this.getBaseIndex();
+  }
+
+  /** Winning records (optionally of some signatures), base index merged with the active plugin. */
+  private winnerEntries(sigs?: readonly string[]): WinnerEntry[] {
+    const base = this.getBaseIndex();
+    const wanted = sigs?.length ? new Set(sigs) : undefined;
+    const a = this.active;
+    const fromActive = new Map<FormKey, WinnerEntry>();
+    if (a?.plugin) {
+      const iter = wanted && wanted.size === 1 ? a.plugin.recordsOfType([...wanted][0]!) : a.plugin.records();
+      const ai = this.slotIndex(a.name);
+      for (const r of iter) {
+        if (wanted && !wanted.has(r.sig)) continue;
+        const key = this.keyOf(a, r.formId);
+        if (!key || fromActive.has(key)) continue;
+        const b = base.byKey.get(key);
+        if (b && b.slotIndex > ai) continue; // a later plugin overrides the active one
+        fromActive.set(key, { key, slot: a, slotIndex: ai, record: r });
+      }
+    }
+    const lists = wanted ? [...wanted].map((w) => base.bySig.get(w) ?? []) : [base.entries];
+    const out: WinnerEntry[] = [];
+    for (const list of lists) for (const e of list) if (!fromActive.has(e.key)) out.push(e);
+    for (const e of fromActive.values()) out.push(e);
+    return out;
+  }
+
+  /** Iterate winning records of the given signatures across the load order. */
+  *winners(sigs?: readonly string[]): Generator<{ key: FormKey; slot: PluginSlot; record: PluginRecord }> {
+    for (const e of this.winnerEntries(sigs)) yield e;
+  }
+
+  private edidOf(e: WinnerEntry): string | undefined {
+    if (e.edid === undefined) e.edid = e.record.editorId ?? null;
+    return e.edid ?? undefined;
+  }
+
+  private nameOf(e: WinnerEntry): string | undefined {
+    if (e.name === undefined) e.name = this.readName(e.slot, e.record) ?? null;
+    return e.name ?? undefined;
   }
 
   /** Search winning records by EditorID / name / FormID text. */
   search(opts: { sigs?: readonly string[]; query?: string; plugin?: string; limit?: number; offset?: number } = {}): { total: number; items: RecordSummary[] } {
     const q = opts.query?.trim().toLowerCase() ?? '';
-    const matches: RecordSummary[] = [];
-    for (const { key, slot, record } of this.winners(opts.sigs)) {
-      if (opts.plugin && slot.name.toLowerCase() !== opts.plugin.toLowerCase() && parseFormKey(key).plugin.toLowerCase() !== opts.plugin.toLowerCase()) continue;
-      const edid = record.editorId;
-      const name = this.readName(slot, record);
-      if (q && !(edid?.toLowerCase().includes(q) || name?.toLowerCase().includes(q) || key.toLowerCase().includes(q))) continue;
-      matches.push({
-        formKey: key,
-        sig: record.sig,
-        editorId: edid,
-        name,
-        owner: parseFormKey(key).plugin,
-        winner: slot.name,
-        inActive: slot.name === this.activeName,
-        deleted: record.isDeleted,
-      });
+    const plugin = opts.plugin?.toLowerCase();
+    const matches: WinnerEntry[] = [];
+    for (const e of this.winnerEntries(opts.sigs)) {
+      if (plugin && e.slot.name.toLowerCase() !== plugin && parseFormKey(e.key).plugin.toLowerCase() !== plugin) continue;
+      if (q) {
+        const edid = this.edidOf(e);
+        if (!(edid?.toLowerCase().includes(q) || this.nameOf(e)?.toLowerCase().includes(q) || e.key.toLowerCase().includes(q))) continue;
+      }
+      matches.push(e);
     }
-    matches.sort((a, b) => (a.editorId ?? '').localeCompare(b.editorId ?? '') || a.formKey.localeCompare(b.formKey));
+    const sortKey = (e: WinnerEntry) => (this.edidOf(e) ?? '').toLowerCase();
+    const keyed = matches.map((e) => ({ e, k: sortKey(e) }));
+    keyed.sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : a.e.key < b.e.key ? -1 : a.e.key > b.e.key ? 1 : 0));
     const offset = opts.offset ?? 0;
-    return { total: matches.length, items: matches.slice(offset, offset + (opts.limit ?? 500)) };
+    const items = keyed.slice(offset, offset + (opts.limit ?? 500)).map(({ e }) => ({
+      formKey: e.key,
+      sig: e.record.sig,
+      editorId: this.edidOf(e),
+      name: this.nameOf(e),
+      owner: parseFormKey(e.key).plugin,
+      winner: e.slot.name,
+      inActive: e.slot.name === this.activeName,
+      deleted: e.record.isDeleted,
+    }));
+    return { total: matches.length, items };
   }
 
-  /** EditorID → FormKey of the winning record (built on first use). */
+  /** EditorID → FormKey of the winning record. */
   byEditorId(editorId: string): FormKey | undefined {
-    if (!this.edidIndex) {
-      const m = new Map<string, FormKey>();
-      for (const { key, record } of this.winners()) {
-        const e = record.editorId;
-        if (e && !m.has(e.toLowerCase())) m.set(e.toLowerCase(), key);
+    const want = editorId.toLowerCase();
+    const base = this.getBaseIndex();
+    if (!base.byEdid) {
+      const m = new Map<string, WinnerEntry>();
+      for (const e of base.entries) {
+        const ed = this.edidOf(e)?.toLowerCase();
+        if (ed && !m.has(ed)) m.set(ed, e);
       }
-      this.edidIndex = m;
+      base.byEdid = m;
     }
-    return this.edidIndex.get(editorId.toLowerCase());
+    const a = this.active;
+    if (a?.plugin) {
+      for (const r of a.plugin.records()) {
+        if (r.editorId?.toLowerCase() !== want) continue;
+        const key = this.keyOf(a, r.formId);
+        if (key) return key;
+      }
+    }
+    return base.byEdid.get(want)?.key;
   }
 
   // ---------------------------------------------------------------- transactions & undo
@@ -602,8 +698,7 @@ export class Workspace {
       if (this.undoStack.length > 200) this.undoStack.shift();
       this.redoStack = [];
       this.dirty = true;
-      this.edidIndex = null;
-      this.emit({ type: 'changed', label });
+        this.emit({ type: 'changed', label });
       return result;
     } catch (e) {
       this.restore(before);
@@ -653,7 +748,6 @@ export class Workspace {
     a.plugin = parsePlugin(bytes, a.name);
     a.masters = a.plugin.masters;
     a.mapper = new FormIdMapper(a.name, a.masters);
-    this.edidIndex = null;
   }
 
   // ---------------------------------------------------------------- editing
@@ -1040,6 +1134,7 @@ export class Workspace {
     if (!s?.plugin) throw new WorkspaceError(`${name} is not loaded`);
     const masters = new MapMasterSource(this.loaded().filter((x) => x.name !== s.name).map((x) => x.plugin!));
     if (!opts.dryRun && s.name === this.activeName) return this.transaction('Clean plugin', () => cleanPlugin(s.plugin!, masters, opts));
+    if (!opts.dryRun) this.baseIndex = null;
     return cleanPlugin(s.plugin, masters, opts);
   }
 

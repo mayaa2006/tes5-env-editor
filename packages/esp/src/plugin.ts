@@ -236,7 +236,37 @@ export class Plugin {
       for (const r of top.records) yield r;
       return;
     }
+    if (sig === 'CELL') {
+      for (const c of this.cellLocations()) yield c.record;
+      return;
+    }
+    if (sig === 'WRLD' || sig === 'DIAL') {
+      // These sit directly in their top group; their children are in child groups.
+      if (top) for (const r of top.records) yield r;
+      return;
+    }
     for (const r of this.records()) if (r.sig === sig) yield r;
+  }
+
+  /**
+   * Every CELL record with its worldspace (file-local FormID, exterior cells
+   * only), without walking the references inside cells.
+   */
+  *cellLocations(): Generator<{ record: PluginRecord; worldspace?: number }> {
+    function* visit(nodes: PluginNode[], worldspace?: number): Generator<{ record: PluginRecord; worldspace?: number }> {
+      for (const n of nodes) {
+        if (n.kind === 'record') {
+          if (n.sig === 'CELL') yield { record: n, worldspace };
+          continue;
+        }
+        if (n.type === GroupType.CellChildren || n.type === GroupType.CellPersistentChildren || n.type === GroupType.CellTemporaryChildren || n.type === GroupType.CellVisibleDistantChildren || n.type === GroupType.TopicChildren) continue;
+        yield* visit(n.children, n.type === GroupType.WorldChildren ? n.label : worldspace);
+      }
+    }
+    const cell = this.topGroup('CELL');
+    if (cell) yield* visit(cell.children);
+    const wrld = this.topGroup('WRLD');
+    if (wrld) yield* visit(wrld.children);
   }
 
   /** Remove a record (and its child group, for CELL/WRLD/DIAL). Returns true if found. */

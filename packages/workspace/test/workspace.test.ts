@@ -354,3 +354,19 @@ describe('Mod Organizer 2 and archives', () => {
     expect(vfs.children('meshes').files.map((f) => f.path)).toEqual(['meshes\\a.nif', 'meshes\\b.nif']);
   });
 });
+
+describe('winner index', () => {
+  it('reflects active-plugin edits immediately without a rebuild', async () => {
+    const { ws } = await openDemo();
+    const before = ws.search({ sigs: ['STAT'], query: 'DemoBarrel' });
+    expect(before.items.map((i) => i.editorId)).toContain('DemoBarrel');
+    const key = before.items.find((i) => i.editorId === 'DemoBarrel')!.formKey;
+    ws.editRecord(key, (d) => ({ ...d, editorId: 'RenamedBarrel' }));
+    expect(ws.search({ sigs: ['STAT'], query: 'RenamedBarrel' }).items[0]).toMatchObject({ formKey: key, inActive: true, winner: 'MyMod.esp' });
+    expect(ws.byEditorId('RenamedBarrel')).toBe(key);
+    const created = ws.createRecord('STAT', { editorId: 'BrandNewStatic', bounds: { x1: 0, y1: 0, z1: 0, x2: 0, y2: 0, z2: 0 }, directionalMaterial: { maxAngle: 90, material: null, consideredSnow: 0, unused: new Uint8Array(3) } });
+    expect(ws.search({ query: 'BrandNewStatic' }).items.map((i) => i.formKey)).toEqual([created]);
+    ws.undo();
+    expect(ws.search({ query: 'BrandNewStatic' }).total).toBe(0);
+  });
+});

@@ -56,6 +56,7 @@ npm run cli -- nif  some.nif
 npm run typecheck   # all packages + the Studio app
 npm test            # unit tests (vitest)
 npm run test:e2e    # Playwright end-to-end test of the browser demo
+npm run bench       # performance at Skyrim.esm scale (synthetic ~900k-record master)
 ```
 
 ## Layout
