@@ -367,7 +367,7 @@ export class DialogueService {
   }
 }
 
-const ITEM_SIGS = ['MISC', 'BOOK', 'KEYM', 'WEAP', 'ARMO', 'ALCH', 'INGR', 'AMMO', 'SLGM', 'SCRL'];
+export const ITEM_SIGS = ['MISC', 'BOOK', 'KEYM', 'WEAP', 'ARMO', 'ALCH', 'INGR', 'AMMO', 'SLGM', 'SCRL'];
 
 /** An item by Editor ID or name ("gold" is the game's gold coins). */
 export function resolveItem(ws: Workspace, name: string): FormKey | undefined {

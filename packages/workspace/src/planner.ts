@@ -40,6 +40,10 @@ How to plan:
 - Prefer characters, places and items that already exist in the load order (listed below) when the author names them or clearly means them; set "existing" to their Editor ID. Otherwise set "existing" to null and a new one is created.
 - Keys are short lowercase identifiers ("brynja", "cellar", "ring") used to refer to entries inside the plan. Every key is unique across characters, locations and items.
 - New characters need a location to stand in (a location key); characters that already exist stay where they are (locationKey null).
+- Characters can be changed as well as used. When the author says a character (new or existing) wears something, carries something, belongs to a group, has a class or level, can or can't die, or looks a certain way, put it in outfit, inventory, factions, className, level, essential and look. For existing characters, only fill in what the text asks to change and leave the rest null or empty. "Save it as an outfit" means outfit.saveAs gets an Editor ID.
+- Describe every new character's look (build, height, hair, hair colour, facial hair, eyes, scars) from the text, choosing what fits their role when the text says nothing; for a new character that is "like" someone existing, set basedOn.
+- Clothing, armour and weapons in an outfit or inventory are existing items named as in the load order (e.g. "Fine Clothes", "Iron Sword"). Only add new clothing or weapons to "items" (kind clothing/armor/weapon, basedOn the closest existing item) when the text describes something unique.
+- If the text only asks to create or change characters, places or items and describes no quest, leave stages, objectives, steps, conversations, rewards and animations empty; nothing but those changes is built.
 - Stages: start at 0 or 10, go up in steps of 10, and end on a stage that completes the quest (often 100 or 200). One stage has startsQuest true. Every stage after the first must be reachable: a step or a conversation line sets it.
 - Journal entries are written in the past tense from the player's point of view, like Skyrim's ("Brynja asked me to find her stolen ring."). Write one for every stage the player should notice; the final stage gets a closing entry.
 - Objectives are short instructions ("Find Brynja's ring", "Return the ring to Brynja"). Show each at the stage where it starts and complete it at the stage where it's done. Point the marker (targetKey) at the character, item or location involved.
@@ -86,6 +90,7 @@ export function planCatalog(ws: Workspace, opts: { limit?: number } = {}): strin
   const cells = world
     .cells({ interiorOnly: true })
     .filter((c) => c.name)
+    .sort((a, b) => Number(b.inActive) - Number(a.inActive))
     .slice(0, limit)
     .map((c) => `${c.editorId ?? c.formKey} "${c.name}"`);
   return [
@@ -93,6 +98,9 @@ export function planCatalog(ws: Workspace, opts: { limit?: number } = {}): strin
     `Interior locations:\n${cells.join('\n') || '(none)'}`,
     `Voice types:\n${list(['VTYP'], (_, e) => !!e)}`,
     `Races:\n${list(['RACE'])}`,
+    `Classes:\n${list(['CLAS'])}`,
+    `Factions:\n${list(['FACT'])}`,
+    `Outfits:\n${list(['OTFT'], (_, e) => !!e)}`,
   ].join('\n\n');
 }
 

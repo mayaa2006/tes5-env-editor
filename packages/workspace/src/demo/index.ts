@@ -380,6 +380,14 @@ function buildDemoMaster(): Plugin {
   // Two idle animations (for gestures in dialogue).
   rec(p, 'IDLE', id(), { editorId: 'IdleWave', behaviorGraph: 'Actors\\Character\\Behaviors\\0_Master.hkx', animationEvent: 'IdleWave', related: [], data: { loopMin: 0, loopMax: 0, flags: 0, animationGroupSection: 0, replayDelay: 0 } });
   rec(p, 'IDLE', id(), { editorId: 'IdleLaugh', behaviorGraph: 'Actors\\Character\\Behaviors\\0_Master.hkx', animationEvent: 'IdleLaugh', related: [], data: { loopMin: 0, loopMax: 0, flags: 0, animationGroupSection: 0, replayDelay: 0 } });
+  // Clothing and an outfit (for outfits in quest plans).
+  const armo = (edid: string, name: string, slots: number, value: number) =>
+    rec(p, 'ARMO', id(), { editorId: edid, bounds: bounds(12, 12, 40), name, maleModel: { file: 'demo\\clothes.nif' }, bodyTemplate: { slots, armorType: 2 }, description: '', armatures: [], data: { value, weight: 1 } });
+  const shirt = armo('DemoClothesBlue', 'Blue Fine Clothes', 0x4, 40);
+  const boots = armo('DemoBootsLeather', 'Leather Boots', 0x80, 10);
+  armo('DemoHoodBrown', 'Brown Hood', 0x1 | 0x2, 5);
+  rec(p, 'OTFT', id(), { editorId: 'DemoFarmerOutfit', items: [shirt, boots] });
+  rec(p, 'FACT', id(), { editorId: 'DemoMerchantFaction', name: 'Merchants', relations: [], flags: 0 });
   // ---- interior cell: the Demo Tavern
   const tavern = 0xa00;
   rec(p, 'CELL', tavern, {

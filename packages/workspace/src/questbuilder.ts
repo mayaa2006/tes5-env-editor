@@ -7,7 +7,8 @@
  */
 import { FACE_MORPHS, parseFormKey, type FormKey } from '@tes5/esp';
 import { WorkspaceError, type Workspace } from './engine';
-import { formExpression, resolveItem, type DialogueService } from './dialogue';
+import { CharacterEditor } from './characteredit';
+import { ITEM_SIGS, formExpression, resolveItem, type DialogueService } from './dialogue';
 import { rng, type EnvironmentService } from './environment';
 import { emptyMorphs, FEMALE_FLAG, type NpcService } from './npc';
 import type { QuestService } from './quest';
@@ -18,7 +19,7 @@ import { WorldService, type Vec3 } from './world';
 
 const ESSENTIAL = 0x2;
 const UNIQUE = 0x20;
-const ITEM_TEMPLATE_SIG: Record<PlanItem['kind'], string> = { misc: 'MISC', other: 'MISC', book: 'BOOK', key: 'KEYM', gold: 'MISC' };
+const ITEM_TEMPLATE_SIG: Record<PlanItem['kind'], string> = { misc: 'MISC', other: 'MISC', book: 'BOOK', key: 'KEYM', gold: 'MISC', clothing: 'ARMO', armor: 'ARMO', weapon: 'WEAP', potion: 'ALCH' };
 
 export type PlanEntryKind = 'character' | 'location' | 'item';
 
@@ -33,13 +34,18 @@ export interface PlanResolution {
   template: FormKey | null;
   /** Readable summary ("Uses Brynja (DemoInnkeeper)", "New, copied from Town Guard"). */
   text: string;
+  /** For characters: what will change about them ("wears Fine Clothes", "joins Townsfolk"). */
+  changes?: string[];
   error?: string;
 }
 
 export interface QuestBuildReport {
-  quest: FormKey;
+  /** The quest, or null for a plan that only changes characters, places and items. */
+  quest: FormKey | null;
   editorId: string;
-  created: { kind: PlanEntryKind | 'quest' | 'placed'; formKey: FormKey; label: string }[];
+  created: { kind: PlanEntryKind | 'quest' | 'placed' | 'outfit'; formKey: FormKey; label: string }[];
+  /** Existing characters that were changed. */
+  changed: { formKey: FormKey; label: string; changes: string[] }[];
   reused: { kind: PlanEntryKind; formKey: FormKey; label: string }[];
   dialogue: { topics: number; responses: number };
   /** Things worth knowing (what was assumed or left for you). */
@@ -63,6 +69,7 @@ function pascal(s: string): string {
 
 export class QuestBuilder {
   private readonly world: WorldService;
+  readonly characters: CharacterEditor;
 
   constructor(
     readonly ws: Workspace,
@@ -73,6 +80,7 @@ export class QuestBuilder {
     readonly env: EnvironmentService,
   ) {
     this.world = new WorldService(ws);
+    this.characters = new CharacterEditor(ws, npcs);
   }
 
   // ---------------------------------------------------------------- finding forms
@@ -142,13 +150,16 @@ export class QuestBuilder {
     const out: PlanResolution[] = [];
     const cache = new Map<string, FormKey | undefined>();
     for (const c of plan.characters) {
+      const changes = this.characters.describe(c);
       if (c.existing) {
         const k = this.findForm(['NPC_'], c.existing) ?? this.findForm(['NPC_'], c.name);
-        out.push(k ? { kind: 'character', key: c.key, name: c.name, existing: k, template: null, text: `Uses ${this.label(k)}` } : { kind: 'character', key: c.key, name: c.name, existing: null, template: null, text: `No character called “${c.existing}”`, error: `${c.name}: no character called “${c.existing}” in the load order` });
+        out.push(k ? { kind: 'character', key: c.key, name: c.name, existing: k, template: null, text: `Uses ${this.label(k)}${changes.length ? ', changed' : ''}`, changes } : { kind: 'character', key: c.key, name: c.name, existing: null, template: null, text: `No character called “${c.existing}”`, error: `${c.name}: no character called “${c.existing}” in the load order` });
         continue;
       }
-      const t = this.npcTemplate(c, cache);
-      out.push(t ? { kind: 'character', key: c.key, name: c.name, existing: null, template: t, text: `New, copied from ${this.label(t)}` } : { kind: 'character', key: c.key, name: c.name, existing: null, template: null, text: 'No character to copy from', error: `${c.name}: there's no character in the load order to copy` });
+      const based = c.basedOn ? this.characters.findLoose(['NPC_'], c.basedOn) : undefined;
+      const t = based ?? this.npcTemplate(c, cache);
+      const note = c.basedOn && !based ? ` (no “${c.basedOn}” found)` : '';
+      out.push(t ? { kind: 'character', key: c.key, name: c.name, existing: null, template: t, text: `New, copied from ${this.label(t)}${note}`, changes } : { kind: 'character', key: c.key, name: c.name, existing: null, template: null, text: 'No character to copy from', error: `${c.name}: there's no character in the load order to copy` });
     }
     for (const l of plan.locations) {
       if (l.existing) {
@@ -157,7 +168,7 @@ export class QuestBuilder {
       } else out.push({ kind: 'location', key: l.key, name: l.name, existing: null, template: null, text: 'New empty interior' });
     }
     for (const i of plan.items) {
-      const k = i.kind === 'gold' ? resolveItem(this.ws, 'gold') : i.existing ? resolveItem(this.ws, i.existing) ?? resolveItem(this.ws, i.name) : undefined;
+      const k = i.kind === 'gold' ? resolveItem(this.ws, 'gold') : i.existing ? (resolveItem(this.ws, i.existing) ?? resolveItem(this.ws, i.name) ?? this.characters.findLoose(ITEM_SIGS, i.existing)) : undefined;
       if (k) {
         out.push({ kind: 'item', key: i.key, name: i.name, existing: k, template: null, text: i.kind === 'gold' ? 'Gold coins' : `Uses ${this.label(k)}` });
         continue;
@@ -166,8 +177,9 @@ export class QuestBuilder {
         out.push({ kind: 'item', key: i.key, name: i.name, existing: null, template: null, text: `No item called “${i.existing}”`, error: `${i.name}: no item called “${i.existing}” in the load order` });
         continue;
       }
-      const t = this.itemTemplate(i.kind);
-      out.push(t ? { kind: 'item', key: i.key, name: i.name, existing: null, template: t, text: `New, copied from ${this.label(t)}` } : { kind: 'item', key: i.key, name: i.name, existing: null, template: null, text: 'No item to copy from', error: `${i.name}: there's no item in the load order to copy` });
+      const based = i.basedOn ? this.characters.findLoose([ITEM_TEMPLATE_SIG[i.kind]], i.basedOn) ?? this.characters.findLoose(ITEM_SIGS, i.basedOn) : undefined;
+      const t = based ?? this.itemTemplate(i.kind);
+      out.push(t ? { kind: 'item', key: i.key, name: i.name, existing: null, template: t, text: `New, copied from ${this.label(t)}${i.basedOn && !based ? ` (no “${i.basedOn}” found)` : ''}` } : { kind: 'item', key: i.key, name: i.name, existing: null, template: null, text: 'No item to copy from', error: `${i.name}: there's no item in the load order to copy` });
     }
     return out;
   }
@@ -203,26 +215,30 @@ export class QuestBuilder {
     errors.push(...resolution.filter((r) => r.error).map((r) => r.error!));
     if (errors.length) throw new WorkspaceError(`The plan can't be built yet:\n${errors.map((e) => `• ${e}`).join('\n')}`);
     if (!this.ws.active) throw new WorkspaceError('Open or create a plugin first');
-    return this.ws.transactionAsync(`Build quest ${plan.editorId}`, () => this.buildInner(plan, resolution, opts.seed ?? 1));
+    return this.ws.transactionAsync(plan.stages.length ? `Build quest ${plan.editorId}` : `Build ${plan.title}`, () => this.buildInner(plan, resolution, opts.seed ?? 1));
   }
 
   private async buildInner(plan: QuestPlan, resolution: PlanResolution[], seed: number): Promise<QuestBuildReport> {
     const random = rng(seed);
     const prefix = plan.editorId.replace(/[^A-Za-z0-9_]/g, '');
     const res = (kind: PlanEntryKind, key: string) => resolution.find((r) => r.kind === kind && r.key === key)!;
-    const report: QuestBuildReport = { quest: '' as FormKey, editorId: '', created: [], reused: [], dialogue: { topics: 0, responses: 0 }, notes: [...plan.assumptions.map((a) => `Assumed: ${a}`)], warnings: [], problems: [] };
+    const report: QuestBuildReport = { quest: null, editorId: '', created: [], changed: [], reused: [], dialogue: { topics: 0, responses: 0 }, notes: [...plan.assumptions.map((a) => `Assumed: ${a}`)], warnings: [], problems: [] };
 
     // The quest and its stages first (items the player starts with are given in a stage script).
-    let editorId = plan.editorId;
-    if (this.ws.byEditorId(editorId)) {
-      editorId = this.ws.uniqueEditorId(editorId);
-      report.notes.push(`The Editor ID ${plan.editorId} was taken, so the quest is ${editorId}`);
-    }
-    const quest = this.quests.createQuest(editorId, plan.title, { startGameEnabled: plan.startsWithGame });
-    report.quest = quest;
-    report.editorId = editorId;
-    report.created.push({ kind: 'quest', formKey: quest, label: `${plan.title} (${editorId})` });
+    // A plan with no stages only changes characters, places and items.
     const stages = [...plan.stages].sort((a, b) => a.index - b.index);
+    let quest = null as unknown as FormKey;
+    if (stages.length) {
+      let editorId = plan.editorId;
+      if (this.ws.byEditorId(editorId)) {
+        editorId = this.ws.uniqueEditorId(editorId);
+        report.notes.push(`The Editor ID ${plan.editorId} was taken, so the quest is ${editorId}`);
+      }
+      quest = this.quests.createQuest(editorId, plan.title, { startGameEnabled: plan.startsWithGame });
+      report.quest = quest;
+      report.editorId = editorId;
+      report.created.push({ kind: 'quest', formKey: quest, label: `${plan.title} (${editorId})` });
+    }
     const startStage = stages.find((s) => s.startsQuest)?.index ?? stages[0]?.index ?? 0;
     for (const s of stages) {
       const log = s.journal.trim();
@@ -244,7 +260,27 @@ export class QuestBuilder {
       report.notes.push(`${l.name} is a new, empty interior. Build the room in World → Tools and connect a door to it.`);
     }
 
-    // Characters.
+    // Items.
+    const items = new Map<string, FormKey>();
+    const placedItems = new Map<string, FormKey>();
+    for (const i of plan.items) {
+      const r = res('item', i.key);
+      let item = r.existing;
+      if (item) report.reused.push({ kind: 'item', formKey: item, label: this.label(item) });
+      else item = this.createItem(i, r.template!, prefix, report);
+      items.set(i.key, item);
+    }
+
+    // Characters (new ones copied and set up; existing ones changed as the plan says).
+    const changeCtx = (isNew: boolean) => ({
+      items,
+      prefix,
+      random,
+      isNew,
+      created: (kind: 'outfit', formKey: FormKey, label: string) => void report.created.push({ kind, formKey, label }),
+      note: (t: string) => void report.notes.push(t),
+      warn: (t: string) => void report.warnings.push(t),
+    });
     const npcs = new Map<string, FormKey>();
     const perCell = new Map<FormKey, number>();
     const nextSlot = (cell: FormKey) => {
@@ -256,23 +292,16 @@ export class QuestBuilder {
       const r = res('character', c.key);
       if (r.existing) {
         npcs.set(c.key, r.existing);
-        report.reused.push({ kind: 'character', formKey: r.existing, label: this.label(r.existing) });
-        if (c.essential && !(((this.ws.view(r.existing)?.data as any)?.config?.flags ?? 0) & ESSENTIAL))
-          report.warnings.push(`${c.name} can be killed before the quest is done. Mark them essential while the quest runs (their alias can do that) if the story needs them.`);
+        const changes = this.characters.describe(c);
+        if (changes.length) {
+          this.characters.apply(r.existing, c, changeCtx(false));
+          report.changed.push({ formKey: r.existing, label: this.label(r.existing), changes });
+        } else report.reused.push({ kind: 'character', formKey: r.existing, label: this.label(r.existing) });
         continue;
       }
-      npcs.set(c.key, this.createCharacter(c, r.template!, prefix, random, report));
-    }
-
-    // Items.
-    const items = new Map<string, FormKey>();
-    const placedItems = new Map<string, FormKey>();
-    for (const i of plan.items) {
-      const r = res('item', i.key);
-      let item = r.existing;
-      if (item) report.reused.push({ kind: 'item', formKey: item, label: this.label(item) });
-      else item = this.createItem(i, r.template!, prefix, report);
-      items.set(i.key, item);
+      const npc = this.createCharacter(c, r.template!, prefix, random, report);
+      this.characters.apply(npc, c, changeCtx(true));
+      npcs.set(c.key, npc);
     }
 
     // Put the characters and items where the plan says they start.
@@ -306,7 +335,12 @@ export class QuestBuilder {
       const { missed } = await this.env.dropToSurface(dropMe);
       if (missed.length) report.notes.push(`${missed.length} item(s) had nothing under them to rest on; check where they are in the World tab.`);
     }
-    if (playerGets.length) await this.graphs.appendStageCode(quest, startStage, playerGets);
+    if (playerGets.length && quest) await this.graphs.appendStageCode(quest, startStage, playerGets);
+    if (!quest) {
+      if (playerGets.length) report.warnings.push('Items the player should start with need a quest to give them; they were left out.');
+      this.finishNotes(plan, report);
+      return report;
+    }
 
     // Objectives and their quest markers.
     const markerFor = (key: string | null): FormKey | undefined => {
@@ -391,12 +425,16 @@ export class QuestBuilder {
     }
     for (const [stage, lines] of byStage) await this.graphs.appendStageCode(quest, stage, lines);
 
-    const created = report.created.filter((c) => c.kind === 'character');
-    if (created.length) report.notes.push(`New characters need their faces exported from the Creation Kit before release (select them, Ctrl+F4), or they'll have dark faces. The Release tab lists them.`);
+    this.finishNotes(plan, report);
     if (!plan.startsWithGame) report.notes.push('The quest doesn’t start with the game; start it from another quest or a trigger (Start Quest).');
     report.problems = (await this.graphs.graph(quest)).problems;
     for (const l of await lintQuestDialogue(quest, { quests: this.quests, dialogue: this.dialogue, graphs: this.graphs })) report.warnings.push(`Dialogue: ${l.message}`);
     return report;
+  }
+
+  private finishNotes(plan: QuestPlan, report: QuestBuildReport): void {
+    const created = report.created.filter((c) => c.kind === 'character');
+    if (created.length) report.notes.push(`New characters need their faces exported from the Creation Kit before release (select them, Ctrl+F4), or they'll have dark faces. The Release tab lists them.`);
   }
 
   private createCharacter(c: PlanCharacter, template: FormKey, prefix: string, random: () => number, report: QuestBuildReport): FormKey {
@@ -416,6 +454,8 @@ export class QuestBuilder {
         d.config = { ...(d.config ?? {}) };
         let flags = (d.config.flags ?? 0) | UNIQUE;
         flags = c.essential ? flags | ESSENTIAL : flags & ~ESSENTIAL;
+        // The original's factions (a guard's crime faction, a family) don't belong to the copy; the plan adds its own.
+        d.factions = [];
         flags = female ? flags | FEMALE_FLAG : flags & ~FEMALE_FLAG;
         d.config.flags = flags;
         if (voice) d.voice = voice;
@@ -429,9 +469,9 @@ export class QuestBuilder {
     );
     const morphs = emptyMorphs();
     for (const [k] of FACE_MORPHS) morphs[k] = Math.round((random() - 0.5) * 0.8 * 100) / 100;
-    this.npcs.setAppearance(npc, { morphs, weight: Math.round(20 + random() * 60) });
+    this.npcs.setAppearance(npc, { morphs });
     report.created.push({ kind: 'character', formKey: npc, label: `${c.name} (${editorId}), copied from ${this.label(template)}` });
-    report.notes.push(`${c.name} (“${c.appearance}”) got a random face; shape it in the Characters tab. They stand where they're placed until you give them AI packages.`);
+    report.notes.push(`${c.name} (“${c.appearance}”): hair, beard, build and colours were picked to match; the face shape is random — fine-tune it in the Characters tab. They stand where they're placed until you give them AI packages.`);
     return npc;
   }
 

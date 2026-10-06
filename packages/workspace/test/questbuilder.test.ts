@@ -91,14 +91,14 @@ describe('quest builder', () => {
     expect(ringRef.transform.position.z).toBeLessThan(90);
 
     // Stages, journal, objectives.
-    const g = await graphs.graph(report.quest);
+    const g = await graphs.graph(report.quest!);
     expect(g.startGameEnabled).toBe(true);
     expect(g.nodes.map((n) => n.stage)).toEqual([0, 10, 20, 100]);
     expect(g.nodes.find((n) => n.stage === 10)!.text).toContain('lost her mother’s ring');
     expect(g.nodes.find((n) => n.stage === 100)!.completesQuest).toBe(true);
     expect(g.nodes.find((n) => n.stage === 20)).toMatchObject({ shows: [20], completes: [10] });
     expect(g.objectives.map((o) => o.text)).toEqual(['Find Brynja’s ring', 'Return the ring to Brynja']);
-    const q = quests.quest(report.quest);
+    const q = quests.quest(report.quest!);
     expect(q.aliases.map((a) => a.name).sort()).toEqual(['DemoInnkeeper', 'InnkeeperRingQuestBrynjaSRingRef', 'InnkeeperRingQuestEirik']);
 
     // What moves it on: Brynja's lines, then picking up the ring, then Brynja again.
@@ -107,7 +107,7 @@ describe('quest builder', () => {
     expect(report.problems).toEqual([]);
 
     // Dialogue: speakers resolved to the real characters, the ring and gold change hands.
-    const d = dialogue.graph(report.quest);
+    const d = dialogue.graph(report.quest!);
     expect(d.infos.some((i) => i.speaker === eirik && i.needsStage === 10)).toBe(true);
     const thanks = d.infos.find((i) => i.lines[0]?.startsWith('Oh, thank the gods'))!;
     expect(thanks.speaker).toBe(k('DemoInnkeeper'));
@@ -120,9 +120,24 @@ describe('quest builder', () => {
     expect(src).toContain('Debug.SendAnimationEvent(akSpeaker, "IdleApplaud2")');
     expect((ws.view(thanks.formKey)!.data as any).scripts.fragments.flags).toBe(3);
     // Eirik laughs (the demo has IdleLaugh, so it's played as the idle form) when the ring is found.
-    expect(await graphs.fragmentCode(report.quest, 20)).toMatch(/Alias_InnkeeperRingQuestEirik\.GetActorReference\(\)\.PlayIdle\(Game\.GetFormFromFile\(0x[0-9A-F]{6}, "DemoWorld\.esm"\) as Idle\)/);
+    expect(await graphs.fragmentCode(report.quest!, 20)).toMatch(/Alias_InnkeeperRingQuestEirik\.GetActorReference\(\)\.PlayIdle\(Game\.GetFormFromFile\(0x[0-9A-F]{6}, "DemoWorld\.esm"\) as Idle\)/);
 
-    expect(report.created.map((c) => c.kind).sort()).toEqual(['character', 'item', 'placed', 'placed', 'quest']);
+    expect(report.created.map((c) => c.kind).sort()).toEqual(['character', 'item', 'outfit', 'placed', 'placed', 'quest']);
+    // Eirik as described: outfit saved, faction, class, level, carried items, look.
+    const outfit = ws.byEditorId('EirikTravelOutfit')!;
+    const e2 = ed;
+    expect(e2.defaultOutfit).toBe(outfit);
+    expect((ws.view(outfit)!.data as any).items).toEqual([k('DemoClothesBlue'), k('DemoBootsLeather')]);
+    expect(e2.factions.map((f: any) => f.faction)).toEqual([k('DemoTownFaction')]);
+    expect(e2.class).toBe(k('DemoWarriorClass'));
+    expect(e2.config.level).toBe(6);
+    expect(e2.items).toEqual([{ item: { item: k('DemoBottle'), count: 2 } }]);
+    expect(e2.weight).toBe(70);
+    expect(e2.height).toBeCloseTo(1.02);
+    expect(e2.hairColor).toBe(k('HairColorBrown'));
+    expect(e2.headParts).toContain(k('DemoHairShort'));
+    expect(e2.headParts).toContain(k('DemoBeardFull'));
+    expect(e2.headParts).toContain(k('DemoHeadMale'));
     expect(report.reused.map((r) => r.label).sort()).toEqual(['Brynja (DemoInnkeeper)', 'The Demo Tavern (DemoTavern)']);
     expect(report.notes.some((n) => n.includes('Ctrl+F4'))).toBe(true);
 
@@ -139,8 +154,8 @@ describe('quest builder', () => {
     plan.editorId = 'CellarQuest';
     plan.locations.push({ key: 'cellar', name: 'Old Cellar', existing: null, description: 'Under the tavern' });
     plan.characters[1]!.locationKey = 'cellar';
-    plan.items.push({ key: 'note', name: 'Crumpled Note', kind: 'book', existing: null, value: 1, startsWith: 'character', startsAtKey: 'eirik' });
-    plan.items.push({ key: 'charm', name: 'Lucky Charm', kind: 'misc', existing: null, value: 10, startsWith: 'player', startsAtKey: null });
+    plan.items.push({ key: 'note', name: 'Crumpled Note', kind: 'book', existing: null, basedOn: null, value: 1, startsWith: 'character', startsAtKey: 'eirik' });
+    plan.items.push({ key: 'charm', name: 'Lucky Charm', kind: 'misc', existing: null, basedOn: null, value: 10, startsWith: 'player', startsAtKey: null });
     plan.rewards.push({ atStage: 100, gold: 25, itemKey: 'charm' });
     plan.steps.push({ from: 10, to: 20, kind: 'read', targetKey: 'note', note: 'Read the note' });
     plan.steps.push({ from: 0, to: 10, kind: 'talk', targetKey: null, note: 'duplicate' });
@@ -153,18 +168,61 @@ describe('quest builder', () => {
     expect(r.notes.some((n) => n.includes('Old Cellar is a new, empty interior'))).toBe(true);
     const eirik = ws.byEditorId('CellarQuestEirik')!;
     const note = ws.byEditorId('CellarQuestCrumpledNote')!;
-    expect((ws.view(eirik)!.data as any).items).toEqual([{ item: { item: note, count: 1 } }]);
+    expect((ws.view(eirik)!.data as any).items).toEqual([{ item: { item: ws.byEditorId('DemoBottle'), count: 2 } }, { item: { item: note, count: 1 } }]);
     // Fallback: there's no book in the demo to copy, so it's a misc item.
     expect(ws.summary(note)!.sig).toBe('MISC');
     expect(r.notes.some((n) => n.includes('Crumpled Note should be a book'))).toBe(true);
     expect(r.warnings.some((w) => w.includes('“Read the note” (read) can\'t be detected'))).toBe(true);
     expect(r.warnings.some((w) => w.includes('Nothing said in a conversation sets stage 50'))).toBe(true);
-    const start = await graphs.fragmentCode(r.quest, 0);
+    const start = await graphs.fragmentCode(r.quest!, 0);
     expect(start).toMatch(/Game\.GetPlayer\(\)\.AddItem\(Game\.GetFormFromFile\(0x[0-9A-F]{6}, "Built\.esp"\), 1\)/);
-    const end = await graphs.fragmentCode(r.quest, 100);
+    const end = await graphs.fragmentCode(r.quest!, 100);
     expect(end).toContain('SetObjectiveCompleted(20)');
     expect(end).toContain('AddItem(Game.GetFormFromFile(0x00000F, "Skyrim.esm"), 25)');
     expect(r.problems).toContain('Nothing leads to stage 50.');
+  });
+
+  it('changes existing characters, with no quest needed', async () => {
+    const { ws, builder } = await setup();
+    const k = (e: string) => ws.byEditorId(e)!;
+    const plan = { ...exampleQuestPlan(), title: 'Halvar’s new look', editorId: 'HalvarChanges', stages: [], objectives: [], steps: [], conversations: [], rewards: [], animations: [], items: [], locations: [], assumptions: [], questions: [] };
+    plan.characters = [
+      {
+        key: 'halvar', name: 'Halvar', existing: 'Halvar the Smith', basedOn: null, sex: null, race: null, role: 'Smith', appearance: 'Now in fine clothes with a hood',
+        look: { weight: null, height: null, hair: null, hairColor: 'grey', facialHair: 'none', eyes: null, scar: null },
+        voice: null, locationKey: null, essential: false, className: null, level: null,
+        outfit: { items: ['fine blue clothes', 'hood', 'Leather Boots', 'golden crown'], saveAs: 'HalvarSundayBest' },
+        factions: [{ faction: 'Merchants', rank: 1 }], inventory: [{ item: 'tankard', count: 3 }],
+      },
+    ];
+    const res = builder.resolve(plan).find((r) => r.key === 'halvar')!;
+    expect(res.text).toBe('Uses Halvar the Smith (DemoBlacksmith), changed');
+    expect(res.changes).toEqual(['wears fine blue clothes, hood, Leather Boots, golden crown (saved as HalvarSundayBest)', 'carries 3 × tankard', 'joins Merchants', 'can be killed', 'grey hair colour, no beard']);
+    const r = await builder.build(plan);
+    expect(r.quest).toBeNull();
+    expect(ws.byEditorId('HalvarChanges')).toBeUndefined();
+    expect(r.changed.map((c) => c.label)).toEqual(['Halvar the Smith (DemoBlacksmith)']);
+    const d = ws.view(k('DemoBlacksmith'))!.data as any;
+    expect((ws.view(d.defaultOutfit)!.data as any)).toMatchObject({ editorId: 'HalvarSundayBest', items: [k('DemoClothesBlue'), k('DemoHoodBrown'), k('DemoBootsLeather')] });
+    expect(r.warnings).toContain('Halvar: no clothing like “golden crown” in the load order, so it\'s left out of their outfit.');
+    expect(d.factions.map((f: any) => [f.faction, f.rank])).toEqual([[k('DemoTownFaction'), 0], [k('DemoMerchantFaction'), 1]]);
+    expect(d.items).toEqual([{ item: { item: k('DemoTankard'), count: 3 } }]);
+    expect(d.config.flags & 2).toBe(0);
+    expect(d.headParts).not.toContain(k('DemoBeardFull'));
+    expect(d.headParts).toContain(k('DemoHairShort'));
+    expect(r.notes.some((n) => n.includes('comes from DemoWorld.esm'))).toBe(true);
+    expect(r.notes.some((n) => n.includes('FaceGen needs exporting again'))).toBe(true);
+    expect(ws.undoLabel).toBe('Build Halvar’s new look');
+  });
+
+  it('copies a new character from the one the text names, and an existing outfit as is', async () => {
+    const { ws, builder } = await setup();
+    const plan = exampleQuestPlan();
+    plan.characters[1]!.basedOn = 'Town Guard';
+    plan.characters[1]!.outfit = { items: ['DemoFarmerOutfit'], saveAs: null };
+    expect(builder.resolve(plan).find((r) => r.key === 'eirik')!.text).toBe('New, copied from Town Guard (DemoGuard)');
+    await builder.build(plan);
+    expect((ws.view(ws.byEditorId('InnkeeperRingQuestEirik')!)!.data as any).defaultOutfit).toBe(ws.byEditorId('DemoFarmerOutfit'));
   });
 
   it('refuses plans that would not build, and changes nothing', async () => {
