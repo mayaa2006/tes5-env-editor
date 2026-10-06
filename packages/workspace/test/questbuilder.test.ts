@@ -141,7 +141,7 @@ describe('quest builder', () => {
     expect(e2.headParts).toContain(k('DemoBeardFull'));
     expect(e2.headParts).toContain(k('DemoHeadMale'));
     expect(report.reused.map((r) => r.label).sort()).toEqual(['Brynja (DemoInnkeeper)', 'The Demo Tavern (DemoTavern)']);
-    expect(report.notes.some((n) => n.includes('Ctrl+F4'))).toBe(true);
+    expect(report.notes.some((n) => n.includes('face files'))).toBe(true);
 
     // One undo step takes it all away.
     expect(ws.undoLabel).toBe('Build quest InnkeeperRingQuest');
@@ -213,7 +213,7 @@ describe('quest builder', () => {
     expect(d.headParts).not.toContain(k('DemoBeardFull'));
     expect(d.headParts).toContain(k('DemoHairShort'));
     expect(r.notes.some((n) => n.includes('comes from DemoWorld.esm'))).toBe(true);
-    expect(r.notes.some((n) => n.includes('FaceGen needs exporting again'))).toBe(true);
+    expect(r.notes.some((n) => n.includes('face files are made again'))).toBe(true);
     expect(ws.undoLabel).toBe('Build Halvar’s new look');
   });
 

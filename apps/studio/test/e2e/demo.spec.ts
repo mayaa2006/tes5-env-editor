@@ -118,7 +118,7 @@ test('characters, quests, scripts, cleaning and saving', async ({ page }) => {
   await expect(page.getByTestId('head-preview').locator('canvas')).toBeVisible();
   await page.getByRole('tab', { name: 'Face' }).click();
   await page.getByRole('button', { name: 'Randomize' }).click();
-  await expect(page.getByTitle(/Undo Edit NPC appearance/)).toBeEnabled();
+  await expect(page.getByTitle(/Undo Edit character look/)).toBeEnabled();
   await page.waitForTimeout(1200);
   await shot(page, '03-character');
 

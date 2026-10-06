@@ -4,8 +4,8 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FACE_MORPHS, type FormKey } from '@tes5/esp';
-import type { HeadPartInfo, NpcAppearance } from '@tes5/workspace';
-import { Checkbox, Field, FormPicker, Icon, Modal, Select, Slider, Tabs, TextInput, useDebounced, useQuery, DragNumber, useUniqueEditorId } from '../../components/ui';
+import { CONTROL_HELP, REGION_CONTROLS_FOR, REGION_LABELS, emptySculpt, slidersWithExtended, type FaceRegion, type FaceSculpt, type HeadPartInfo, type NpcAppearance, type RegionControl } from '@tes5/workspace';
+import { Checkbox, Field, FormPicker, Help, Icon, Modal, Select, Slider, Tabs, TextInput, useDebounced, useQuery, DragNumber, useUniqueEditorId } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 import { HeadPreview, type PreviewPart } from './headPreview';
 
@@ -134,17 +134,27 @@ function Creator({ npc }: { npc: FormKey }) {
   const { data: races } = useQuery(() => client?.call('races'), [client], { revision: false });
   const { data: colors } = useQuery(() => client?.call('hairColors'), [client], { revision: false });
   const { data: allParts } = useQuery(() => client?.call('headParts', { includeNonPlayable: true }), [client]);
-  const { data: problems } = useQuery(() => client?.call('faceGenProblems'), [client]);
+  const { data: savedSculpt } = useQuery(() => client?.call('faceSculpt', npc), [npc]);
+  const { data: faceStatus } = useQuery(() => client?.call('faceStatus', npc), [npc]);
   const [a, setA] = useState<NpcAppearance | undefined>(saved);
+  const [sculpt, setSculpt] = useState<FaceSculpt>(emptySculpt());
+  const [shapeInfo, setShapeInfo] = useState<{ regions: string[]; extraMorphs: string[] }>({ regions: [], extraMorphs: [] });
   const [tab, setTab] = useState<Tab>('head');
   const previewEl = useRef<HTMLDivElement>(null);
   const preview = useRef<HeadPreview | null>(null);
   const [missing, setMissing] = useState<string[]>([]);
   useEffect(() => setA(saved), [saved]);
+  useEffect(() => setSculpt(savedSculpt ?? emptySculpt()), [savedSculpt]);
 
   const commit = async (p: Partial<NpcAppearance>) => {
     setA((cur) => (cur ? { ...cur, ...p } : cur));
     await engine((c) => c.call('setNpcAppearance', npc, p));
+  };
+  /** Record look and sculpt together, as one undo step. */
+  const commitLook = async (p: Partial<NpcAppearance>, next: FaceSculpt) => {
+    setA((cur) => (cur ? { ...cur, ...p } : cur));
+    setSculpt(next);
+    await engine((c) => c.call('setNpcLook', npc, p, next));
   };
 
   const partsByKey = useMemo(() => new Map((allParts ?? []).map((p) => [p.formKey, p])), [allParts]);
@@ -156,7 +166,7 @@ function Creator({ npc }: { npc: FormKey }) {
       const p = partsByKey.get(k);
       if (!p || seen.has(k)) return;
       seen.add(k);
-      out.push({ key: k, type: p.type, model: p.model, chargenTri: p.tris.find((t) => t.type === 2)?.file });
+      out.push({ key: k, type: p.type, model: p.model, tris: p.tris.filter((t) => t.type !== 1 && t.file).map((t) => t.file) });
       for (const x of p.extraParts) add(x);
     };
     for (const k of a.headParts) add(k);
@@ -166,6 +176,7 @@ function Creator({ npc }: { npc: FormKey }) {
   useEffect(() => {
     if (!previewEl.current || !client) return;
     const p = new HeadPreview(previewEl.current, client);
+    p.onShaper = setShapeInfo;
     preview.current = p;
     return () => {
       p.dispose();
@@ -180,12 +191,20 @@ function Creator({ npc }: { npc: FormKey }) {
       p.frame();
     });
   }, [previewParts]);
-  const sliderValues = a ? FACE_MORPHS.map(([k]) => a.morphs[k] ?? 0) : [];
-  useEffect(() => preview.current?.setSliders(sliderValues), [sliderValues.join(',')]);
+  const lookKey = a ? JSON.stringify([a.morphs, sculpt]) : '';
+  useEffect(() => {
+    if (a) preview.current?.setLook({ sliders: slidersWithExtended(a.morphs, sculpt), sculpt });
+  }, [lookKey, shapeInfo]);
   const hair = colors?.find((c) => c.formKey === a?.hairColor)?.color ?? null;
   useEffect(() => preview.current?.setColors(hair, a?.skinTone ?? null), [hair?.r, hair?.g, hair?.b, a?.skinTone.r, a?.skinTone.g, a?.skinTone.b, previewParts]);
 
-  const problem = problems?.find((p) => p.npc === npc);
+  const generate = async () => {
+    const r = await engine((c) => c.call('generateFaces', [npc]), { busy: 'Generating face files…' });
+    if (r?.[0]) {
+      useStore.getState().toast('success', `Face files written: ${r[0].mesh.split('\\').pop()} and ${r[0].tint.split('\\').pop()}`);
+      for (const w of r[0].warnings) useStore.getState().toast('warning', w);
+    }
+  };
   const hasFace = a?.headParts.some((k) => partsByKey.get(k)?.type === 'Face');
 
   return (
@@ -194,15 +213,23 @@ function Creator({ npc }: { npc: FormKey }) {
         <div ref={previewEl} style={{ flex: 1, minHeight: 0 }} data-testid="head-preview" />
         <div className="viewport-overlay viewport-hint">Drag to turn · wheel to zoom · Shift+drag to move up/down</div>
         <div style={{ position: 'absolute', left: 10, top: 10, right: 10 }} className="col">
-          {problem && (
-            <div className="card small" style={{ borderColor: 'var(--warn)', maxWidth: 520 }}>
-              <div className="warn" style={{ fontWeight: 600 }}>
-                <Icon name="warn" size={13} /> FaceGen files missing — this face will look dark in game
+          {faceStatus?.needed && (
+            <div className="card small row" style={{ borderColor: 'var(--warn)', maxWidth: 560, gap: 10 }} data-testid="face-files">
+              <div className="grow">
+                <div className="warn" style={{ fontWeight: 600 }}>
+                  <Icon name="warn" size={13} /> {faceStatus.present ? 'Face files are out of date' : 'This face needs its face files'}
+                </div>
+                <div className="dim">The game shows a dark or old face until they're made. They're also made when you save (Automations).</div>
               </div>
-              <div className="dim">
-                The game needs pre-built FaceGen files for edited faces. Automatic export isn't implemented yet: until it is, open the plugin in the Creation Kit, select this NPC and press Ctrl+F4. Missing: {problem.missing.map((m) => m.split('\\').pop()).join(', ')}
-              </div>
+              <button className="btn primary small" onClick={() => void generate()} title="Bake this look (sliders, shapes and paint) into the head mesh and face tint the game loads, in your mod's Data folder. Undo removes them." data-testid="generate-face">
+                <Icon name="wand" size={12} /> Generate face files
+              </button>
             </div>
+          )}
+          {faceStatus && !faceStatus.needed && faceStatus.present && (
+            <span className="chip ok" style={{ alignSelf: 'flex-start' }} title={`${faceStatus.paths.mesh}\n${faceStatus.paths.tint}`}>
+              <Icon name="check" size={11} /> Face files up to date
+            </span>
           )}
           {!!missing.length && <div className="small faint">Preview: {missing.slice(0, 3).join(' · ')}</div>}
           {a && !hasFace && <div className="small faint">This character uses the race's default head shape (not shown in the preview).</div>}
@@ -229,7 +256,7 @@ function Creator({ npc }: { npc: FormKey }) {
           ) : tab === 'head' ? (
             <HeadTab a={a} parts={allParts ?? []} commit={commit} />
           ) : tab === 'face' ? (
-            <FaceTab a={a} setA={setA} commit={commit} />
+            <FaceTab a={a} sculpt={sculpt} info={shapeInfo} preview={(next, sc) => (setA(next), setSculpt(sc))} commit={commitLook} />
           ) : tab === 'colors' ? (
             <ColorsTab a={a} colors={colors ?? []} commit={commit} />
           ) : tab === 'routine' ? (
@@ -326,46 +353,149 @@ function HeadTab({ a, parts, commit }: { a: NpcAppearance; parts: HeadPartInfo[]
   );
 }
 
-function FaceTab({ a, setA, commit }: { a: NpcAppearance; setA: (a: NpcAppearance) => void; commit: (p: Partial<NpcAppearance>) => void }) {
-  const set = (k: string, v: number, final: boolean) => {
-    const morphs = { ...a.morphs, [k]: v };
-    setA({ ...a, morphs });
-    if (final) void commit({ morphs });
+type FacePage = FaceRegion | 'more';
+const REGION_GROUP: Partial<Record<FaceRegion, string>> = { nose: 'Nose', eyes: 'Eyes', brows: 'Brows', cheeks: 'Cheeks', mouth: 'Mouth', jaw: 'Jaw', chin: 'Chin', head: 'Other' };
+const CONTROL_LABEL: Record<RegionControl, string> = { size: 'Size', width: 'Width', height: 'Height', depth: 'Depth', up: 'Up / down', forward: 'Forward / back', apart: 'Apart / together', tilt: 'Tilt' };
+
+/**
+ * RaceMenu-style face page: pick a feature, then use the game's own sliders
+ * for it and the extra shape sliders (size, width, move, apart, tilt…), plus
+ * every extra morph the head parts carry. "Beyond game limits" lets sliders
+ * go further than the game's creator does; it's all baked into the face files.
+ */
+function FaceTab({ a, sculpt, info, preview, commit }: { a: NpcAppearance; sculpt: FaceSculpt; info: { regions: string[]; extraMorphs: string[] }; preview: (a: NpcAppearance, s: FaceSculpt) => void; commit: (p: Partial<NpcAppearance>, s: FaceSculpt) => void }) {
+  const [page, setPage] = useState<FacePage>('nose');
+  const [beyond, setBeyond] = useState(() => Object.values(sculpt.extended).some((v) => v !== undefined && Math.abs(v) > 1) || Object.values(sculpt.morphs).some((v) => v > 1));
+  const lim = beyond ? 3 : 1;
+  const clamp = (v: number) => Math.max(-1, Math.min(1, v));
+
+  const vanilla = (k: string, v: number, final: boolean) => {
+    const morphs = { ...a.morphs, [k]: clamp(v) };
+    const extended = { ...sculpt.extended };
+    if (Math.abs(v) > 1) extended[k as keyof typeof extended] = v;
+    else delete extended[k as keyof typeof extended];
+    const next = { ...sculpt, extended };
+    if (final) commit({ morphs }, next);
+    else preview({ ...a, morphs }, next);
   };
+  const region = (r: FaceRegion, c: RegionControl, v: number, final: boolean) => {
+    const next = { ...sculpt, regions: { ...sculpt.regions, [r]: { ...(sculpt.regions[r] ?? {}), [c]: v } } };
+    if (final) commit({}, next);
+    else preview(a, next);
+  };
+  const morph = (name: string, v: number, final: boolean) => {
+    const next = { ...sculpt, morphs: { ...sculpt.morphs, [name]: v } };
+    if (final) commit({}, next);
+    else preview(a, next);
+  };
+  const resetPage = () => {
+    if (page === 'more') return commit({}, { ...sculpt, morphs: {} });
+    const keys = FACE_GROUPS.find((g) => g.title === REGION_GROUP[page])?.keys ?? [];
+    const morphs = { ...a.morphs };
+    const extended = { ...sculpt.extended };
+    for (const k of keys) {
+      if (k === 'vampireMorph') continue;
+      morphs[k] = 0;
+      delete extended[k];
+    }
+    const regions = { ...sculpt.regions };
+    delete regions[page];
+    commit({ morphs }, { ...sculpt, extended, regions });
+  };
+  const randomize = () => {
+    const r = (x: number) => Math.round((Math.random() * 2 - 1) * x * 100) / 100;
+    const morphs = Object.fromEntries(Object.keys(a.morphs).map((k) => [k, k === 'vampireMorph' ? a.morphs[k as keyof typeof a.morphs] : r(0.7)])) as NpcAppearance['morphs'];
+    const regions: FaceSculpt['regions'] = {};
+    for (const reg of info.regions as FaceRegion[]) if (reg !== 'head') regions[reg] = { size: r(0.3), width: r(0.25), up: r(0.15) };
+    commit({ morphs }, { ...sculpt, extended: {}, regions });
+  };
+  const resetAll = () => commit({ morphs: Object.fromEntries(Object.keys(a.morphs).map((k) => [k, 0])) as NpcAppearance['morphs'] }, emptySculpt());
+
+  const pages: { id: FacePage; label: string; enabled: boolean }[] = [
+    ...(['head', 'nose', 'eyes', 'brows', 'cheeks', 'mouth', 'jaw', 'chin', 'ears'] as FaceRegion[]).map((r) => ({ id: r as FacePage, label: r === 'head' ? 'Head' : REGION_LABELS[r].replace(' & lips', ''), enabled: info.regions.includes(r) || !info.regions.length })),
+    { id: 'more', label: `More shapes${info.extraMorphs.length ? ` (${info.extraMorphs.length})` : ''}`, enabled: true },
+  ];
+  const changed = (p: FacePage) =>
+    p === 'more'
+      ? Object.values(sculpt.morphs).some((v) => !!v)
+      : Object.values(sculpt.regions[p] ?? {}).some((v) => !!v) || (FACE_GROUPS.find((g) => g.title === REGION_GROUP[p])?.keys ?? []).some((k) => k !== 'vampireMorph' && !!a.morphs[k]);
+  const groupKeys = page === 'more' ? [] : (FACE_GROUPS.find((g) => g.title === REGION_GROUP[page])?.keys ?? []);
+
   return (
-    <div className="col" style={{ gap: 10 }}>
-      <div className="row" style={{ gap: 4 }}>
-        <button
-          className="btn small"
-          onClick={() => {
-            const morphs = Object.fromEntries(Object.keys(a.morphs).map((k) => [k, k === 'vampireMorph' ? a.morphs[k as keyof typeof a.morphs] : Math.round((Math.random() * 1.4 - 0.7) * 100) / 100])) as NpcAppearance['morphs'];
-            setA({ ...a, morphs });
-            void commit({ morphs });
-          }}
-        >
+    <div className="col" style={{ gap: 10 }} data-testid="face-tab">
+      <div className="row wrap" style={{ gap: 4 }}>
+        <button className="btn small" onClick={randomize} title="A random face: every game slider and a little of each feature's size, width and height">
           <Icon name="wand" size={12} /> Randomize
         </button>
-        <button
-          className="btn small ghost"
-          onClick={() => {
-            const morphs = Object.fromEntries(Object.keys(a.morphs).map((k) => [k, 0])) as NpcAppearance['morphs'];
-            setA({ ...a, morphs });
-            void commit({ morphs });
-          }}
-        >
-          Reset
+        <button className="btn small ghost" onClick={resetAll} title="Every slider and shape back to the race's plain face (Undo brings it back)">
+          Reset all
+        </button>
+        <span className="grow" />
+        <Checkbox checked={beyond} onChange={setBeyond} label="Beyond game limits" help="Let sliders go further than the game's own character creator allows (up to 3× as far). The plugin keeps the in-game range; the full shape is baked into the face files, so it shows in game without SKSE or RaceMenu." />
+      </div>
+      <div className="chips" style={{ flexWrap: 'wrap' }} role="tablist">
+        {pages.map((p) => (
+          <button
+            key={p.id}
+            className={`chip ${page === p.id ? 'accent' : ''}`}
+            style={{ cursor: p.enabled ? 'pointer' : 'not-allowed', opacity: p.enabled ? 1 : 0.5 }}
+            disabled={!p.enabled}
+            title={p.enabled ? (p.id === 'more' ? 'Extra morphs found in the head parts’ .tri files' : `Shape the ${REGION_LABELS[p.id as FaceRegion].toLowerCase()}`) : "This head's morphs don't say where this feature is"}
+            onClick={() => setPage(p.id)}
+            data-testid={`face-page-${p.id}`}
+          >
+            {p.label}
+            {changed(p.id) && <span title="Changed"> •</span>}
+          </button>
+        ))}
+      </div>
+
+      {page === 'more' ? (
+        info.extraMorphs.length ? (
+          <div className="col" style={{ gap: 4 }}>
+            <p className="dim small" style={{ margin: 0 }}>
+              Extra shapes the head parts carry (from their .tri files), like the ones RaceMenu morph packs add.
+            </p>
+            {info.extraMorphs.map((m) => (
+              <Field key={m} label={m.replace(/([a-z])([A-Z])/g, '$1 $2')} title={`Morph “${m}”: 0 = off, 1 = full${beyond ? ', 2 = exaggerated' : ''}`}>
+                <Slider value={sculpt.morphs[m] ?? 0} min={0} max={beyond ? 2 : 1} step={0.01} onChange={(v) => morph(m, v, false)} onCommit={(v) => morph(m, v, true)} />
+              </Field>
+            ))}
+          </div>
+        ) : (
+          <div className="empty small">These head parts have no extra morphs. Morph packs (such as those made for RaceMenu) add them to the head's .tri files; install one and they appear here.</div>
+        )
+      ) : (
+        <>
+          {groupKeys.length > 0 && (
+            <div>
+              <h4 style={{ margin: '2px 0 4px' }}>
+                Game sliders <Help text="The sliders the game's own character creator has. Within −1…1 they're stored in the plugin as usual." />
+              </h4>
+              {groupKeys.map((k) => (
+                <Field key={k} label={MORPH_LABEL[k]!.replace(`${REGION_GROUP[page as FaceRegion]} `, '')} title={MORPH_LABEL[k]}>
+                  <Slider value={sculpt.extended[k] ?? a.morphs[k] ?? 0} min={-lim} max={lim} step={0.01} onChange={(v) => vanilla(k, v, false)} onCommit={(v) => vanilla(k, v, true)} />
+                </Field>
+              ))}
+            </div>
+          )}
+          <div>
+            <h4 style={{ margin: '2px 0 4px' }}>
+              Shape <Help text="Extra sliders the game doesn't have, like RaceMenu's. They move and resize this feature (both sides together for eyes, brows, cheeks and ears) and are baked into the face files. The neck never moves, so the head still fits the body." />
+            </h4>
+            {REGION_CONTROLS_FOR[page as FaceRegion].map((c) => (
+              <Field key={c} label={CONTROL_LABEL[c]} title={CONTROL_HELP[c]}>
+                <Slider value={sculpt.regions[page as FaceRegion]?.[c] ?? 0} min={-lim} max={lim} step={0.01} onChange={(v) => region(page as FaceRegion, c, v, false)} onCommit={(v) => region(page as FaceRegion, c, v, true)} />
+              </Field>
+            ))}
+          </div>
+        </>
+      )}
+      <div className="row">
+        <button className="btn small ghost" onClick={resetPage} disabled={!changed(page)} title="Put this page's sliders back to zero (Undo brings them back)">
+          Reset {page === 'more' ? 'extra shapes' : REGION_LABELS[page as FaceRegion].toLowerCase()}
         </button>
       </div>
-      {FACE_GROUPS.map((g) => (
-        <div key={g.title}>
-          <h3 style={{ margin: '4px 0' }}>{g.title}</h3>
-          {g.keys.map((k) => (
-            <Field key={k} label={MORPH_LABEL[k]!.replace(`${g.title} `, '')} title={MORPH_LABEL[k]}>
-              <Slider value={a.morphs[k] ?? 0} min={-1} max={1} step={0.01} onChange={(v) => set(k, v, false)} onCommit={(v) => set(k, v, true)} />
-            </Field>
-          ))}
-        </div>
-      ))}
     </div>
   );
 }
@@ -392,35 +522,79 @@ function ColorsTab({ a, colors, commit }: { a: NpcAppearance; colors: { formKey:
   );
 }
 
+/** Face paint: the race's tint masks, by name, each with a colour and strength, and a preview of the baked tint. */
 function TintsTab({ a, commit }: { a: NpcAppearance; commit: (p: Partial<NpcAppearance>) => void }) {
+  const client = useStore((s) => s.client);
+  const { data: masks } = useQuery(() => client?.call('raceTintMasks', a.race, a.female), [a.race, a.female]);
+  const tintKey = JSON.stringify([a.tints, a.skinTone, a.race, a.female]);
+  const { data: tint } = useQuery(() => client?.call('previewTint', a), [tintKey]);
+  const canvas = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const c = canvas.current?.getContext('2d');
+    if (!c || !tint) return;
+    c.putImageData(new ImageData(new Uint8ClampedArray(tint.rgba), tint.width, tint.height), 0, 0);
+  }, [tint]);
   const set = (i: number, t: Partial<NpcAppearance['tints'][number]>) => commit({ tints: a.tints.map((x, j) => (j === i ? { ...x, ...t } : x)) });
+  const nameOf = (index: number) => masks?.find((m) => m.index === index)?.name;
+  const unused = (masks ?? []).filter((m) => !a.tints.some((t) => t.index === m.index));
+  const [adding, setAdding] = useState<number | ''>('');
   return (
-    <div className="col" style={{ gap: 8 }}>
+    <div className="col" style={{ gap: 8 }} data-testid="paint-tab">
       <p className="dim small" style={{ margin: 0 }}>
-        Face paint, dirt and complexion layers. The layer index refers to the race's tint masks.
+        Face paint, dirt and complexion. Each layer colours one of the race's tint masks; the preview shows the face tint that's baked for the game.
       </p>
+      <div className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
+        <canvas ref={canvas} width={128} height={128} style={{ width: 96, height: 96, borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg)' }} title="The face tint as it will be baked (the head's texture layout, unwrapped)" data-testid="tint-preview" />
+        <div className="dim small grow">This is the head's texture laid flat, so features sit where the head's UVs put them.</div>
+      </div>
+      {!a.tints.length && <div className="empty small">No paint layers yet: the face is just the skin tone. Add one below.</div>}
       {a.tints.map((t, i) => (
         <div key={i} className="card" style={{ padding: 8 }}>
           <div className="row" style={{ gap: 6 }}>
-            <span className="mono dim" style={{ width: 30 }}>
-              #{t.index}
+            <span className="grow small" title={`Race tint mask #${t.index}`} style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {nameOf(t.index) ?? <span className="warn">#{t.index} (not in this race)</span>}
             </span>
-            <input type="color" value={toHex({ r: t.color.r / 255, g: t.color.g / 255, b: t.color.b / 255 })} onChange={(e) => {
-              const c = fromHex(e.target.value);
-              void set(i, { color: { r: Math.round(c.r * 255), g: Math.round(c.g * 255), b: Math.round(c.b * 255), a: t.color.a } });
-            }} />
-            <div className="grow">
-              <Slider value={t.value} min={0} max={100} step={1} onCommit={(value) => set(i, { value })} />
-            </div>
-            <button className="btn icon ghost" title="Remove layer" onClick={() => commit({ tints: a.tints.filter((_, j) => j !== i) })}>
+            <input
+              type="color"
+              title="Layer colour"
+              value={toHex({ r: t.color.r / 255, g: t.color.g / 255, b: t.color.b / 255 })}
+              onChange={(e) => {
+                const c = fromHex(e.target.value);
+                void set(i, { color: { r: Math.round(c.r * 255), g: Math.round(c.g * 255), b: Math.round(c.b * 255), a: t.color.a } });
+              }}
+            />
+            <button className="btn icon ghost" title="Remove this layer (Undo brings it back)" onClick={() => commit({ tints: a.tints.filter((_, j) => j !== i) })}>
               <Icon name="close" size={12} />
             </button>
           </div>
+          <Field label="Strength" title="0 = none, 100 = full colour where the mask is white">
+            <Slider value={t.value} min={0} max={100} step={1} onCommit={(value) => set(i, { value })} />
+          </Field>
         </div>
       ))}
-      <button className="btn small" onClick={() => commit({ tints: [...a.tints, { index: (a.tints.reduce((m, t) => Math.max(m, t.index), 0) || 0) + 1, color: { r: 128, g: 128, b: 128, a: 0 }, value: 50, preset: 0 }] })}>
-        <Icon name="plus" size={12} /> Add layer
-      </button>
+      {masks && !masks.length ? (
+        <div className="dim small">This race has no tint masks, so there's nothing to paint.</div>
+      ) : (
+        <div className="row" style={{ gap: 6 }}>
+          <div className="grow">
+            <Select value={adding === '' ? '' : String(adding)} options={[{ value: '', label: unused.length ? 'Choose a layer…' : 'Every layer is used' }, ...unused.map((m) => ({ value: String(m.index), label: m.name }))]} onChange={(v) => setAdding(v === '' ? '' : Number(v))} />
+          </div>
+          <button
+            className="btn small"
+            disabled={adding === ''}
+            title="Add this mask as a paint layer"
+            onClick={() => {
+              if (adding === '') return;
+              const skin = masks?.find((m) => m.index === adding)?.type === 6;
+              commit({ tints: [...a.tints, { index: adding, color: skin ? { r: Math.round(a.skinTone.r * 255), g: Math.round(a.skinTone.g * 255), b: Math.round(a.skinTone.b * 255), a: 0 } : { r: 120, g: 40, b: 40, a: 0 }, value: skin ? 100 : 50, preset: 0 }] });
+              setAdding('');
+            }}
+            data-testid="add-tint"
+          >
+            <Icon name="plus" size={12} /> Add layer
+          </button>
+        </div>
+      )}
     </div>
   );
 }

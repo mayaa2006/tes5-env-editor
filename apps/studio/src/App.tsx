@@ -67,11 +67,12 @@ export function App() {
       return;
     }
     const st = useStore.getState().settings;
-    const r = await engine((c) => c.call('save', { removeItms: st.autoCleanOnSave, updateBounds: st.updateBoundsOnSave, generateSeq: st.generateSeqOnSave }), { busy: 'Saving…' });
+    const r = await engine((c) => c.call('save', { removeItms: st.autoCleanOnSave, updateBounds: st.updateBoundsOnSave, generateSeq: st.generateSeqOnSave, generateFaces: st.generateFacesOnSave }), { busy: 'Saving…' });
     if (r) {
       const parts = [`Saved ${session.activePlugin}`];
       if (r.clean?.itmsRemoved.length) parts.push(`${r.clean.itmsRemoved.length} identical-to-master record(s) cleaned`);
       if (r.boundsChanged.length) parts.push(`${r.boundsChanged.length} object bounds updated`);
+      if (r.facesGenerated) parts.push(`${r.facesGenerated} face(s) generated`);
       if (r.extraFiles.length) parts.push(`also wrote ${r.extraFiles.length} file(s)`);
       useStore.getState().toast('success', parts.join(' · '));
       for (const w of r.warnings) useStore.getState().toast('warning', w);

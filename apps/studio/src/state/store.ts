@@ -23,6 +23,8 @@ export interface Settings {
   autoCleanOnSave: boolean;
   updateBoundsOnSave: boolean;
   generateSeqOnSave: boolean;
+  /** Bake FaceGen for changed characters on save, so no Creation Kit is needed. */
+  generateFacesOnSave: boolean;
   snapMove: number;
   snapRotateDeg: number;
   snapScale: number;
@@ -46,6 +48,7 @@ const DEFAULT_SETTINGS: Settings = {
   autoCleanOnSave: true,
   updateBoundsOnSave: true,
   generateSeqOnSave: true,
+  generateFacesOnSave: true,
   snapMove: 16,
   snapRotateDeg: 15,
   snapScale: 0.1,

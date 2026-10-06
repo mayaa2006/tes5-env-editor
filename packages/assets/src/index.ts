@@ -4,3 +4,4 @@ export * from './lz4';
 export * from './nif';
 export * from './nif-writer';
 export * from './tri';
+export * from './nif-blocks';

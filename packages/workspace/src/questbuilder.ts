@@ -1085,7 +1085,7 @@ export class QuestBuilder {
 
   private finishNotes(report: QuestBuildReport): void {
     const created = report.created.filter((c) => c.kind === 'character');
-    if (created.length) report.notes.push(`New characters need their faces exported from the Creation Kit before release (select them, Ctrl+F4), or they'll have dark faces. The Release tab lists them.`);
+    if (created.length) report.notes.push(`New characters get their face files (FaceGen) when you save, or from the Release tab's Character faces — no Creation Kit needed.`);
   }
 
   private createCharacter(c: PlanCharacter, template: FormKey, prefix: string, random: () => number, report: QuestBuildReport): FormKey {

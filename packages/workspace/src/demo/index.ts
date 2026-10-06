@@ -88,6 +88,21 @@ const TEXTURES: Record<string, Uint8Array> = {
   marker: texture(8, 8, () => [255, 80, 200, 255]),
 };
 
+/** Demo race tint masks, in the head's UV space (u around from +x, v down from the crown; the face is at u≈0.25). */
+const blob = (u: number, v: number, cu: number, cv: number, ru: number, rv: number) => Math.max(0, 1 - Math.hypot((u - cu) / ru, (v - cv) / rv));
+const mask = (fn: (u: number, v: number) => number) =>
+  texture(64, 64, (x, y) => {
+    const g = Math.round(Math.max(0, Math.min(1, fn((x + 0.5) / 64, (y + 0.5) / 64))) * 255);
+    return [g, g, g, 255];
+  });
+export const DEMO_TINT_MASKS: { index: number; file: string; type: number; dds: Uint8Array }[] = [
+  { index: 1, file: 'SkinTone', type: 6, dds: mask(() => 1) },
+  { index: 2, file: 'Cheeks', type: 2, dds: mask((u, v) => Math.min(1, 1.6 * Math.max(blob(u, v, 0.14, 0.53, 0.07, 0.08), blob(u, v, 0.36, 0.53, 0.07, 0.08)))) },
+  { index: 3, file: 'Lips', type: 1, dds: mask((u, v) => Math.min(1, 2 * blob(u, v, 0.25, 0.61, 0.05, 0.025))) },
+  { index: 4, file: 'EyeSocketUpper', type: 4, dds: mask((u, v) => Math.min(1, 1.8 * Math.max(blob(u, v, 0.19, 0.4, 0.04, 0.03), blob(u, v, 0.31, 0.4, 0.04, 0.03)))) },
+  { index: 5, file: 'Warpaint01', type: 9, dds: mask((u, v) => (Math.abs(u - 0.19) < 0.018 && v > 0.33 && v < 0.62 ? 1 : 0)) },
+];
+
 function nif(...shapes: Parameters<typeof shape>[]): Uint8Array {
   return writeNif(
     shapes.map((s) => shape(...s)),
@@ -150,8 +165,13 @@ function headMesh(female: boolean): { mesh: MeshData; tri: Uint8Array } {
     OverBite: (x, y, z) => [0, front(y) * near(x, y, z, 0, 11, -7, 4), 0],
     UnderBite: (x, y, z) => [0, front(y) * near(x, y, z, 0, 10, -9, 4), 0],
     VampireMorph: (x, y, z) => [0, 0, -0.5 * near(x, y, z, 0, 0, 0, 12)],
+    // Extra morphs, like the ones RaceMenu morph packs add (shown as "More shapes").
+    NoseHooked: (x, y, z) => [0, 1.2 * near(x, y, z, 0, 12, 2, 3), -0.8 * near(x, y, z, 0, 12, -1, 3)],
+    EarsPointed: (x, _y, z) => [Math.sign(x) * 2 * near(Math.abs(x), 0, z, 10.5, 0, 2, 4), 0, 2.5 * near(Math.abs(x), 0, z, 10.5, 0, 2, 4)],
+    LipsFull: (x, y, z) => [0, 0.9 * near(x, y, z, 0, 11, -5, 3), 0.3 * Math.sign(z + 5) * near(x, y, z, 0, 11, -5, 3)],
+    CheekbonesHigh: (x, y, z) => [Math.sign(x) * 0.8 * near(Math.abs(x), y, z, 8, 6, 1, 4), 0.6 * near(Math.abs(x), y, z, 8, 6, 1, 4), 0],
   };
-  const morphs = CHARGEN_SLIDER_MORPHS.flat()
+  const morphs = [...CHARGEN_SLIDER_MORPHS.flat(), 'NoseHooked', 'EarsPointed', 'LipsFull', 'CheekbonesHigh']
     .filter((n) => n && effects[n])
     .map((name) => ({ name, deltas: region(effects[name]!) }));
   const tri = writeTri({ vertices: new Float32Array(m.positions), triangles: new Uint32Array(m.indices), uvs: new Float32Array(m.uvs), morphs });
@@ -189,6 +209,7 @@ function meshesAndTextures(): Record<string, Uint8Array> {
   files['meshes\\demo\\ground.nif'] = nif(['Ground', terrain(4096, 16, 60), [T('grass')]]);
   const male = headMesh(false);
   const female = headMesh(true);
+  for (const m of DEMO_TINT_MASKS) files[`textures\\demo\\tintmasks\\${m.file.toLowerCase()}.dds`] = m.dds;
   files['meshes\\demo\\head_male.nif'] = nif(['MaleHead', male.mesh, [T('skin')]]);
   files['meshes\\demo\\head_male_chargen.tri'] = male.tri;
   files['meshes\\demo\\head_female.nif'] = nif(['FemaleHead', female.mesh, [T('skin')]]);
@@ -292,6 +313,17 @@ function buildDemoMaster(): Plugin {
   const brows = hp('DemoBrows', 'Brows', 6, 1 | 2 | 4, 'demo\\brows.nif');
   const beard = hp('DemoBeardFull', 'Full Beard', 4, 1 | 2, 'demo\\beard.nif');
   const race = rec(p, 'RACE', raceId, { editorId: 'DemoHumanRace', name: 'Human', description: 'A sturdy demo people.', data: new Uint8Array(128) });
+  {
+    // Head data with tint masks for both sexes (only the parts FaceGen reads).
+    const r = [...p.recordsOfType('RACE')].find((x) => x.formId === race)!;
+    const u16 = (v: number) => new Uint8Array([v & 0xff, v >> 8]);
+    const z = (t: string) => new TextEncoder().encode(`${t}\0`);
+    for (const sex of ['MNAM', 'FNAM']) {
+      r.subrecords.push({ sig: 'NAM0', data: new Uint8Array(0) }, { sig: sex, data: new Uint8Array(0) });
+      for (const m of DEMO_TINT_MASKS) r.subrecords.push({ sig: 'TINI', data: u16(m.index) }, { sig: 'TINT', data: z(`demo\\tintmasks\\${m.file}.dds`) }, { sig: 'TINP', data: u16(m.type) });
+    }
+    r.markModified();
+  }
   const cls = rec(p, 'CLAS', id(), { editorId: 'DemoWarriorClass', name: 'Warrior', description: 'Fights things.', data: new Uint8Array(36) });
   const faction = rec(p, 'FACT', id(), { editorId: 'DemoTownFaction', name: 'Townsfolk', relations: [], flags: 0 });
   const gold = rec(p, 'GLOB', id(), { editorId: 'DemoGoldReward', type: 115, value: 100 });
@@ -320,7 +352,7 @@ function buildDemoMaster(): Plugin {
       textureLighting: { r: tone[0], g: tone[1], b: tone[2] },
       faceMorph: morph,
       faceParts: { nose: 0, unknown: -1, eyes: 0, mouth: 0 },
-      tintLayers: [{ index: 1, color: { r: 230, g: 190, b: 160, a: 0 }, value: 100, preset: 0 }],
+      tintLayers: [{ index: 1, color: { r: 230, g: 190, b: 160, a: 0 }, value: 100, preset: 0 }, ...(female ? [{ index: 3, color: { r: 170, g: 60, b: 70, a: 0 }, value: 60, preset: 0 }] : [])],
     });
   const smith = npc('DemoBlacksmith', 'Halvar the Smith', false, [headM, hairShort, eyes, brows, beard], hairBrown, { noseLongShort: -0.3, jawNarrowWide: 0.6, chinUnderbiteOverbite: 0.2 }, [0.85, 0.7, 0.6]);
   const keeper = npc('DemoInnkeeper', 'Brynja', true, [headF, hairLong, eyes, brows], hairBlack, { noseUpDown: 0.3, cheeksUpDown: 0.4, lipsInOut: 0.2 }, [0.9, 0.78, 0.7]);

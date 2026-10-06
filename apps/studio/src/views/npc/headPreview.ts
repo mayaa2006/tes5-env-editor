@@ -1,9 +1,11 @@
 /**
- * Live head preview for the character creator: loads each head part's mesh,
- * applies its chargen TRI morphs for the current sliders, and tints hair/skin.
+ * Live head preview for the character creator: loads each head part's mesh
+ * and TRI morphs, shapes them together with the same FaceShaper the FaceGen
+ * baker uses (sliders, extra morphs, region shaping), and tints hair/skin.
  */
 import * as THREE from 'three';
-import { applyMorphs, chargenMorphWeights, type TriFile } from '@tes5/assets';
+import type { TriFile } from '@tes5/assets';
+import { FaceShaper, type FaceLook } from '@tes5/workspace';
 import type { EngineClient } from '../../engine/client';
 import { AssetCache } from '../scene/assets3d';
 
@@ -13,14 +15,15 @@ export interface PreviewPart {
   key: string;
   type: string;
   model?: string;
-  chargenTri?: string;
+  /** Race and chargen morph TRIs (not expressions). */
+  tris: string[];
 }
 
 interface Loaded {
   part: PreviewPart;
   group: THREE.Group;
-  /** Mesh the TRI applies to, with its unmorphed positions. */
-  morphTarget?: { mesh: THREE.Mesh; base: Float32Array; tri: TriFile };
+  /** Mesh the TRIs apply to, with its unmorphed positions. */
+  morphTarget?: { mesh: THREE.Mesh; base: Float32Array; tris: TriFile[] };
 }
 
 export class HeadPreview {
@@ -38,7 +41,10 @@ export class HeadPreview {
   private ro: ResizeObserver;
   private raf = 0;
   private dirty = true;
-  private sliders: number[] = [];
+  private look: FaceLook = { sliders: [] };
+  private shaper?: FaceShaper;
+  /** Told when the shaper is rebuilt (new parts): which regions and extra morphs these parts offer. */
+  onShaper?: (info: { regions: string[]; extraMorphs: string[] }) => void;
   private hair = new THREE.Color(0.25, 0.18, 0.12);
   private skin = new THREE.Color(1, 1, 1);
   private generation = 0;
@@ -147,32 +153,58 @@ export class HeadPreview {
         }
       });
       const l: Loaded = { part, group };
-      if (part.chargenTri) {
+      const tris: TriFile[] = [];
+      let count = -1;
+      for (const file of part.tris) {
         try {
-          const t = await this.client.call('tri', part.chargenTri);
-          const tri = { morphs: t.morphs.map((m) => ({ name: m.name, deltas: m.deltas })) } as unknown as TriFile;
-          let target: THREE.Mesh | undefined;
-          group.traverse((o) => {
-            const m = o as THREE.Mesh;
-            if (!target && m.isMesh && m.geometry.getAttribute('position').count === t.vertexCount) target = m;
-          });
-          if (target) l.morphTarget = { mesh: target, base: (target.geometry.getAttribute('position').array as Float32Array).slice(), tri };
-          else missing.push(`${part.chargenTri}: vertex count doesn't match the mesh`);
+          const t = await this.client.call('tri', file);
+          if (count < 0) count = t.vertexCount;
+          else if (t.vertexCount !== count) continue;
+          tris.push({ morphs: t.morphs.map((m) => ({ name: m.name, deltas: m.deltas })) } as unknown as TriFile);
         } catch {
-          missing.push(part.chargenTri);
+          missing.push(file);
         }
       }
+      let target: THREE.Mesh | undefined;
+      group.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!target && m.isMesh && (count < 0 || m.geometry.getAttribute('position').count === count)) target = m;
+      });
+      if (target) l.morphTarget = { mesh: target, base: (target.geometry.getAttribute('position').array as Float32Array).slice(), tris };
+      else if (count >= 0) missing.push(`${part.tris[0]}: vertex count doesn't match the mesh`);
       if (gen !== this.generation) return { missing };
       this.loaded.set(part.key, l);
       this.scene.add(group);
     }
+    this.rebuildShaper();
     this.applyAll();
     return { missing };
   }
 
-  setSliders(values: number[]): void {
-    this.sliders = values;
-    for (const l of this.loaded.values()) this.applyMorph(l);
+  private rebuildShaper(): void {
+    const parts = [...this.loaded.values()].filter((l) => l.morphTarget).map((l) => ({ key: l.part.key, type: l.part.type, positions: l.morphTarget!.base, tris: l.morphTarget!.tris }));
+    this.shaper = parts.length ? new FaceShaper(parts) : undefined;
+    this.onShaper?.({ regions: this.shaper?.availableRegions() ?? [], extraMorphs: this.shaper?.extraMorphs() ?? [] });
+  }
+
+  /** Show a look: the 19 sliders (extended values merged in) plus sculpt. */
+  setLook(look: FaceLook): void {
+    this.look = look;
+    this.applyShape();
+  }
+
+  private applyShape(): void {
+    if (!this.shaper) return;
+    const shaped = this.shaper.shape(this.look);
+    for (const l of this.loaded.values()) {
+      const t = l.morphTarget;
+      const pos = t && shaped.get(l.part.key);
+      if (!t || !pos) continue;
+      const attr = t.mesh.geometry.getAttribute('position') as THREE.BufferAttribute;
+      (attr.array as Float32Array).set(pos);
+      attr.needsUpdate = true;
+      t.mesh.geometry.computeVertexNormals();
+    }
     this.dirty = true;
   }
 
@@ -184,8 +216,8 @@ export class HeadPreview {
   }
 
   private applyAll(): void {
+    this.applyShape();
     for (const l of this.loaded.values()) {
-      this.applyMorph(l);
       const isHair = l.part.type === 'Hair' || l.part.type === 'Facial Hair' || l.part.type === 'Eyebrows';
       l.group.traverse((o) => {
         const m = o as THREE.Mesh;
@@ -196,17 +228,6 @@ export class HeadPreview {
         else if (l.part.type === 'Face') mat.color.copy(this.skin);
       });
     }
-    this.dirty = true;
-  }
-
-  private applyMorph(l: Loaded): void {
-    const t = l.morphTarget;
-    if (!t) return;
-    const morphed = applyMorphs(t.base, chargenMorphWeights(t.tri, this.sliders));
-    const attr = t.mesh.geometry.getAttribute('position') as THREE.BufferAttribute;
-    (attr.array as Float32Array).set(morphed);
-    attr.needsUpdate = true;
-    t.mesh.geometry.computeVertexNormals();
     this.dirty = true;
   }
 
