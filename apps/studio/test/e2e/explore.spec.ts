@@ -251,7 +251,7 @@ test('exploratory sweep of every workspace', async ({ page }) => {
     if (await chips.count()) await chips.nth(Math.min(2, (await chips.count()) - 1)).click();
     await page.getByRole('tab', { name: 'Face' }).click();
     await page.getByRole('button', { name: 'Randomize' }).click();
-    await page.getByRole('button', { name: 'Reset', exact: true }).first().click();
+    await page.getByRole('button', { name: 'Reset all', exact: true }).click();
     const slider = page.locator('input[type=range]').first();
     const sb = (await slider.boundingBox())!;
     await page.mouse.click(sb.x + sb.width * 0.8, sb.y + sb.height / 2);
@@ -259,7 +259,11 @@ test('exploratory sweep of every workspace', async ({ page }) => {
     const sw = page.locator('.color-swatch');
     if (await sw.count()) await sw.last().click();
     await page.getByRole('tab', { name: 'Paint' }).click();
-    await page.getByRole('button', { name: /Add layer/ }).click();
+    const layer = page.getByTestId('paint-tab').locator('select');
+    if ((await layer.locator('option').count()) > 1) {
+      await layer.selectOption({ index: 1 });
+      await page.getByRole('button', { name: /Add layer/ }).click();
+    }
   });
   await run('characters: new NPC', async () => {
     await page.getByTestId('new-npc').click();

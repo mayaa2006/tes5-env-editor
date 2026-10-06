@@ -45,6 +45,8 @@ import {
   type RoomPlan,
   type ScatterOptions,
   NpcService,
+  FaceGenService,
+  type FaceSculpt,
   QuestGraphService,
   QuestService,
   TRIGGER_EVENTS,
@@ -138,6 +140,7 @@ export class EngineHost {
   ws?: Workspace;
   world?: WorldService;
   npcs?: NpcService;
+  faces?: FaceGenService;
   quests?: QuestService;
   scripts?: ScriptService;
   triggers?: TriggerService;
@@ -204,6 +207,7 @@ export class EngineHost {
     this.ws = ws;
     this.world = new WorldService(ws);
     this.npcs = new NpcService(ws);
+    this.faces = new FaceGenService(ws, this.npcs);
     this.scripts = new ScriptService(ws);
     this.scripts.runner = this.runner;
     this.quests = new QuestService(ws, this.scripts);
@@ -211,7 +215,7 @@ export class EngineHost {
     this.graphs = new QuestGraphService(ws, this.quests, this.scripts, this.triggers);
     this.dialogue = new DialogueService(ws, this.quests);
     this.env = new EnvironmentService(ws);
-    this.release = new ReleaseService(ws, this.scripts, this.npcs, this.quests, this.graphs, this.env);
+    this.release = new ReleaseService(ws, this.scripts, this.npcs, this.quests, this.graphs, this.env, this.faces);
     this.builder = new QuestBuilder(ws, this.quests, this.graphs, this.dialogue, this.npcs, this.env);
     this.meshCache.clear();
     ws.on((e) => {
@@ -273,11 +277,13 @@ export class EngineHost {
     return this.session();
   }
 
-  async save(opts: SaveOptions & { updateBounds?: boolean } = {}) {
+  async save(opts: SaveOptions & { updateBounds?: boolean; generateFaces?: boolean } = {}) {
     const ws = this.requireWs();
     const boundsChanged = opts.updateBounds === false ? [] : await updateBounds(ws);
+    // Faces first, so the save that follows is the one that matches them.
+    const faces = opts.generateFaces ? await this.faces!.generate() : [];
     const res = await ws.save(opts);
-    return { ...res, boundsChanged, session: this.session() };
+    return { ...res, warnings: [...res.warnings, ...faces.flatMap((f) => f.warnings)], boundsChanged, facesGenerated: faces.length, session: this.session() };
   }
 
   undo(): SessionInfo {
@@ -546,6 +552,50 @@ export class EngineHost {
 
   faceGenProblems() {
     return this.npcs!.faceGenProblems();
+  }
+
+  /** The look the record can't hold: extended sliders, extra morphs, region shaping. */
+  faceSculpt(npc: FormKey) {
+    return this.faces!.sculpt(npc);
+  }
+
+  /** Change record look and sculpt together (one undo step). */
+  async setNpcLook(npc: FormKey, a: Partial<NpcAppearance>, sculpt?: FaceSculpt) {
+    await this.faces!.setLook(npc, a, sculpt);
+    return { appearance: this.npcs!.appearance(npc), sculpt: await this.faces!.sculpt(npc) };
+  }
+
+  /** Whether this character's face files exist and match their look. */
+  async faceStatus(npc: FormKey) {
+    const paths = this.npcs!.faceGenPaths(npc);
+    const canBake = this.faces!.headPartsOf(npc).some((p) => p.type === 'Face' && !!p.model);
+    const present = this.ws!.vfs.has(paths.mesh) && this.ws!.vfs.has(paths.tint);
+    const needing = await this.faces!.needingFaces();
+    return { present, canBake, needed: needing.includes(npc), paths };
+  }
+
+  facesNeeded() {
+    return this.faces!.needingFaces();
+  }
+
+  /** Bake and write FaceGen (default: every character that needs it). One undo step. */
+  generateFaces(npcs?: FormKey[]) {
+    return this.faces!.generate(npcs);
+  }
+
+  raceTintMasks(race: FormKey | null, female: boolean) {
+    return this.faces!.raceTintMasks(race, female);
+  }
+
+  /** The face tint as it would be baked, small, for the Paint page. */
+  async previewTint(a: NpcAppearance) {
+    const dds = parseDds(await this.faces!.composeTint(a));
+    const full = decodeToRgba(dds.mipmaps[0]!, dds.format)!;
+    const size = 128;
+    const step = dds.width / size;
+    const rgba = new Uint8Array(size * size * 4);
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) rgba.set(full.subarray(((y * step) * dds.width + x * step) * 4, ((y * step) * dds.width + x * step) * 4 + 4), (y * size + x) * 4);
+    return { width: size, height: size, rgba };
   }
 
   // ---------------------------------------------------------------- quests
@@ -916,6 +966,8 @@ export class EngineHost {
         return (await this.generateNavmesh(fix.cell)).triangles;
       case 'dropToSurface':
         return (await this.env!.dropToSurface(fix.refs)).moved.length;
+      case 'generateFaces':
+        return (await this.faces!.generate(fix.npcs)).length;
     }
   }
 

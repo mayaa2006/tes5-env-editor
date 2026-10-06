@@ -26,3 +26,5 @@ export * from './dialogueif';
 export * from './characteredit';
 export * from './routines';
 export * from './placement';
+export * from './faceshape';
+export * from './facegen';

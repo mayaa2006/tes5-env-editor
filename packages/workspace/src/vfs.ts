@@ -158,6 +158,16 @@ export class VirtualData {
     return { folders: [...folders].sort(), files: files.sort((a, b) => a.path.localeCompare(b.path)) };
   }
 
+  /** Forget a generated loose file that was removed (undo), uncovering whatever it overrode. */
+  removeLoose(root: string, relPath: string): void {
+    const key = normalizePath(relPath);
+    const e = this.entries.get(key);
+    if (!e || e.source.kind !== 'loose' || e.source.root !== root) return;
+    const prev = e.overridden.pop();
+    if (prev) e.source = prev;
+    else this.entries.delete(key);
+  }
+
   /** Register an in-memory/generated file (e.g. a newly saved script) without rescanning. */
   addLoose(root: string, relPath: string): void {
     this.add(normalizePath(relPath), { kind: 'loose', root, file: relPath.replace(/\\/g, '/') });

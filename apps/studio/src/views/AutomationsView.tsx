@@ -46,6 +46,12 @@ function OnSave() {
           label="Write the SEQ file for start-game-enabled quests with dialogue"
           help="Quests that run from the start of the game and have dialogue need a .seq file, or their dialogue won't show up until the game is restarted. The Creation Kit only writes it when you remember to ask."
         />
+        <Checkbox
+          checked={settings.generateFacesOnSave}
+          onChange={(generateFacesOnSave) => update({ generateFacesOnSave })}
+          label="Generate face files for characters whose look changed"
+          help="Characters with a changed face need FaceGen files (a head mesh and a face tint) or they show the dark-face bug in game. They're baked from your sliders and paint and written next to your plugin, in place of the Creation Kit's Ctrl+F4. Only changed faces are rebuilt, and Undo removes them again."
+        />
       </div>
     </div>
   );

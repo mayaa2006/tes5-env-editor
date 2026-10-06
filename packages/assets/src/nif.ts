@@ -150,7 +150,7 @@ export function halfToFloat(h: number): number {
   return (s ? -1 : 1) * Math.pow(2, e - 15) * (1 + f / 1024);
 }
 
-const NODE_TYPES = new Set([
+export const NODE_TYPES: ReadonlySet<string> = new Set([
   'NiNode', 'BSFadeNode', 'BSLeafAnimNode', 'BSTreeNode', 'BSMultiBoundNode', 'BSOrderedNode', 'BSValueNode', 'NiSwitchNode',
   'NiBillboardNode', 'BSBlastNode', 'BSDamageStage', 'BSMasterParticleSystem', 'NiLODNode', 'BSDebrisNode',
 ]);
@@ -503,6 +503,35 @@ function readEffectShader(r: Reader, h: Header): ParsedBlock {
       alpha: base[3]!,
     },
   };
+}
+
+/** @internal Header and raw block bytes, for the block-level editor (nif-blocks.ts). */
+export function splitNif(bytes: Uint8Array): { version: number; userVersion: number; bsVersion: number; strings: string[]; blocks: { type: string; data: Uint8Array }[]; roots: number[] } {
+  const r = new Reader(bytes);
+  const h = readHeader(r);
+  const blocks: { type: string; data: Uint8Array }[] = [];
+  let pos = h.dataStart;
+  for (let i = 0; i < h.numBlocks; i++) {
+    const size = h.blockSizes[i]!;
+    if (pos + size > bytes.byteLength) throw new RangeError(`NIF block ${i} runs past the end of the file`);
+    blocks.push({ type: h.blockTypes[h.blockTypeIndex[i]!] ?? 'Unknown', data: bytes.slice(pos, pos + size) });
+    pos += size;
+  }
+  r.pos = pos;
+  const roots: number[] = [];
+  const n = r.count(r.u32(), 4);
+  for (let i = 0; i < n; i++) roots.push(r.i32());
+  return { version: h.version, userVersion: h.userVersion, bsVersion: h.bsVersion, strings: h.strings, blocks, roots };
+}
+
+/** @internal Geometry of one shape or shape-data block (positions are the stored, local ones). */
+export function readGeometryBlock(type: string, data: Uint8Array, bsVersion: number, strings: string[]): Omit<NifMesh, 'material' | 'name' | 'blockIndex'> | undefined {
+  const r = new Reader(data);
+  const h = { bsVersion, strings } as Header;
+  if (type === 'BSTriShape' || type === 'BSSubIndexTriShape') return readBSTriShape(r, h, false).mesh;
+  if (type === 'BSDynamicTriShape') return readBSTriShape(r, h, true).mesh;
+  if (type === 'NiTriShapeData' || type === 'NiTriStripsData') return readGeometryData(r, h, type).mesh;
+  return undefined;
 }
 
 /** Parse a NIF and build its scene graph. */

@@ -267,7 +267,7 @@ export class CharacterEditor {
       if (e instanceof WorkspaceError) ctx.warn(`${c.name}'s look couldn't be set: ${e.message}`);
       else throw e;
     }
-    if (!ctx.isNew && (c.look || changed.length)) ctx.note(`${c.name}'s face changed, so their FaceGen needs exporting again from the Creation Kit (Ctrl+F4).`);
+    if (!ctx.isNew && (c.look || changed.length)) ctx.note(`${c.name}'s face changed; their face files are made again when you save.`);
   }
 }
 

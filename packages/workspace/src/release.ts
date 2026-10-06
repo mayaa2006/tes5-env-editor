@@ -17,6 +17,7 @@ import { lintQuestDialogue } from './dialoguelint';
 import { EnvironmentService } from './environment';
 import { basename, joinPath } from './fs';
 import type { NpcService } from './npc';
+import type { FaceGenService } from './facegen';
 import type { QuestService } from './quest';
 import type { QuestGraphService } from './questgraph';
 import type { ScriptService } from './scripts';
@@ -24,7 +25,7 @@ import type { ScriptService } from './scripts';
 export type FindingSeverity = 'error' | 'warning' | 'info';
 export type FindingCategory = 'assets' | 'scripts' | 'quests' | 'dialogue' | 'world' | 'navmesh' | 'characters' | 'plugin';
 /** One-click fixes the UI can offer next to a finding. */
-export type FindingFix = { kind: 'autofill'; form: FormKey } | { kind: 'updateBounds' } | { kind: 'generateNavmesh'; cell: FormKey } | { kind: 'dropToSurface'; refs: FormKey[] };
+export type FindingFix = { kind: 'autofill'; form: FormKey } | { kind: 'generateFaces'; npcs: FormKey[] } | { kind: 'updateBounds' } | { kind: 'generateNavmesh'; cell: FormKey } | { kind: 'dropToSurface'; refs: FormKey[] };
 
 export interface Finding {
   severity: FindingSeverity;
@@ -112,6 +113,7 @@ export class ReleaseService {
     readonly quests: QuestService,
     readonly graphs: QuestGraphService,
     env?: EnvironmentService,
+    readonly faces?: FaceGenService,
   ) {
     this.env = env ?? new EnvironmentService(ws);
   }
@@ -226,8 +228,21 @@ export class ReleaseService {
     }
 
     // Characters: FaceGen and voice.
+    const needing = this.faces ? await this.faces.needingFaces() : [];
+    for (const npc of needing) {
+      const missing = this.npcs.faceGenProblems().some((p) => p.npc === npc);
+      add({
+        severity: 'warning',
+        category: 'characters',
+        message: missing ? `${label(npc)} has no FaceGen files` : `${label(npc)}'s FaceGen files are out of date`,
+        detail: missing ? 'Their face would be dark or mismatched in game (the "dark face bug"). Generate their face files — no Creation Kit needed.' : 'Their face changed since the face files were made, so the game would show the old face. Generate them again.',
+        form: npc,
+        fix: { kind: 'generateFaces', npcs: needing },
+      });
+    }
     for (const p of this.npcs.faceGenProblems())
-      add({ severity: 'warning', category: 'characters', message: `${p.editorId ?? p.npc} has no FaceGen files`, detail: 'Their face will be dark or mismatched in game (the "dark face bug"). Export FaceGen from the Creation Kit (select them, Ctrl+F4).', form: p.npc });
+      if (!needing.includes(p.npc))
+        add({ severity: 'warning', category: 'characters', message: `${p.editorId ?? p.npc} has no FaceGen files`, detail: this.faces ? "Their face would be dark in game, and it can't be generated because they have no head part with a mesh. Give them a head on the Characters tab." : 'Their face will be dark or mismatched in game (the "dark face bug").', form: p.npc });
     for (const { record, key } of own) {
       if (record.sig !== 'NPC_' || parseFormKey(key).plugin !== a.name) continue;
       const d = this.ws.view(key)?.data as { voice?: FormKey | null; template?: FormKey | null } | undefined;

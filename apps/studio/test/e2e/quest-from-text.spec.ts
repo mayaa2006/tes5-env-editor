@@ -81,7 +81,7 @@ test('write a quest, let Claude plan it, check it and build it', async ({ page }
   const result = dlg.getByTestId('build-result');
   await expect(result).toContainText('StolenRingQuest is built');
   await expect(result).toContainText('Eirik (StolenRingQuestEirik)');
-  await expect(result).toContainText('Ctrl+F4');
+  await expect(result).toContainText('face files');
   await result.getByTestId('open-built-quest').click();
   await expect(page.getByTestId('quest-map')).toBeVisible();
   await expect(page.getByTestId('quest-map')).toContainText('Brynja asked me to find her ring.');

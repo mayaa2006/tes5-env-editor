@@ -28,6 +28,7 @@ const FIX_LABEL: Record<NonNullable<Finding['fix']>['kind'], string> = {
   updateBounds: 'Recalculate bounds',
   generateNavmesh: 'Generate navmesh',
   dropToSurface: 'Drop onto surface',
+  generateFaces: 'Generate faces',
 };
 
 /** Take the user to the thing a finding is about. */
@@ -227,32 +228,65 @@ function Esl() {
 
 function FaceGen() {
   const client = useStore((s) => s.client);
-  const { data } = useQuery(() => client?.call('faceGenProblems'), [client]);
+  const { data: needed } = useQuery(() => client?.call('facesNeeded'), [client]);
+  const { data: problems } = useQuery(() => client?.call('faceGenProblems'), [client]);
+  const stuck = (problems ?? []).filter((p) => !needed?.includes(p.npc));
+  const generate = async () => {
+    const r = await engine((c) => c.call('generateFaces'), { busy: 'Generating faces…' });
+    if (r) {
+      useStore.getState().toast('success', `Generated ${r.length} face(s)`);
+      for (const w of r.flatMap((x) => x.warnings)) useStore.getState().toast('warning', w);
+    }
+  };
+  const total = (needed?.length ?? 0) + stuck.length;
   return (
-    <div className="card">
+    <div className="card" data-testid="release-faces">
       <div className="card-title">
         Character faces
-        <Help text="When you change a character's face, the game needs matching FaceGen files (a head mesh and a face tint). Without them the face shows dark or wrong in game — the 'dark face bug'." />
-        {data && (data.length ? <span className="chip warn">{data.length} need FaceGen</span> : <span className="chip ok">OK</span>)}
+        <Help text="When you change a character's face, the game needs matching FaceGen files: a head mesh with the sliders baked in, and a face tint. Without them the face shows dark or wrong in game (the 'dark face bug'). They're made here, no Creation Kit needed." />
+        {needed && problems && (total ? <span className="chip warn">{total} need faces</span> : <span className="chip ok">OK</span>)}
       </div>
-      {data?.length ? (
+      {needed?.length ? (
         <>
           <div className="dim small" style={{ marginBottom: 6 }}>
-            These characters' faces changed but have no FaceGen files, so they'd show the dark-face bug. FaceGen export isn't built in yet — export them from the Creation Kit (select, Ctrl+F4).
+            These characters' faces changed and their face files are missing or out of date.
           </div>
           <ul className="list">
-            {data.map((p) => (
-              <li key={p.npc} className="list-item" onClick={() => (useStore.getState().setNpc(p.npc), useStore.getState().setTab('npc'))}>
-                <span className="name">{p.editorId ?? p.npc}</span>
-                <span className="meta">{p.missing.length} file(s)</span>
-              </li>
+            {needed.map((k) => (
+              <NpcRow key={k} npc={k} />
+            ))}
+          </ul>
+          <button className="btn primary small" style={{ marginTop: 8 }} onClick={() => void generate()} title="Bake the head mesh and face tint for each of these characters into your mod's Data folder (Undo removes them)" data-testid="generate-faces">
+            <Icon name="wand" size={12} /> Generate {needed.length} face{needed.length === 1 ? '' : 's'}
+          </button>
+        </>
+      ) : null}
+      {stuck.length ? (
+        <>
+          <div className="dim small" style={{ margin: '8px 0 6px' }}>
+            These have no head part with a mesh, so their face can't be built. Give them a head on the Characters tab.
+          </div>
+          <ul className="list">
+            {stuck.map((p) => (
+              <NpcRow key={p.npc} npc={p.npc} />
             ))}
           </ul>
         </>
-      ) : (
-        <div className="dim small">No edited faces are missing their FaceGen files.</div>
-      )}
+      ) : null}
+      {needed && problems && !total && <div className="dim small">Every edited face has up-to-date face files.</div>}
     </div>
+  );
+}
+
+function NpcRow({ npc }: { npc: string }) {
+  const client = useStore((s) => s.client);
+  const { data: all } = useQuery(() => client?.call('summaries', [npc]), [npc]);
+  const data = all?.[npc];
+  return (
+    <li className="list-item" onClick={() => (useStore.getState().setNpc(npc), useStore.getState().setTab('npc'))} title="Open in the character creator">
+      <span className="name">{data?.name ?? data?.editorId ?? npc}</span>
+      <span className="meta">{data?.editorId}</span>
+    </li>
   );
 }
 
@@ -335,7 +369,7 @@ function Package() {
       async (c) => {
         if (session.dirty) {
           const st = useStore.getState().settings;
-          await c.call('save', { removeItms: st.autoCleanOnSave, updateBounds: st.updateBoundsOnSave, generateSeq: st.generateSeqOnSave });
+          await c.call('save', { removeItms: st.autoCleanOnSave, updateBounds: st.updateBoundsOnSave, generateSeq: st.generateSeqOnSave, generateFaces: st.generateFacesOnSave });
         }
         return c.call('packZip', { bsa: zipBsa, scriptSources: sources, returnData: demo });
       },
