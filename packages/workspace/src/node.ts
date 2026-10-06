@@ -78,4 +78,16 @@ export class NodeProcessRunner implements ProcessRunner {
       child.on('close', (code) => resolve({ code: code ?? -1, stdout, stderr }));
     });
   }
+
+  /** Start a program and leave it running (the game). */
+  launch(command: string, args: string[], opts: { cwd?: string } = {}): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const child = spawn(command, args, { cwd: opts.cwd, detached: true, stdio: 'ignore' });
+      child.once('error', reject);
+      child.once('spawn', () => {
+        child.unref();
+        resolve();
+      });
+    });
+  }
 }

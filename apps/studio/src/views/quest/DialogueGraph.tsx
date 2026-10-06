@@ -19,6 +19,7 @@ import {
   type OnConnectEnd,
   useReactFlow,
 } from '@xyflow/react';
+import { useMeasured } from './measured';
 import '@xyflow/react/dist/style.css';
 import { useEffect, useMemo, useState } from 'react';
 import type { FormKey } from '@tes5/esp';
@@ -108,6 +109,7 @@ function Inner({ quest, questEditorId, focus, onListView }: { quest: FormKey; qu
   const [starting, setStarting] = useState(false);
   useEffect(() => setSelected(focus ?? null), [focus]);
   const flow = useReactFlow();
+  const { onChanges, withSize } = useMeasured();
   const size = (g?.topics.length ?? 0) + (g?.infos.length ?? 0);
   // Keep everything in view as the conversation grows (or jump to the focused line).
   useEffect(() => {
@@ -128,8 +130,8 @@ function Inner({ quest, questEditorId, focus, onListView }: { quest: FormKey; qu
         const s = i.speaker ? speakers[i.speaker] : null;
         return { id: i.formKey, type: 'info', position: pos[i.formKey] ?? { x: 0, y: 0 }, data: { i, speaker: i.speaker ? (s?.name ?? s?.editorId ?? i.speaker) : undefined }, selected: selected === i.formKey };
       }),
-    ];
-  }, [g, pos, selected, speakers]);
+    ].map(withSize);
+  }, [g, pos, selected, speakers, withSize]);
   const edges = useMemo<Edge[]>(() => {
     if (!g) return [];
     const out: Edge[] = [];
@@ -184,6 +186,7 @@ function Inner({ quest, questEditorId, focus, onListView }: { quest: FormKey; qu
               fitViewOptions={{ padding: 0.2, maxZoom: 1.1 }}
               minZoom={0.2}
               nodesDraggable
+              onNodesChange={onChanges}
               onConnect={onConnect}
               onConnectEnd={onConnectEnd}
               onNodeClick={(_, n) => setSelected(n.id)}

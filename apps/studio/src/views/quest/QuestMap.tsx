@@ -25,6 +25,7 @@ import {
   type NodeProps,
   type OnConnectEnd,
 } from '@xyflow/react';
+import { useMeasured } from './measured';
 import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormKey } from '@tes5/esp';
@@ -151,6 +152,7 @@ function QuestMapInner({ quest, onOpenDialogue, onOpenStages }: { quest: FormKey
   const [selected, setSelected] = useState<{ kind: 'stage'; stage: number } | { kind: 'edge'; edge: QuestEdge } | null>(null);
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
   const [showProblems, setShowProblems] = useState(false);
+  const { onChanges, withSize } = useMeasured();
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   useEffect(() => {
@@ -176,8 +178,8 @@ function QuestMapInner({ quest, onOpenDialogue, onOpenStages }: { quest: FormKey
       selected: selected?.kind === 'stage' && selected.stage === n.stage,
     }));
     list.push({ id: 'any', type: 'any', position: positions.any ?? { x: -300, y: -40 }, data: {}, deletable: false });
-    return list;
-  }, [g, positions, selected]);
+    return list.map(withSize);
+  }, [g, positions, selected, withSize]);
 
   const edges = useMemo<Edge[]>(
     () =>
@@ -265,6 +267,7 @@ function QuestMapInner({ quest, onOpenDialogue, onOpenStages }: { quest: FormKey
             onConnect={onConnect}
             onConnectEnd={onConnectEnd}
             onNodesChange={(changes) => {
+              onChanges(changes);
               let moved = false;
               const next = { ...positions };
               for (const ch of changes) if (ch.type === 'position' && ch.position) ((next[ch.id] = ch.position), (moved = true));

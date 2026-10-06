@@ -28,6 +28,10 @@ export interface Settings {
   snapScale: number;
   showMarkers: boolean;
   textured: boolean;
+  /** MO2 executable to start for test launches (as named in MO2). */
+  mo2Executable: string;
+  /** Path to ModOrganizer.exe when it isn't in the instance folder. */
+  mo2Exe: string;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -41,6 +45,8 @@ const DEFAULT_SETTINGS: Settings = {
   snapScale: 0.1,
   showMarkers: true,
   textured: true,
+  mo2Executable: 'SKSE',
+  mo2Exe: '',
 };
 
 function loadSettings(): Settings {

@@ -26,6 +26,8 @@ import { joinPath } from './fs';
 
 export interface ProcessRunner {
   run(command: string, args: string[], opts?: { cwd?: string }): Promise<{ code: number; stdout: string; stderr: string }>;
+  /** Start a program without waiting for it (used to launch the game). */
+  launch?(command: string, args: string[], opts?: { cwd?: string }): Promise<void>;
 }
 
 export interface CompilerSettings {

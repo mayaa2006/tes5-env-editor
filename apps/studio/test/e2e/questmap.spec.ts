@@ -89,6 +89,17 @@ test('build a quest on the map', async ({ page }) => {
   await page.getByTestId('dlg-import').click();
   await expect(page.getByTestId('dlg-info').filter({ hasText: 'Mind the rats.' })).toBeVisible();
   const answer = page.getByTestId('dlg-info').filter({ hasText: 'Someone has been in the cellar.' });
+  // Wait for the graph to finish fitting itself to the new lines before grabbing a handle.
+  const viewport = page.locator('[data-testid=dialogue-graph] .react-flow__viewport');
+  let last: string | null = null;
+  await expect
+    .poll(async () => {
+      const t = await viewport.getAttribute('style');
+      const settled = t === last;
+      last = t;
+      return settled;
+    }, { intervals: [200] })
+    .toBe(true);
   const h = (await answer.locator('.react-flow__handle-right').boundingBox())!;
   const pane = (await page.locator('[data-testid=dialogue-graph] .react-flow').boundingBox())!;
   await page.mouse.move(h.x + h.width / 2, h.y + h.height / 2);

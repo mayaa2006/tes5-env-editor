@@ -21,6 +21,10 @@ Tested means unit tests (`npm test`) plus the Playwright run of the browser demo
 | Character creator | 🟡 | Head parts, sliders, colours and tints are edited correctly. The preview uses the race-agnostic chargen morph names, so check them against real head TRIs. **FaceGen export (Ctrl+F4) is not implemented**: the editor detects missing FaceGen and tells you to export it from the CK. |
 | Quests: stages, objectives, aliases, fragments | ✅ | Alias fill types beyond unique actor, specific reference and location must be set in the properties panel. |
 | Dialogue: topics, responses, conditions, begin/end scripts, voice names | ✅ | Scenes (SCEN) and packages (PACK) are only partly supported (raw fields). The voice-file truncation rule matches community documentation and should be confirmed. |
+| Quest map (stages connected by what advances them) | ✅ | Connections are stored as ordinary dialogue, alias scripts and stage fragments, so the CK and xEdit see normal data. Stage changes made by hand-written scripts are only shown when they're a literal `SetStage(N)`. |
+| Visual triggers and templates | 🟡 | Generates Papyrus with a marker line so it can be read back; hand edits to a generated script are overwritten the next time its triggers are saved in the visual editor. Compiles cleanly with the built-in checker, but in-game behaviour of every action hasn't been tried. |
+| Dialogue graph and screenplay import | ✅ | Speakers are matched by NPC name or Editor ID. |
+| Test in game | 🟡 | The batch file and console commands are standard. Starting the game through MO2 uses `ModOrganizer.exe -p <profile> moshortcut://:<executable>`, which is untested here, as is launching from the desktop app in general. |
 | SEQ files | 🟡 | Generated for start-game-enabled quests that own dialogue. The exact inclusion criteria should be confirmed against the CK. |
 | Papyrus editor and language service | ✅ | Built-in stubs cover the core API types. Full vanilla sources (Scripts.zip) give complete checking. |
 | Compiling scripts | 🟡 | Drives PapyrusCompiler.exe or Caprica. Tested with a fake runner only, since no compiler is available in CI. |
@@ -52,6 +56,8 @@ Tested means unit tests (`npm test`) plus the Playwright run of the browser demo
 3. **Chargen TRIs:** the morph names in real chargen TRI files (`CHARGEN_SLIDER_MORPHS`).
 4. **Voice files:** the file-name truncation rule.
 5. **SEQ:** which quests must be listed in the SEQ file.
+6. **Generated trigger scripts:** each trigger action in game (especially `movePlayerTo`, `lock` and `arrive` via OnCellAttach).
+7. **MO2 launch:** the `moshortcut://` argument form and the profile switch.
 
 ## Next steps
 

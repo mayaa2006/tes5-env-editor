@@ -12,3 +12,4 @@ export * from './world';
 export * from './triggers';
 export * from './questgraph';
 export * from './dialogue';
+export * from './testlaunch';

@@ -6,6 +6,7 @@ import { PluginsView } from './views/PluginsView';
 import { Inspector } from './views/record/Inspector';
 import { ObjectBrowser } from './views/ObjectBrowser';
 import { BottomLog } from './views/BottomLog';
+import { TestLaunchDialog } from './views/TestLaunch';
 
 const SceneView = lazy(() => import('./views/scene/SceneView'));
 const NpcCreator = lazy(() => import('./views/npc/NpcCreator'));
@@ -183,6 +184,7 @@ function TopBar({ onSave }: { onSave: () => void }) {
           <button className="btn ghost icon" title={session.redoLabel ? `Redo ${session.redoLabel} (Ctrl+Shift+Z)` : 'Redo'} disabled={!session.canRedo} onClick={() => engine((c) => c.call('redo'))}>
             <Icon name="redo" />
           </button>
+          <TestButton />
           <span className={`chip ${session.activePlugin ? 'accent' : 'warn'}`} title="The plugin your edits go into">
             {session.activePlugin ? `Editing ${session.activePlugin}` : 'No plugin selected'}
             {session.dirty ? ' •' : ''}
@@ -193,6 +195,18 @@ function TopBar({ onSave }: { onSave: () => void }) {
         </>
       )}
     </header>
+  );
+}
+
+function TestButton() {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button className="btn ghost" title="Test in game: save, then jump to a place and quest stage" onClick={() => setOpen(true)} data-testid="test-launch">
+        <Icon name="play" /> Test
+      </button>
+      {open && <TestLaunchDialog onClose={() => setOpen(false)} />}
+    </>
   );
 }
 

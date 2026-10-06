@@ -15,6 +15,10 @@ import {
   TRIGGER_EVENTS,
   TRIGGER_TEMPLATES,
   TriggerService,
+  TEST_BAT_NAME,
+  findLauncher,
+  joinPath,
+  testCommands,
   ScriptService,
   WorldService,
   Workspace,
@@ -37,6 +41,7 @@ import {
   type NewQuestEdge,
   type QuestEdge,
   type TriggerHost,
+  type TestLaunchOptions,
   type TriggerSpec,
   type WorkspaceEvent,
 } from '@tes5/workspace';
@@ -104,6 +109,9 @@ export class EngineHost {
   graphs?: QuestGraphService;
   dialogue?: DialogueService;
   private source?: string;
+  /** Game folder (where SkyrimSE.exe lives) and MO2 instance, for test launches. */
+  private gameDir?: string;
+  private mo2?: { instanceDir: string; profile?: string };
   private listeners = new Set<Listener>();
   private meshCache = new Map<string, MeshPayload>();
 
@@ -138,12 +146,16 @@ export class EngineHost {
         loadOrder: profile.plugins,
       });
       this.source = `MO2: ${inst.instanceDir} (${profile.name})`;
+      this.gameDir = install?.gameDir ?? inst.gamePath;
+      this.mo2 = { instanceDir: inst.instanceDir, profile: profile.name };
     } else {
       if (!opts.path) throw new Error('Pick your Skyrim folder');
       const install = await detectInstall(this.fs, opts.path);
       if (!install) throw new Error(`No Skyrim installation found in ${opts.path}`);
       ws = new Workspace(this.fs, { game: install.game, roots: [install.dataDir], outputDir: opts.outputDir ?? install.dataDir, loadOrder: opts.loadOrder });
       this.source = opts.kind === 'demo' ? 'Demo data (in memory)' : install.gameDir ?? install.dataDir;
+      this.gameDir = install.gameDir ?? install.dataDir.replace(/[\\/]+Data[\\/]*$/i, '');
+      this.mo2 = undefined;
     }
     await ws.scan();
     this.attach(ws);
@@ -642,6 +654,33 @@ export class EngineHost {
 
   dialogueScreenplay(quest: FormKey) {
     return this.dialogue!.toScreenplay(quest);
+  }
+
+  // ---------------------------------------------------------------- test launch
+
+  /**
+   * Write the test batch file (travel, quest stages, items) to the game folder
+   * and optionally start the game. Save the plugin first.
+   */
+  async testLaunch(opts: TestLaunchOptions & { launch?: boolean; mo2Executable?: string; mo2Exe?: string }) {
+    const ws = this.requireWs();
+    if (!this.gameDir) throw new Error('The game folder is unknown, so the test file can’t be written');
+    const graph = opts.quest ? await this.graphs!.graph(opts.quest) : undefined;
+    const lines = testCommands(ws, opts, graph);
+    if (!lines.length) throw new Error('Choose a place, a quest stage or items to test');
+    const batPath = joinPath(this.gameDir, `${TEST_BAT_NAME}.txt`);
+    await this.fs.writeFile(batPath, new TextEncoder().encode(`${lines.join('\r\n')}\r\n`));
+    let launched = false;
+    let how: string | undefined;
+    if (opts.launch) {
+      if (!this.runner?.launch) throw new Error('Starting the game needs the desktop app (the test file was written)');
+      const target = await findLauncher(ws, { gameDir: this.gameDir, mo2: this.mo2 && { ...this.mo2, executable: opts.mo2Executable, exe: opts.mo2Exe || undefined } });
+      if (!target) throw new Error(`Couldn’t find Mod Organizer, SKSE or the game in ${this.gameDir} (the test file was written)`);
+      await this.runner.launch(target.command, target.args, { cwd: target.cwd });
+      launched = true;
+      how = target.how;
+    }
+    return { batPath, lines, consoleCommand: `bat ${TEST_BAT_NAME}`, launched, how, viaMo2: !!this.mo2 };
   }
 
   // ---------------------------------------------------------------- visual triggers
