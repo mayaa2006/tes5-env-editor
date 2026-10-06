@@ -19,7 +19,7 @@ export function exampleQuestPlan(): QuestPlan {
     summary: 'Find Brynja’s lost ring in the Demo Tavern and return it to her.',
     startsWithGame: true,
     characters: [
-      { key: 'brynja', name: 'Brynja', existing: 'DemoInnkeeper', basedOn: null, sex: 'female', race: null, role: 'Innkeeper who lost the ring and gives the quest', appearance: 'As she is', look: null, voice: null, locationKey: null, essential: null, className: null, level: null, outfit: null, factions: [], inventory: [], routine: [] },
+      { key: 'brynja', name: 'Brynja', existing: 'DemoInnkeeper', basedOn: null, sex: 'female', race: null, role: 'Innkeeper who lost the ring and gives the quest', appearance: 'As she is', look: null, voice: null, locationKey: null, spot: null, essential: null, className: null, level: null, outfit: null, factions: [], inventory: [], routine: [] },
       {
         key: 'eirik',
         name: 'Eirik',
@@ -32,6 +32,7 @@ export function exampleQuestPlan(): QuestPlan {
         look: { weight: 70, height: 1.02, hair: 'short', hairColor: 'brown', facialHair: 'full beard', eyes: null, scar: null },
         voice: 'MaleCommoner',
         locationKey: 'tavern',
+        spot: 'by the barrels',
         essential: false,
         className: 'Warrior',
         level: 6,
@@ -45,7 +46,7 @@ export function exampleQuestPlan(): QuestPlan {
       },
     ],
     locations: [{ key: 'tavern', name: 'The Demo Tavern', existing: 'DemoTavern', description: 'The tavern Brynja runs' }],
-    items: [{ key: 'ring', name: "Brynja's Ring", kind: 'misc', existing: null, basedOn: null, value: 50, startsWith: 'location', startsAtKey: 'tavern' }],
+    items: [{ key: 'ring', name: "Brynja's Ring", kind: 'misc', existing: null, basedOn: null, value: 50, startsWith: 'location', startsAtKey: 'tavern', spot: 'on a table' }],
     stages: [
       { index: 0, journal: '', startsQuest: true, completesQuest: false, failsQuest: false },
       { index: 10, journal: 'Brynja, the innkeeper of the Demo Tavern, has lost her mother’s ring. She asked me to look for it around the tavern.', startsQuest: false, completesQuest: false, failsQuest: false },

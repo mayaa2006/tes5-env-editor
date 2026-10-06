@@ -123,7 +123,7 @@ export class QuestGraphService {
 
   private aliasTarget(a: QuestAliasModel): FormKey | null {
     const f = a.fill as Record<string, unknown>;
-    return (f.reference ?? f.actor ?? f.location ?? null) as FormKey | null;
+    return (f.reference ?? f.actor ?? f.location ?? f.object ?? null) as FormKey | null;
   }
 
   async graph(quest: FormKey): Promise<QuestGraph> {
@@ -269,6 +269,38 @@ export class QuestGraphService {
     const info = world.cells().find((x) => x.formKey === cell);
     if (!refs.length && info?.grid) Object.assign(c, { x: info.grid.x * 4096 + 2048, y: info.grid.y * 4096 + 2048, z: 0 });
     return world.placeReference(cell, base, { position: { x: c.x, y: c.y, z: Number.isFinite(c.z) ? c.z : 0 } }, { persistent: true, editorId: want });
+  }
+
+  /**
+   * An item created inside a container when the quest starts (so it can be
+   * picked up, read… and have a quest marker): its alias. The container
+   * gets an alias of its own to say where.
+   */
+  itemInContainerAlias(quest: FormKey, item: FormKey, container: FormKey): number {
+    const existing = this.quests.quest(quest).aliases.find((a) => a.kind === 'ref' && (a.fill as any).object === item);
+    if (existing) return existing.id;
+    const at = this.aliasFor(quest, container);
+    const name = this.uniqueAliasName(quest, this.ws.view(item)?.editorId ?? 'Item');
+    return this.quests.addReferenceAlias(quest, name, { createAt: { object: item, alias: at, inside: true } });
+  }
+
+  /** A connection whose trigger listens on an existing alias (e.g. an item created in a container). */
+  async addAliasEdge(quest: FormKey, alias: number, e: { from: number | null; to: number; kind: Exclude<QuestEdgeKind, 'talk' | 'script'> }): Promise<void> {
+    await this.ws.transactionAsync('Add connection', async () => {
+      const q = this.quests.quest(quest);
+      if (!q.stages.some((s) => s.index === e.to)) this.quests.addStage(quest, e.to);
+      const host: TriggerHost = { kind: 'alias', quest, alias };
+      const { specs } = await this.triggers.list(host);
+      specs.push({
+        id: newTriggerId(),
+        name: `${e.from === null ? 'Any time' : `At stage ${e.from}`} → stage ${e.to}`,
+        event: { kind: e.kind },
+        conditions: e.from === null ? [] : [{ kind: 'questStage', quest, op: '==', stage: e.from }],
+        actions: [{ kind: 'setStage', quest, stage: e.to }],
+        once: true,
+      });
+      await this.triggers.set(host, specs);
+    });
   }
 
   async addEdge(quest: FormKey, e: NewQuestEdge): Promise<void> {

@@ -857,6 +857,21 @@ export class EngineHost {
     return this.builder!.build(plan);
   }
 
+  /** An existing quest as a plan (exactly as built, or read from the quest), ready to change. */
+  async questPlanFor(quest: FormKey) {
+    const { plan, fromRecord } = await this.builder!.planFor(quest);
+    return { plan, fromRecord, ...this.reviewQuestPlan(plan) };
+  }
+
+  /** What updating a quest to a revised plan would change, in words. */
+  previewQuestUpdate(quest: FormKey, plan: QuestPlan) {
+    return this.builder!.previewUpdate(quest, plan);
+  }
+
+  updateQuestFromPlan(quest: FormKey, plan: QuestPlan) {
+    return this.builder!.update(quest, plan);
+  }
+
   // ---------------------------------------------------------------- test launch
 
   /**

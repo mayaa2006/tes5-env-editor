@@ -175,6 +175,7 @@ function QuestEditor({ quest }: { quest: FormKey }) {
   const [tab, setTab] = useState<Tab>('map');
   const [dialogueView, setDialogueView] = useState<'graph' | 'list'>('graph');
   const [focusTopic, setFocusTopic] = useState<FormKey | null>(null);
+  const [changing, setChanging] = useState(false);
   if (!q) return <div className="empty grow">Loading…</div>;
   return (
     <div className="col" style={{ flex: 1, minWidth: 0, minHeight: 0 }}>
@@ -185,6 +186,14 @@ function QuestEditor({ quest }: { quest: FormKey }) {
             {q.editorId} · {q.formKey}
           </div>
         </div>
+        <button className="btn small" onClick={() => setChanging(true)} data-testid="change-with-plan" title="See this quest as a plan (characters, stages, journal, objectives, steps, dialogue), change it by hand or ask Claude, and apply only the differences">
+          <Icon name="wand" size={12} /> Change with a plan
+        </button>
+        {changing && (
+          <Suspense fallback={null}>
+            <QuestFromText existing={quest} onClose={() => setChanging(false)} />
+          </Suspense>
+        )}
         <div className="chips">
           {(q.flags & QuestFlag.StartGameEnabled) !== 0 && <span className="chip accent">Start game enabled</span>}
           {(q.flags & QuestFlag.RunOnce) !== 0 && <span className="chip">Run once</span>}

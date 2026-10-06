@@ -157,6 +157,11 @@ export class Workspace {
   private pendingFiles: FileChange[] = [];
   /** File writes from undo/redo still in flight (save waits for them). */
   private io: Promise<unknown> = Promise.resolve();
+
+  /** Wait for files restored by undo/redo to reach the disk. */
+  async filesSettled(): Promise<void> {
+    await this.io;
+  }
   private dirty = false;
   private listeners = new Set<(e: WorkspaceEvent) => void>();
   /**
