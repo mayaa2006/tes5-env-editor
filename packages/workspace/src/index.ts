@@ -21,3 +21,6 @@ export * from './planner';
 export * from './gestures';
 export * from './dialoguelint';
 export * from './journal';
+export * from './scenes';
+export * from './dialogueif';
+export * from './characteredit';

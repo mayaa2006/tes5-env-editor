@@ -79,6 +79,13 @@ export interface QuestModel {
 
 const DIALOGUE_CATEGORY_PLAYER = 0;
 
+/** Dialogue categories / subtypes (numbers and codes as in the game data: xEdit, Mutagen). */
+export const MISC_TOPICS = {
+  hello: { category: 7, subtype: 79, code: 'HELO', suffix: 'Hello' },
+  idle: { category: 7, subtype: 94, code: 'IDLE', suffix: 'Idle' },
+  scene: { category: 2, subtype: 14, code: 'SCEN', suffix: 'Scene' },
+} as const;
+
 export class QuestService {
   constructor(
     readonly ws: Workspace,
@@ -362,6 +369,28 @@ export class QuestService {
       }
       if (branch) this.ws.editRecord(topic, (d: any) => void (d.branch = branch));
       return topic;
+    });
+  }
+
+  /**
+   * A quest's topic for lines that aren't answers to the player: greetings
+   * ("Hello", said as the player approaches or starts talking), idle chatter,
+   * or one line of a scene. Greetings and chatter reuse one topic per quest.
+   */
+  miscTopic(quest: FormKey, kind: 'hello' | 'idle' | 'scene', editorId?: string): FormKey {
+    const def = MISC_TOPICS[kind];
+    if (kind !== 'scene') {
+      const existing = this.topics(quest).find((t) => t.subtype === def.code && t.category === def.category);
+      if (existing) return existing.formKey;
+    }
+    const qid = (this.ws.view(quest)?.editorId ?? 'Quest').replace(/[^A-Za-z0-9_]/g, '');
+    return this.ws.createRecord('DIAL', {
+      editorId: this.ws.uniqueEditorId(editorId ?? `${qid}${def.suffix}`),
+      priority: 50,
+      quest,
+      data: { doAllBeforeRepeating: 0, category: def.category, subtype: def.subtype },
+      subtypeName: def.code,
+      infoCount: 0,
     });
   }
 

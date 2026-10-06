@@ -18,6 +18,7 @@ import {
   runion,
   s16,
   s32,
+  s8,
   struct,
   sub,
   u16,
@@ -485,14 +486,212 @@ export const GMST: RecordDef = record(
 );
 
 /** Packages are edited through the package wizard; their procedure data is preserved as-is. */
+const LOCATION_TYPES = enumOf('u32', {
+  0: 'Near Reference', 1: 'In Cell', 2: 'Near Package Start Location', 3: 'Near Editor Location', 4: 'Object ID', 5: 'Object Type', 6: 'Near Linked Reference', 7: 'At Package Location', 8: 'Alias (Reference)', 9: 'Alias (Location)', 10: 'Unknown 10', 11: 'Unknown 11', 12: 'Near Self',
+});
+/** Package location: what the value means depends on the type (a reference, a cell, an alias index…). */
+const PACKAGE_LOCATION = struct([
+  ['type', 'Type', LOCATION_TYPES],
+  ['value', 'Location', union((c) => ([0, 1, 4, 6].includes(Number((c.parent as any)?.type)) ? 0 : 1), [formid(['REFR', 'ACHR', 'DOOR', 'CELL', 'ACTI', 'STAT', 'FURN', 'NPC_', 'CONT', 'KYWD', 'FLST', 'IDLM']), u32()])],
+  ['radius', 'Radius', s32()],
+]);
+const PACKAGE_TARGET = struct([
+  ['type', 'Type', enumOf('u32', { 0: 'Specific Reference', 1: 'Object ID', 2: 'Object Type', 3: 'Linked Reference', 4: 'Ref Alias', 5: 'Unknown 5', 6: 'Self' })],
+  ['value', 'Target', union((c) => ([0, 1, 3].includes(Number((c.parent as any)?.type)) ? 0 : 1), [formid(['REFR', 'ACHR', 'PLYR', 'NPC_', 'ACTI', 'FURN', 'CONT', 'FLST', 'KYWD', 'IDLM']), u32()])],
+  ['count', 'Count / Distance', s32()],
+]);
+const PACKAGE_TOPIC = sub(
+  'PDTO',
+  'topic',
+  'Topic',
+  struct([
+    ['type', 'Type', enumOf('u32', { 0: 'Topic Ref', 1: 'Topic Subtype' })],
+    ['value', 'Topic', union((c) => (Number((c.parent as any)?.type) === 0 ? 0 : 1), [formid(['DIAL']), fstring(4)])],
+  ]),
+);
+const PACKAGE_EVENT = (marker: string, key: string, label: string) =>
+  rstruct(key, label, [
+    sub(marker, 'marker', 'Marker', empty({ hidden: true }), { required: true }),
+    sub('INAM', 'idle', 'Idle', formid(['IDLE'])),
+    sub('SCHR', 'unused1', 'Unused', bytes(undefined, { hidden: true })),
+    sub('SCTX', 'unused2', 'Unused', bytes(undefined, { hidden: true })),
+    sub('QNAM', 'unused3', 'Unused', bytes(undefined, { hidden: true })),
+    sub('TNAM', 'unused4', 'Unused', bytes(undefined, { hidden: true })),
+    rarray('topics', 'Topics', PACKAGE_TOPIC),
+  ]);
+const PACKAGE_INPUTS = rarray(
+  'inputs',
+  'Data Inputs',
+  rstruct('input', 'Data Input', [
+    sub('UNAM', 'index', 'Index', s8(), { required: true }),
+    sub('BNAM', 'name', 'Name', zstring()),
+    sub('PNAM', 'flags', 'Flags', flags('u32', flagList('Public'))),
+  ]),
+);
+
+/**
+ * AI package. Packages made from a template (Sandbox, Sleep, Travel…) store
+ * the template, their values for its data inputs, schedule and conditions;
+ * the behaviour tree itself lives in the template.
+ */
 export const PACK: RecordDef = record(
   'PACK',
   'Package',
-  [EDID, VMAD, sub('PKDT', 'data', 'Package Data', bytes()), sub('PSDT', 'schedule', 'Schedule', bytes()), CONDITIONS],
+  [
+    EDID,
+    VMAD,
+    sub(
+      'PKDT',
+      'data',
+      'Package Data',
+      struct([
+        ['flags', 'General Flags', u32()],
+        ['type', 'Type', enumOf('u8', { 18: 'Package', 19: 'Package Template' }, { default: 18 })],
+        ['interruptOverride', 'Interrupt Override', enumOf('u8', { 0: 'None', 1: 'Spectator', 2: 'Observe Dead', 3: 'Guard Warn', 4: 'Combat' })],
+        ['speed', 'Preferred Speed', enumOf('u8', { 0: 'Walk', 1: 'Jog', 2: 'Run', 3: 'Fast Walk' })],
+        ['unknown', 'Unknown', bytes(1, { hidden: true })],
+        ['interruptFlags', 'Interrupt Flags', u16()],
+        ['unknown2', 'Unknown', bytes(2, { hidden: true })],
+      ]),
+      { required: true },
+    ),
+    sub(
+      'PSDT',
+      'schedule',
+      'Schedule',
+      struct([
+        ['month', 'Month (-1 any)', s8()],
+        ['dayOfWeek', 'Day of Week (-1 any)', s8()],
+        ['date', 'Date', u8()],
+        ['hour', 'Hour (-1 any)', s8()],
+        ['minute', 'Minute', s8()],
+        ['unused', 'Unused', bytes(3, { hidden: true })],
+        ['duration', 'Duration (minutes)', s32()],
+      ]),
+      { required: true },
+    ),
+    CONDITIONS,
+    rstruct('idles', 'Idle Animations', [
+      sub('IDLF', 'flags', 'Flags', u8(), { required: true }),
+      sub('IDLC', 'count', 'Count', bytes()),
+      sub('IDLT', 'timer', 'Timer', f32()),
+      sub('IDLA', 'animations', 'Animations', array(formid(['IDLE']))),
+      sub('IDLB', 'unknown', 'Unknown', bytes(undefined, { hidden: true })),
+    ]),
+    sub('CNAM', 'combatStyle', 'Combat Style', formid(['CSTY'])),
+    sub('QNAM', 'ownerQuest', 'Owner Quest', formid(['QUST'])),
+    sub(
+      'PKCU',
+      'counter',
+      'Template',
+      struct([
+        ['inputCount', 'Data Input Count', u32()],
+        ['template', 'Package Template', formid(['PACK'])],
+        ['version', 'Version', u32()],
+      ]),
+      { required: true },
+    ),
+    rstruct('packageData', 'Data Input Values', [
+      rarray(
+        'values',
+        'Values',
+        rstruct('value', 'Value', [
+          sub('ANAM', 'type', 'Type', zstring(), { required: true }),
+          sub('CNAM', 'value', 'Value', bytes()),
+          sub('BNAM', 'unknown', 'Unknown', bytes(undefined, { hidden: true })),
+          rarray('topics', 'Topics', PACKAGE_TOPIC),
+          sub('PLDT', 'location', 'Location', PACKAGE_LOCATION),
+          sub('PTDA', 'target', 'Target', PACKAGE_TARGET),
+          sub('TPIC', 'unknown2', 'Unknown', bytes(undefined, { hidden: true })),
+        ]),
+      ),
+      PACKAGE_INPUTS,
+    ]),
+    sub('XNAM', 'marker', 'Marker', bytes(), { required: true }),
+    rarray(
+      'tree',
+      'Procedure Tree',
+      rstruct('branch', 'Branch', [
+        sub('ANAM', 'type', 'Branch Type', zstring(), { required: true }),
+        CONDITIONS,
+        sub('PRCB', 'root', 'Root', struct([['count', 'Branch Count', u32()], ['flags', 'Flags', u32()]])),
+        sub('PNAM', 'procedure', 'Procedure Type', zstring()),
+        sub('FNAM', 'flags', 'Flags', u32()),
+        rarray('inputIndexes', 'Data Input Indexes', sub('PKC2', 'index', 'Index', u8())),
+        rarray('flagsOverride', 'Flags Override', sub('PFO2', 'data', 'Data', bytes())),
+        rarray('unknown', 'Unknown', sub('PFOR', 'data', 'Data', bytes(undefined, { hidden: true }))),
+      ]),
+    ),
+    { ...PACKAGE_INPUTS, key: 'treeInputs', label: 'Data Inputs (template)' },
+    PACKAGE_EVENT('POBA', 'onBegin', 'On Begin'),
+    PACKAGE_EVENT('POEA', 'onEnd', 'On End'),
+    PACKAGE_EVENT('POCA', 'onChange', 'On Change'),
+  ],
   { category: 'Character' },
 );
 
-export const SCEN: RecordDef = record('SCEN', 'Scene', [EDID, VMAD, sub('FNAM', 'flags', 'Flags', u32())], { category: 'Quests' });
+/** Scene: actors (quest aliases), phases, and actions (a line of dialogue, a package, a timer) that run in phases. */
+export const SCEN: RecordDef = record(
+  'SCEN',
+  'Scene',
+  [
+    EDID,
+    VMAD,
+    sub('FNAM', 'flags', 'Flags', flags('u32', flagList('Begin on Quest Start', 'Stop Quest on End', 'Show All Text', 'Repeat Conditions While True', 'Interruptible'))),
+    rarray(
+      'phases',
+      'Phases',
+      rstruct('phase', 'Phase', [
+        sub('HNAM', 'start', 'Phase Start', empty({ hidden: true }), { required: true }),
+        sub('NAM0', 'name', 'Name', zstring()),
+        { ...CONDITIONS, key: 'startConditions', label: 'Start Conditions' },
+        sub('NEXT', 'next1', 'Marker', empty({ hidden: true })),
+        { ...CONDITIONS, key: 'completionConditions', label: 'Completion Conditions' },
+        sub('NEXT', 'next2', 'Marker', empty({ hidden: true })),
+        sub('WNAM', 'editorWidth', 'Editor Width', u32({ default: 200 })),
+        sub('HNAM', 'end', 'Phase End', empty({ hidden: true })),
+      ]),
+    ),
+    rarray(
+      'actors',
+      'Actors',
+      rstruct('actor', 'Actor', [
+        sub('ALID', 'alias', 'Actor (Alias ID)', u32(), { required: true }),
+        sub('LNAM', 'flags', 'Flags', flags('u32', flagList('No Player Activation', 'Optional'))),
+        sub('DNAM', 'behaviour', 'Behaviour Flags', flags('u32', flagList('Death Pause', 'Death End', 'Combat Pause', 'Combat End', 'Dialogue Pause', 'Dialogue End', 'OBS_COM Pause', 'OBS_COM End'))),
+      ]),
+    ),
+    rarray(
+      'actions',
+      'Actions',
+      rstruct('action', 'Action', [
+        sub('ANAM', 'type', 'Type', enumOf('u16', { 0: 'Dialogue', 1: 'Package', 2: 'Timer' }), { required: true }),
+        sub('NAM0', 'name', 'Name', zstring()),
+        sub('ALID', 'actor', 'Actor (Alias ID)', s32()),
+        sub('LNAM', 'unknown', 'Unknown', bytes(undefined, { hidden: true })),
+        sub('INAM', 'index', 'Index', u32()),
+        sub('FNAM', 'flags', 'Flags', u32()),
+        sub('SNAM', 'startPhase', 'Start Phase', u32()),
+        sub('ENAM', 'endPhase', 'End Phase', u32()),
+        sub('SNAM', 'timer', 'Timer (seconds)', f32()),
+        rarray('packages', 'Packages', sub('PNAM', 'package', 'Package', formid(['PACK']))),
+        sub('DATA', 'topic', 'Topic', formid(['DIAL'])),
+        sub('HTID', 'headtrack', 'Headtrack Actor ID', s32()),
+        sub('DMAX', 'loopMax', 'Looping Max', f32()),
+        sub('DMIN', 'loopMin', 'Looping Min', f32()),
+        sub('DEMO', 'emotion', 'Emotion Type', u32()),
+        sub('DEVA', 'emotionValue', 'Emotion Value', u32()),
+        sub('ANAM', 'end', 'End Marker', empty({ hidden: true })),
+      ]),
+    ),
+    sub('NEXT', 'next', 'Marker', empty({ hidden: true })),
+    sub('PNAM', 'quest', 'Quest', formid(['QUST'])),
+    sub('INAM', 'lastActionIndex', 'Last Action Index', u32()),
+    sub('VNAM', 'unknown', 'Unknown', bytes(undefined, { hidden: true })),
+    CONDITIONS,
+  ],
+  { category: 'Quests' },
+);
 
 export const LCTN: RecordDef = record(
   'LCTN',

@@ -95,7 +95,7 @@ export const PlanStepSchema = z.object({
 
 export const PlanConversationSchema = z.object({
   title: z.string(),
-  screenplay: z.string().describe('The conversation in screenplay format (see the instructions): NAME: line, indentation for choices, tags like [stage 20], [if stage 10], [goodbye], [emotion happy], [gives key x1], [takes key x1], [gesture point]'),
+  screenplay: z.string().describe('The conversation in screenplay format (see the instructions): NAME: line, indentation for choices, tags like [stage 20], [if stage 10], [if has ring], [if speech 50], [goodbye], [once], [persuade 50], [emotion happy], [gives key x1], [takes key x1], [gesture point]; GREETING:, IDLE: and SCENE: name [at stage N] blocks for lines nobody prompts'),
 });
 
 export const PlanAnimationSchema = z.object({

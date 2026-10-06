@@ -29,6 +29,7 @@ Tested means unit tests (`npm test`) plus the Playwright run of the browser demo
 | Journal & objective writer | ✅ | Template drafts use the first step out of each stage; when a stage has several ways forward, edit the draft or ask Claude. |
 | Visual triggers and templates | 🟡 | Generates Papyrus with a marker line so it can be read back; hand edits to a generated script are overwritten the next time its triggers are saved in the visual editor. Compiles cleanly with the built-in checker, but in-game behaviour of every action hasn't been tried. |
 | Dialogue graph and screenplay import | ✅ | Speakers are matched by NPC name or Editor ID. |
+| Greetings, chatter, scenes, conditions in scripts | 🟡 | Greetings and chatter use the quest's Hello (HELO) and Idle (IDLE) topics, and conditions are standard CK functions run on the player. Scenes are written as SCEN records following xEdit's layout (one phase per turn, actors as quest aliases) and read back the same way, but haven't been opened in the CK or played in game yet. Forcegreets need an AI package and come with AI routines. Scenes aren't written back when dialogue is exported as a script. |
 | Quest from writing (Claude plans, you check, it's built) | 🟡 | The planner and builder are tested with the demo data and a mocked API; real plans from Claude depend on the writing and should always be checked on the review screen. New characters are copied from the character the text names, or a same-sex, same-race one with a voice (its routine and factions are removed). Hair, beard, eyes, scars and hair colour are picked by matching words to head-part and colour names, so results depend on how mods name them; the face shape is random. Changing an existing character from another plugin overrides it (a conflict with other mods that change them), and a changed face needs FaceGen exported again from the CK. Clothing must already exist in the load order (new pieces are copies of existing ones with a new name). New places are empty interiors. Items the player must pick up or read have to start in a place; items held by a character move only through dialogue. The load-order summary sent to Claude lists up to 300 characters and interiors, your plugin's first. |
 | Test in game | 🟡 | The batch file and console commands are standard. Starting the game through MO2 uses `ModOrganizer.exe -p <profile> moshortcut://:<executable>`, which is untested here, as is launching from the desktop app in general. |
 | SEQ files | 🟡 | Generated for start-game-enabled quests that own dialogue. The exact inclusion criteria should be confirmed against the CK. |
@@ -64,8 +65,9 @@ Tested means unit tests (`npm test`) plus the Playwright run of the browser demo
 5. **SEQ:** which quests must be listed in the SEQ file.
 6. **Generated trigger scripts:** each trigger action in game (especially `movePlayerTo`, `lock` and `arrive` via OnCellAttach).
 7. **MO2 launch:** the `moshortcut://` argument form and the profile switch.
-8. **Gestures:** that the listed vanilla idle names play as expected from dialogue and stage scripts.
-9. **Linked doors:** that arrival points land on the correct side for vanilla door meshes, and that the generated light forms (radius, flicker) look right in game.
+8. **Scenes:** that generated SCEN records open in the CK and play in game (phases, actor behaviour flags, the missing VNAM).
+9. **Gestures:** that the listed vanilla idle names play as expected from dialogue and stage scripts.
+10. **Linked doors:** that arrival points land on the correct side for vanilla door meshes, and that the generated light forms (radius, flicker) look right in game.
 
 ## Next steps
 

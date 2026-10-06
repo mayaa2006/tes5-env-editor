@@ -47,7 +47,7 @@ export interface QuestBuildReport {
   /** Existing characters that were changed. */
   changed: { formKey: FormKey; label: string; changes: string[] }[];
   reused: { kind: PlanEntryKind; formKey: FormKey; label: string }[];
-  dialogue: { topics: number; responses: number };
+  dialogue: { topics: number; responses: number; greetings: number; scenes: number };
   /** Things worth knowing (what was assumed or left for you). */
   notes: string[];
   /** Things that may not work as the plan intended. */
@@ -222,7 +222,7 @@ export class QuestBuilder {
     const random = rng(seed);
     const prefix = plan.editorId.replace(/[^A-Za-z0-9_]/g, '');
     const res = (kind: PlanEntryKind, key: string) => resolution.find((r) => r.kind === kind && r.key === key)!;
-    const report: QuestBuildReport = { quest: null, editorId: '', created: [], changed: [], reused: [], dialogue: { topics: 0, responses: 0 }, notes: [...plan.assumptions.map((a) => `Assumed: ${a}`)], warnings: [], problems: [] };
+    const report: QuestBuildReport = { quest: null, editorId: '', created: [], changed: [], reused: [], dialogue: { topics: 0, responses: 0, greetings: 0, scenes: 0 }, notes: [...plan.assumptions.map((a) => `Assumed: ${a}`)], warnings: [], problems: [] };
 
     // The quest and its stages first (items the player starts with are given in a stage script).
     // A plan with no stages only changes characters, places and items.
@@ -380,9 +380,11 @@ export class QuestBuilder {
     for (const conv of plan.conversations) {
       const text = rewriteScreenplay(conv.screenplay, speakerIds, itemIds);
       try {
-        const r = await this.dialogue.importScreenplay(quest, text, (info, code, which) => this.quests.setInfoFragment(info, which, code));
+        const r = await this.dialogue.importScreenplay(quest, text, (info, code, which) => this.quests.setInfoFragment(info, which, code), this.sceneHooks());
         report.dialogue.topics += r.topics;
         report.dialogue.responses += r.responses;
+        report.dialogue.greetings += r.greetings;
+        report.dialogue.scenes += r.scenes;
       } catch (e) {
         throw new WorkspaceError(`The conversation “${conv.title}” couldn't be made: ${(e as Error).message}`);
       }
@@ -430,6 +432,10 @@ export class QuestBuilder {
     report.problems = (await this.graphs.graph(quest)).problems;
     for (const l of await lintQuestDialogue(quest, { quests: this.quests, dialogue: this.dialogue, graphs: this.graphs })) report.warnings.push(`Dialogue: ${l.message}`);
     return report;
+  }
+
+  private sceneHooks() {
+    return { aliasFor: (q: FormKey, npc: FormKey) => this.graphs.aliasFor(q, npc), appendStageCode: (q: FormKey, stage: number, lines: string[]) => this.graphs.appendStageCode(q, stage, lines) };
   }
 
   private finishNotes(plan: QuestPlan, report: QuestBuildReport): void {
