@@ -24,3 +24,4 @@ export * from './journal';
 export * from './scenes';
 export * from './dialogueif';
 export * from './characteredit';
+export * from './routines';

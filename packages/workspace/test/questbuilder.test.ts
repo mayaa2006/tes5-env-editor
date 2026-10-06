@@ -14,6 +14,7 @@ import {
   WorldService,
   Workspace,
   createDemoData,
+  describePackage,
   exampleQuestPlan,
   planCatalog,
   rewriteScreenplay,
@@ -77,7 +78,8 @@ describe('quest builder', () => {
     expect(ed.name).toBe('Eirik');
     expect(ed.config.flags & 1).toBe(0);
     expect(ed.config.flags & 0x20).toBe(0x20);
-    expect(ed.packages).toBeUndefined();
+    // His routine: about his business in the tavern by day, asleep there at night (the copied routine is gone).
+    expect(ed.packages.map((k: FormKey) => describePackage(ws, k))).toEqual(['goes about their business in The Demo Tavern 08:00–22:00', 'sleeps in The Demo Tavern 22:00–08:00']);
     expect(ws.summary(ed.voice)!.editorId).toBe('MaleCommoner');
     const tavernRefs = world.references(k('DemoTavern'));
     expect(tavernRefs.some((r) => r.base === eirik)).toBe(true);
@@ -122,7 +124,7 @@ describe('quest builder', () => {
     // Eirik laughs (the demo has IdleLaugh, so it's played as the idle form) when the ring is found.
     expect(await graphs.fragmentCode(report.quest!, 20)).toMatch(/Alias_InnkeeperRingQuestEirik\.GetActorReference\(\)\.PlayIdle\(Game\.GetFormFromFile\(0x[0-9A-F]{6}, "DemoWorld\.esm"\) as Idle\)/);
 
-    expect(report.created.map((c) => c.kind).sort()).toEqual(['character', 'item', 'outfit', 'placed', 'placed', 'quest']);
+    expect(report.created.map((c) => c.kind).sort()).toEqual(['character', 'item', 'outfit', 'package', 'package', 'placed', 'placed', 'quest']);
     // Eirik as described: outfit saved, faction, class, level, carried items, look.
     const outfit = ws.byEditorId('EirikTravelOutfit')!;
     const e2 = ed;
@@ -192,7 +194,7 @@ describe('quest builder', () => {
         look: { weight: null, height: null, hair: null, hairColor: 'grey', facialHair: 'none', eyes: null, scar: null },
         voice: null, locationKey: null, essential: false, className: null, level: null,
         outfit: { items: ['fine blue clothes', 'hood', 'Leather Boots', 'golden crown'], saveAs: 'HalvarSundayBest' },
-        factions: [{ faction: 'Merchants', rank: 1 }], inventory: [{ item: 'tankard', count: 3 }],
+        factions: [{ faction: 'Merchants', rank: 1 }], inventory: [{ item: 'tankard', count: 3 }], routine: [],
       },
     ];
     const res = builder.resolve(plan).find((r) => r.key === 'halvar')!;
@@ -223,6 +225,32 @@ describe('quest builder', () => {
     expect(builder.resolve(plan).find((r) => r.key === 'eirik')!.text).toBe('New, copied from Town Guard (DemoGuard)');
     await builder.build(plan);
     expect((ws.view(ws.byEditorId('InnkeeperRingQuestEirik')!)!.data as any).defaultOutfit).toBe(ws.byEditorId('DemoFarmerOutfit'));
+  });
+
+  it('quest behaviour goes on the alias: follow the player, walk up and speak', async () => {
+    const { ws, builder, quests } = await setup();
+    const plan = exampleQuestPlan();
+    plan.characters[0]!.routine = [{ activity: 'forcegreet', where: null, hours: null, fromStage: 20, untilStage: 100, line: 'Did you find it? Tell me you found it!' }];
+    plan.characters[1]!.routine = [{ activity: 'follow', where: null, hours: null, fromStage: 10, untilStage: 20, line: null }];
+    const r = await builder.build(plan);
+    const q = quests.quest(r.quest!);
+    const aliasPk = (name: string) => ((ws.view(r.quest!)!.data as any).aliases.find((a: any) => a.value.name === name).value.packages ?? []) as FormKey[];
+    expect(aliasPk('DemoInnkeeper').map((k) => describePackage(ws, k))).toEqual(['comes up to the player and speaks (while the quest is at certain stages)']);
+    expect(aliasPk('InnkeeperRingQuestEirik').map((k) => describePackage(ws, k))).toEqual(['follows the player (while the quest is at certain stages)']);
+    const fg = ws.view(aliasPk('DemoInnkeeper')[0]!)!;
+    expect(fg).toMatchObject({ lossless: true, unknown: [] });
+    const d = fg.data as any;
+    expect(d.ownerQuest).toBe(r.quest);
+    expect(d.counter.template).toBe(ws.byEditorId('ForceGreet'));
+    expect(d.conditions.map((c: any) => [c.data.op, c.data.value])).toEqual([['>=', 20], ['<', 100]]);
+    const topicValue = d.packageData.values.find((v: any) => v.type === 'Topic');
+    const topic = quests.topics(r.quest!).find((t) => t.subtype === 'PFGT')!;
+    expect(topicValue.topics).toEqual([{ type: 0, value: topic.formKey }]);
+    expect(topic.infos[0]!.responses[0]!.text).toBe('Did you find it? Tell me you found it!');
+    expect(d.packageData.values.find((v: any) => v.type === 'SingleRef').target.type).toBe(0);
+    // Brynja's own packages are untouched (the quest behaviour lives on the alias).
+    expect((ws.view(ws.byEditorId('DemoInnkeeper')!)!.data as any).packages ?? []).toEqual([]);
+    expect(q.aliases.length).toBeGreaterThan(0);
   });
 
   it('refuses plans that would not build, and changes nothing', async () => {

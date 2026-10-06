@@ -84,6 +84,7 @@ export const MISC_TOPICS = {
   hello: { category: 7, subtype: 79, code: 'HELO', suffix: 'Hello' },
   idle: { category: 7, subtype: 94, code: 'IDLE', suffix: 'Idle' },
   scene: { category: 2, subtype: 14, code: 'SCEN', suffix: 'Scene' },
+  forcegreet: { category: 0, subtype: 1, code: 'PFGT', suffix: 'ForceGreet' },
 } as const;
 
 export class QuestService {
@@ -377,9 +378,9 @@ export class QuestService {
    * ("Hello", said as the player approaches or starts talking), idle chatter,
    * or one line of a scene. Greetings and chatter reuse one topic per quest.
    */
-  miscTopic(quest: FormKey, kind: 'hello' | 'idle' | 'scene', editorId?: string): FormKey {
+  miscTopic(quest: FormKey, kind: 'hello' | 'idle' | 'scene' | 'forcegreet', editorId?: string): FormKey {
     const def = MISC_TOPICS[kind];
-    if (kind !== 'scene') {
+    if (kind === 'hello' || kind === 'idle') {
       const existing = this.topics(quest).find((t) => t.subtype === def.code && t.category === def.category);
       if (existing) return existing.formKey;
     }

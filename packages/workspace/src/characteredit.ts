@@ -12,6 +12,7 @@ import { WorkspaceError, type Workspace } from './engine';
 import type { HeadPartInfo, NpcService } from './npc';
 import { FEMALE_FLAG } from './npc';
 import type { PlanCharacter, PlanLook } from './questplan';
+import { ROUTINE_LABELS } from './routines';
 
 const ESSENTIAL = 0x2;
 const PC_LEVEL_MULT = 0x80;
@@ -94,6 +95,10 @@ export class CharacterEditor {
     if (c.className) out.push(`class ${c.className}`);
     if (c.level !== null) out.push(`level ${c.level}`);
     if (c.essential !== null && c.existing) out.push(c.essential ? 'essential' : 'can be killed');
+    for (const r of c.routine ?? []) {
+      const bits = [ROUTINE_LABELS[r.activity], r.where && `at ${r.where}`, r.hours && `${String(r.hours.from).padStart(2, '0')}:00–${String(r.hours.to).padStart(2, '0')}:00`, (r.fromStage !== null || r.untilStage !== null) && `from stage ${r.fromStage ?? 'start'} until ${r.untilStage ?? 'the end'}`, r.line && `“${r.line}”`].filter(Boolean);
+      out.push(bits.join(' '));
+    }
     const l = c.look;
     if (l) {
       const bits = [l.hair && `${l.hair} hair`, l.hairColor && `${l.hairColor} hair colour`, l.facialHair && (NONE.test(l.facialHair) ? 'no beard' : l.facialHair), l.eyes && `${l.eyes} eyes`, l.scar, l.weight !== null && `build ${Math.round(l.weight)}`, l.height !== null && `height ${l.height}`].filter(Boolean);

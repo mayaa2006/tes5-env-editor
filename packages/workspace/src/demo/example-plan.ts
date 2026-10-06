@@ -19,7 +19,7 @@ export function exampleQuestPlan(): QuestPlan {
     summary: 'Find Brynja’s lost ring in the Demo Tavern and return it to her.',
     startsWithGame: true,
     characters: [
-      { key: 'brynja', name: 'Brynja', existing: 'DemoInnkeeper', basedOn: null, sex: 'female', race: null, role: 'Innkeeper who lost the ring and gives the quest', appearance: 'As she is', look: null, voice: null, locationKey: null, essential: null, className: null, level: null, outfit: null, factions: [], inventory: [] },
+      { key: 'brynja', name: 'Brynja', existing: 'DemoInnkeeper', basedOn: null, sex: 'female', race: null, role: 'Innkeeper who lost the ring and gives the quest', appearance: 'As she is', look: null, voice: null, locationKey: null, essential: null, className: null, level: null, outfit: null, factions: [], inventory: [], routine: [] },
       {
         key: 'eirik',
         name: 'Eirik',
@@ -38,6 +38,10 @@ export function exampleQuestPlan(): QuestPlan {
         outfit: { items: ['Blue Fine Clothes', 'Leather Boots'], saveAs: 'EirikTravelOutfit' },
         factions: [{ faction: 'Townsfolk', rank: 0 }],
         inventory: [{ item: 'Bottle of Mead', count: 2 }],
+        routine: [
+          { activity: 'sandbox', where: 'tavern', hours: { from: 8, to: 22 }, fromStage: null, untilStage: null, line: null },
+          { activity: 'sleep', where: 'tavern', hours: { from: 22, to: 8 }, fromStage: null, untilStage: null, line: null },
+        ],
       },
     ],
     locations: [{ key: 'tavern', name: 'The Demo Tavern', existing: 'DemoTavern', description: 'The tavern Brynja runs' }],
