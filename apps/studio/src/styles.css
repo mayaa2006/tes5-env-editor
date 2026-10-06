@@ -1300,3 +1300,22 @@ table.grid tr.diff td {
 .card-grid > .card + .card {
   margin-top: 0;
 }
+
+/* ---------------------------------------------------------------- quest from writing */
+.modal.wide {
+  width: min(1000px, 94vw);
+  max-width: min(1000px, 94vw);
+  max-height: 90vh;
+}
+.plan-screenplay textarea {
+  width: 100%;
+  min-height: 160px;
+  resize: vertical;
+  font-size: 12px;
+}
+.kind-card.selected {
+  background: var(--panel-3);
+}
+.always-list li.question svg {
+  color: var(--warn);
+}

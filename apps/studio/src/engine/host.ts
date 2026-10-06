@@ -12,6 +12,14 @@ import {
   CLUTTER_THEMES,
   DialogueService,
   EnvironmentService,
+  EXAMPLE_QUEST_DOCUMENT,
+  QuestBuilder,
+  QuestPlanner,
+  exampleQuestPlan,
+  planCatalog,
+  validatePlan,
+  type PlannerMode,
+  type QuestPlan,
   ReleaseService,
   type FindingFix,
   type ArrayOptions,
@@ -122,6 +130,7 @@ export class EngineHost {
   dialogue?: DialogueService;
   env?: EnvironmentService;
   release?: ReleaseService;
+  builder?: QuestBuilder;
   private source?: string;
   /** Game folder (where SkyrimSE.exe lives) and MO2 instance, for test launches. */
   private gameDir?: string;
@@ -188,6 +197,7 @@ export class EngineHost {
     this.dialogue = new DialogueService(ws, this.quests);
     this.env = new EnvironmentService(ws);
     this.release = new ReleaseService(ws, this.scripts, this.npcs, this.quests, this.graphs, this.env);
+    this.builder = new QuestBuilder(ws, this.quests, this.graphs, this.dialogue, this.npcs, this.env);
     this.meshCache.clear();
     ws.on((e) => {
       if (e.type === 'filesRestored') return; // internal to the engine
@@ -677,6 +687,34 @@ export class EngineHost {
 
   dialogueScreenplay(quest: FormKey) {
     return this.dialogue!.toScreenplay(quest);
+  }
+
+  // ---------------------------------------------------------------- quest from writing
+
+  /** The example design document and the plan Claude makes from it (for trying this without an API key). */
+  questPlanExample() {
+    return { document: EXAMPLE_QUEST_DOCUMENT, plan: exampleQuestPlan() };
+  }
+
+  /** What's wrong with a plan, and what each character, place and item will use. */
+  reviewQuestPlan(plan: QuestPlan) {
+    return { issues: validatePlan(plan), resolution: this.builder!.resolve(plan) };
+  }
+
+  /** Claude plans a quest from a design document or a conversation. */
+  async planQuest(source: string, mode: PlannerMode, apiKey: string) {
+    const plan = await new QuestPlanner({ apiKey }).plan(source, mode, planCatalog(this.requireWs()));
+    return { plan, ...this.reviewQuestPlan(plan) };
+  }
+
+  /** Claude changes a plan as described. */
+  async reviseQuestPlan(plan: QuestPlan, feedback: string, apiKey: string, source?: string) {
+    const next = await new QuestPlanner({ apiKey }).revise(plan, feedback, planCatalog(this.requireWs()), source);
+    return { plan: next, ...this.reviewQuestPlan(next) };
+  }
+
+  buildQuestPlan(plan: QuestPlan) {
+    return this.builder!.build(plan);
   }
 
   // ---------------------------------------------------------------- test launch

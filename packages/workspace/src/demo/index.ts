@@ -537,3 +537,4 @@ export function createDemoData(fs: MemoryFileSystem, root = '/Demo/Skyrim Specia
   fs.writeFileSync(`${dataDir}/Source/Scripts/TESV_Papyrus_Flags.flg`, 'Flag hidden 0\r\nFlag conditional 1\r\n');
   return { gameDir: root, dataDir, plugins: ['DemoWorld.esm', 'DirtyPatch.esp'] };
 }
+export * from './example-plan';

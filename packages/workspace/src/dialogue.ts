@@ -14,7 +14,9 @@
  * Indentation nests choices under the response above them. Tags:
  * [goodbye] ends the conversation, [stage N] sets a quest stage when the
  * line has been said, [if stage N] only offers it at that stage,
- * [emotion happy] sets the emotion.
+ * [emotion happy] sets the emotion, [gives Item x2] / [takes Item x1] move
+ * items between the speaker and the player (Item is an Editor ID or name;
+ * "gold" means gold coins).
  */
 import { EMOTIONS, conditionFunctionByName, newCondition, parseFormKey, type Condition, type FormKey } from '@tes5/esp';
 import { WorkspaceError, type Workspace } from './engine';
@@ -230,6 +232,17 @@ export class DialogueService {
     );
   }
 
+  /** "Ring x2" / "gold x100" / "MyRing" → the item and how many. */
+  private itemTag(value: string, line: number): { item: FormKey; count: number } {
+    const m = /^(.*?)(?:\s*[x×]\s*(\d+))?$/i.exec(value.trim());
+    const name = (m?.[1] ?? '').trim();
+    const count = m?.[2] ? Number(m[2]) : 1;
+    if (!name) throw new WorkspaceError(`Line ${line}: say which item, e.g. [gives gold x100]`);
+    const item = resolveItem(this.ws, name);
+    if (!item) throw new WorkspaceError(`Line ${line}: no item called “${name}” (use its Editor ID or name)`);
+    return { item, count };
+  }
+
   private resolveSpeakers(names: string[]): Map<string, FormKey | null> {
     const npcs = this.ws.search({ sigs: ['NPC_'], limit: 100000 }).items;
     const out = new Map<string, FormKey | null>();
@@ -271,11 +284,12 @@ export class DialogueService {
       if (!Number.isInteger(n) || n < 0) throw new WorkspaceError(`Line ${line}: [stage …] needs a number`);
       return n;
     };
-    const makeTopic = async (p: ScriptPlayerLine, branch: FormKey | undefined): Promise<FormKey> => {
+    // Choices under a response gated on a stage are only offered at that stage, so they inherit it.
+    const makeTopic = async (p: ScriptPlayerLine, branch: FormKey | undefined, inherited?: number): Promise<FormKey> => {
       const topic = this.quests.createTopic(quest, { editorId: this.topicId(quest, p.text), text: p.text, topLevel: !branch, branch });
       topics++;
       const myBranch = branch ?? ((this.ws.view(topic)!.data as { branch?: FormKey }).branch as FormKey);
-      const ifStage = stageTag(p.tags.if?.replace(/^stage\s+/i, ''), p.line);
+      const ifStage = stageTag(p.tags.if?.replace(/^stage\s+/i, ''), p.line) ?? inherited;
       for (const r of p.responses) {
         const conditions: Condition[] = [];
         const need = stageTag((r.tags.if ?? p.tags.if)?.replace(/^stage\s+/i, ''), r.line) ?? ifStage;
@@ -284,9 +298,21 @@ export class DialogueService {
         const info = this.quests.addResponse(topic, { text: r.lines, speaker: speaker ?? undefined, goodbye: 'goodbye' in r.tags, emotion: emotionIndex(r.tags.emotion), conditions });
         responses++;
         const stage = stageTag(r.tags.stage ?? p.tags.stage, r.line);
-        if (stage !== undefined) await setInfoFragment(info, `GetOwningQuest().SetStage(${stage})`);
+        // Everything the line does when said goes into one end fragment.
+        const code: string[] = [];
+        if (stage !== undefined) code.push(`GetOwningQuest().SetStage(${stage})`);
+        for (const [tag, verb] of [
+          ['gives', 'AddItem'],
+          ['takes', 'RemoveItem'],
+        ] as const) {
+          const v = r.tags[tag];
+          if (v === undefined) continue;
+          const { item, count } = this.itemTag(v, r.line);
+          code.push(`Game.GetPlayer().${verb}(${formExpression(item)}, ${count})`);
+        }
+        if (code.length) await setInfoFragment(info, code.join('\n'));
         const children: FormKey[] = [];
-        for (const c of r.choices) children.push(await makeTopic(c, myBranch));
+        for (const c of r.choices) children.push(await makeTopic(c, myBranch, need));
         if (children.length) this.ws.editRecord(info, (d: any) => void (d.linkTo = [...(d.linkTo ?? []), ...children]));
       }
       return topic;
@@ -329,4 +355,22 @@ export class DialogueService {
     for (const t of g.topics.filter((x) => x.topLevel)) writeTopic(t, 0);
     return `${out.join('\n')}\n`;
   }
+}
+
+const ITEM_SIGS = ['MISC', 'BOOK', 'KEYM', 'WEAP', 'ARMO', 'ALCH', 'INGR', 'AMMO', 'SLGM', 'SCRL'];
+
+/** An item by Editor ID or name ("gold" is the game's gold coins). */
+export function resolveItem(ws: Workspace, name: string): FormKey | undefined {
+  const l = name.toLowerCase();
+  if (l === 'gold' || l === 'gold001' || l === 'septims') return ws.byEditorId('Gold001') ?? ('00000F:Skyrim.esm' as FormKey);
+  const byId = ws.byEditorId(name);
+  if (byId && ITEM_SIGS.includes(ws.summary(byId)?.sig ?? '')) return byId;
+  const hits = ws.search({ sigs: ITEM_SIGS, query: name, limit: 50 }).items.filter((i) => i.editorId?.toLowerCase() === l || i.name?.toLowerCase() === l);
+  return (hits.find((h) => h.inActive) ?? hits[0])?.formKey;
+}
+
+/** Papyrus that finds a form without a script property (works for any plugin). */
+export function formExpression(key: FormKey): string {
+  const { objectId, plugin } = parseFormKey(key);
+  return `Game.GetFormFromFile(0x${objectId.toString(16).toUpperCase().padStart(6, '0')}, "${plugin}")`;
 }

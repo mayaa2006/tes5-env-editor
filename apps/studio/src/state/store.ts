@@ -36,6 +36,8 @@ export interface Settings {
   mo2Executable: string;
   /** Path to ModOrganizer.exe when it isn't in the instance folder. */
   mo2Exe: string;
+  /** Anthropic API key for planning quests with Claude (kept on this computer). */
+  anthropicApiKey: string;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -53,6 +55,7 @@ const DEFAULT_SETTINGS: Settings = {
   textured: true,
   mo2Executable: 'SKSE',
   mo2Exe: '',
+  anthropicApiKey: '',
 };
 
 function loadSettings(): Settings {

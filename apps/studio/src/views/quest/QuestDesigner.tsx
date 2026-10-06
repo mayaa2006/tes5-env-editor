@@ -14,6 +14,7 @@ import { TriggersSection } from '../record/TriggersEditor';
 import { CodeEditor } from '../script/CodeEditor';
 
 const QuestMap = lazy(() => import('./QuestMap'));
+const QuestFromText = lazy(() => import('./QuestFromText'));
 const DialogueGraphView = lazy(() => import('./DialogueGraph'));
 
 type Tab = 'map' | 'overview' | 'stages' | 'objectives' | 'aliases' | 'dialogue' | 'voice';
@@ -49,7 +50,24 @@ export default function QuestDesigner() {
   return (
     <div className="row" style={{ flex: 1, minHeight: 0, alignItems: 'stretch', gap: 0 }}>
       <QuestList />
-      {quest ? <QuestEditor key={quest} quest={quest} /> : <div className="empty grow">Choose a quest on the left, or create one.</div>}
+      {quest ? <QuestEditor key={quest} quest={quest} /> : <NoQuest />}
+    </div>
+  );
+}
+
+function NoQuest() {
+  const [writing, setWriting] = useState(false);
+  return (
+    <div className="empty grow col" style={{ gap: 10 }}>
+      <span>Choose a quest on the left, or create one.</span>
+      <button className="btn" onClick={() => setWriting(true)}>
+        <Icon name="wand" size={13} /> Describe a quest and let Claude build it
+      </button>
+      {writing && (
+        <Suspense fallback={null}>
+          <QuestFromText onClose={() => setWriting(false)} />
+        </Suspense>
+      )}
     </div>
   );
 }
@@ -61,11 +79,15 @@ function QuestList() {
   const [q, setQ] = useState('');
   const dq = useDebounced(q);
   const [creating, setCreating] = useState(false);
+  const [writing, setWriting] = useState(false);
   const { data } = useQuery(() => client?.call('search', { sigs: ['QUST'], query: dq, limit: 500 }), [dq]);
   return (
-    <div className="panel" style={{ width: 230, flex: 'none', borderRight: '1px solid var(--border)', background: 'var(--panel)' }}>
+    <div className="panel" style={{ width: 260, flex: 'none', borderRight: '1px solid var(--border)', background: 'var(--panel)' }}>
       <div className="panel-header">
         <span className="grow">Quests</span>
+        <button className="btn small" onClick={() => setWriting(true)} data-testid="quest-from-writing" title="Paste a design document or a conversation; Claude plans the whole quest, you check it, and it's built for you">
+          <Icon name="wand" size={12} /> From text
+        </button>
         <button className="btn small primary" onClick={() => setCreating(true)} data-testid="new-quest">
           <Icon name="plus" size={12} /> New
         </button>
@@ -83,6 +105,11 @@ function QuestList() {
         ))}
       </ul>
       {creating && <NewQuestDialog onClose={() => setCreating(false)} />}
+      {writing && (
+        <Suspense fallback={null}>
+          <QuestFromText onClose={() => setWriting(false)} />
+        </Suspense>
+      )}
     </div>
   );
 }
