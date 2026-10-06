@@ -99,7 +99,7 @@ describe('quest builder', () => {
     expect(g.nodes.find((n) => n.stage === 20)).toMatchObject({ shows: [20], completes: [10] });
     expect(g.objectives.map((o) => o.text)).toEqual(['Find Brynja’s ring', 'Return the ring to Brynja']);
     const q = quests.quest(report.quest);
-    expect(q.aliases.map((a) => a.name).sort()).toEqual(['DemoInnkeeper', 'InnkeeperRingQuestBrynjaSRingRef']);
+    expect(q.aliases.map((a) => a.name).sort()).toEqual(['DemoInnkeeper', 'InnkeeperRingQuestBrynjaSRingRef', 'InnkeeperRingQuestEirik']);
 
     // What moves it on: Brynja's lines, then picking up the ring, then Brynja again.
     expect(g.edges.map((e) => `${e.from}->${e.to}:${e.kind}`).sort()).toEqual(['0->10:talk', '10->20:pickup', '20->100:talk']);
@@ -116,6 +116,11 @@ describe('quest builder', () => {
     expect(src).toContain('GetOwningQuest().SetStage(100)');
     expect(src).toMatch(/Game\.GetPlayer\(\)\.RemoveItem\(Game\.GetFormFromFile\(0x[0-9A-F]{6}, "Built\.esp"\), 1\)/);
     expect(src).toContain('Game.GetPlayer().AddItem(Game.GetFormFromFile(0x00000F, "Skyrim.esm"), 100)');
+    // Gestures: applause isn't in the demo, so it's sent as an animation event, as the line starts.
+    expect(src).toContain('Debug.SendAnimationEvent(akSpeaker, "IdleApplaud2")');
+    expect((ws.view(thanks.formKey)!.data as any).scripts.fragments.flags).toBe(3);
+    // Eirik laughs (the demo has IdleLaugh, so it's played as the idle form) when the ring is found.
+    expect(await graphs.fragmentCode(report.quest, 20)).toMatch(/Alias_InnkeeperRingQuestEirik\.GetActorReference\(\)\.PlayIdle\(Game\.GetFormFromFile\(0x[0-9A-F]{6}, "DemoWorld\.esm"\) as Idle\)/);
 
     expect(report.created.map((c) => c.kind).sort()).toEqual(['character', 'item', 'placed', 'placed', 'quest']);
     expect(report.reused.map((r) => r.label).sort()).toEqual(['Brynja (DemoInnkeeper)', 'The Demo Tavern (DemoTavern)']);
@@ -218,7 +223,7 @@ describe('quest planner', () => {
     const fail = (r: PlannerReply) => new QuestPlanner({ send: async () => r }).plan('x', 'document', '');
     await expect(fail(reply('', 'refusal'))).rejects.toThrow(/declined/);
     await expect(fail(reply('{"title":', 'max_tokens'))).rejects.toThrow(/too long/);
-    await expect(fail(reply('not json'))).rejects.toThrow(/wasn't a plan/);
+    await expect(fail(reply('not json'))).rejects.toThrow(/wasn't in the expected format/);
     await expect(fail(reply('{"title":"x"}'))).rejects.toThrow(/incomplete/);
     expect(() => new QuestPlanner({})).toThrow(/API key/);
   });

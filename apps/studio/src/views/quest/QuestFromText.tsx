@@ -182,6 +182,10 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt }: { review: Re
       setFeedback('');
     }
   };
+  const journal = async (claude: boolean) => {
+    const r = await engine((c) => c.call('planJournal', draft, claude ? key : undefined), { busy: claude ? 'Claude is writing the journal…' : undefined, refreshSession: false });
+    if (r) setReview(r);
+  };
   const build = async () => {
     const r = await engine((c) => c.call('buildQuestPlan', draft), { busy: 'Building the quest…', success: `Built ${draft.title}` });
     if (r) onBuilt(r);
@@ -268,9 +272,16 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt }: { review: Re
       </div>
 
       <div className="card" data-testid="plan-stages">
-        <div className="card-title">
+        <div className="card-title row" style={{ gap: 6 }}>
           Stages and journal
           <Help text="Each stage is a point in the quest. The journal text appears in the player's quest journal when the stage is reached." />
+          <span className="grow" />
+          <button className="btn small ghost" onClick={() => void journal(false)} title="Fill in empty journal entries and missing objectives from what moves the quest on" data-testid="plan-draft-journal">
+            Draft missing journal
+          </button>
+          <button className="btn small ghost" disabled={!key} onClick={() => void journal(true)} title={key ? 'Claude writes the missing journal entries and objectives in the style of the game' : 'Add your API key on the first page'}>
+            <Icon name="wand" size={12} /> Word with Claude
+          </button>
         </div>
         <div className="col" style={{ gap: 6 }}>
           {[...draft.stages]
@@ -285,7 +296,7 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt }: { review: Re
                   <div className="grow col" style={{ gap: 2 }}>
                     <TextInput value={s.journal} placeholder="(no journal entry)" multiline onCommit={(v) => void edit((p) => void (p.stages.find((x) => x.index === s.index)!.journal = v))} />
                     <span className="dim small">
-                      {[s.startsQuest && 'Starts the quest', s.completesQuest && 'Completes the quest', s.failsQuest && 'Fails the quest', ...shown.map((o) => `Shows “${o.text}”`)].filter(Boolean).join(' · ')}
+                      {[s.startsQuest && 'Starts the quest', s.completesQuest && 'Completes the quest', s.failsQuest && 'Fails the quest', ...shown.map((o) => `Shows “${o.text}”`), ...draft.animations.filter((a) => a.atStage === s.index).map((a) => `${nameOf(a.characterKey)}: ${a.gesture}`)].filter(Boolean).join(' · ')}
                     </span>
                   </div>
                 </div>

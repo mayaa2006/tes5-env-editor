@@ -9,6 +9,8 @@
  * field is required (null when it doesn't apply) and nothing is recursive.
  */
 import { z } from 'zod';
+import { lintScreenplay } from './dialoguelint';
+import { journalContextFromPlan, lintJournal } from './journal';
 
 /** Short identifiers the plan uses to refer to its own characters, places and items. */
 const Key = z.string().describe('Short identifier used to refer to this entry elsewhere in the plan, e.g. "brynja" or "cellar"');
@@ -72,6 +74,12 @@ export const PlanConversationSchema = z.object({
   screenplay: z.string().describe('The conversation in screenplay format (see the instructions): NAME: line, indentation for choices, tags like [stage 20], [if stage 10], [goodbye], [emotion happy], [gives key x1], [takes key x1], [gesture point]'),
 });
 
+export const PlanAnimationSchema = z.object({
+  atStage: z.number().int(),
+  characterKey: z.string(),
+  gesture: z.string().describe('A gesture name from the instructions, e.g. "wave", "laugh", "pray"'),
+});
+
 export const PlanRewardSchema = z.object({
   atStage: z.number().int(),
   gold: z.number().int().nullable(),
@@ -91,6 +99,7 @@ export const QuestPlanSchema = z.object({
   steps: z.array(PlanStepSchema),
   conversations: z.array(PlanConversationSchema),
   rewards: z.array(PlanRewardSchema),
+  animations: z.array(PlanAnimationSchema).describe('Characters playing a gesture when the quest reaches a stage (outside dialogue)'),
   assumptions: z.array(z.string()).describe('Every decision not stated in the source text, for the author to confirm'),
   questions: z.array(z.string()).describe('Things the author should decide that you could not'),
 });
@@ -124,6 +133,7 @@ export function emptyPlan(): QuestPlan {
     steps: [],
     conversations: [],
     rewards: [],
+    animations: [],
     assumptions: [],
     questions: [],
   };
@@ -171,6 +181,16 @@ export function validatePlan(plan: QuestPlan): PlanIssue[] {
   for (const r of plan.rewards ?? []) {
     if (!stages.has(r.atStage)) err(`A reward is given at stage ${r.atStage}, which doesn't exist`);
     if (r.itemKey && !isKind(r.itemKey, 'item')) err(`A reward gives "${r.itemKey}", which isn't an item in the plan`);
+  }
+  // The conversations, as they'll be imported.
+  const speakers = (plan.characters ?? []).flatMap((c) => [c.key, c.name, ...(c.existing ? [c.existing] : [])]);
+  for (const c of plan.conversations ?? [])
+    for (const l of lintScreenplay(c.screenplay, { stages: [...stages], speakers })) issues.push({ severity: l.severity, message: `${c.title}${l.line ? ` (line ${l.line})` : ''}: ${l.message}` });
+  // Journal and objective wording.
+  if (parsed.success) for (const l of lintJournal(journalContextFromPlan(plan))) warn(l.message);
+  for (const a of plan.animations ?? []) {
+    if (!stages.has(a.atStage)) err(`An animation plays at stage ${a.atStage}, which doesn't exist`);
+    if (!isKind(a.characterKey, 'character')) err(`An animation is played by "${a.characterKey}", who isn't a character in the plan`);
   }
   return issues;
 }

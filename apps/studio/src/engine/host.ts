@@ -13,6 +13,17 @@ import {
   DialogueService,
   EnvironmentService,
   EXAMPLE_QUEST_DOCUMENT,
+  applyJournalToPlan,
+  draftJournal,
+  journalContextFromGraph,
+  journalContextFromPlan,
+  lintJournal,
+  type JournalDraft,
+  lintQuestDialogue,
+  lintScreenplay,
+  gestureCode,
+  listGestures,
+  parseGestureLine,
   QuestBuilder,
   QuestPlanner,
   exampleQuestPlan,
@@ -682,11 +693,103 @@ export class EngineHost {
   }
 
   async importScreenplay(quest: FormKey, text: string) {
-    return this.dialogue!.importScreenplay(quest, text, (info, code) => this.quests!.setInfoFragment(info, 'end', code));
+    return this.dialogue!.importScreenplay(quest, text, (info, code, which) => this.quests!.setInfoFragment(info, which, code));
+  }
+
+  /** Problems in a quest's dialogue (the Dialogue tab's check). */
+  lintDialogue(quest: FormKey) {
+    return lintQuestDialogue(quest, { quests: this.quests!, dialogue: this.dialogue!, graphs: this.graphs! });
+  }
+
+  /** Problems in a screenplay before it's imported into a quest. */
+  lintScreenplay(quest: FormKey, text: string) {
+    return lintScreenplay(text, { stages: this.quests!.quest(quest).stages.map((s) => s.index) });
   }
 
   dialogueScreenplay(quest: FormKey) {
     return this.dialogue!.toScreenplay(quest);
+  }
+
+  // ---------------------------------------------------------------- gestures
+
+  gestures(query?: string) {
+    return listGestures(this.requireWs(), { query });
+  }
+
+  /** The gesture a response's speaker plays as the line starts (its begin script), or null. */
+  async responseGesture(info: FormKey): Promise<string | null> {
+    for (const line of (await this.infoFragment(info, 'begin')).split('\n')) {
+      const g = parseGestureLine(this.requireWs(), line);
+      if (g && g.actor === 'akSpeaker') return g.gesture.id;
+    }
+    return null;
+  }
+
+  /** Set (or clear) the speaker's gesture; other begin-script lines are kept. */
+  async setResponseGesture(info: FormKey, gesture: string | null) {
+    const ws = this.requireWs();
+    const kept = (await this.infoFragment(info, 'begin')).split('\n').filter((l) => l.trim() && parseGestureLine(ws, l)?.actor !== 'akSpeaker');
+    const code = [...(gesture ? [gestureCode(ws, gesture, 'akSpeaker')] : []), ...kept].join('\n');
+    return this.quests!.setInfoFragment(info, 'begin', code);
+  }
+
+  addStageGesture(quest: FormKey, stage: number, actor: FormKey, gesture: string) {
+    return this.graphs!.addStageGesture(quest, stage, actor, gesture);
+  }
+
+  removeStageLine(quest: FormKey, stage: number, line: string) {
+    return this.graphs!.removeStageLine(quest, stage, line);
+  }
+
+  // ---------------------------------------------------------------- journal & objective writer
+
+  private async journalContext(quest: FormKey) {
+    return journalContextFromGraph(this.requireWs(), await this.graphs!.graph(quest));
+  }
+
+  /** Drafts for the missing (or all) journal entries and objectives, plus wording problems in what's there. */
+  async journalDraft(quest: FormKey, overwrite = false) {
+    const context = await this.journalContext(quest);
+    return { context, draft: draftJournal(context, { overwrite }), lint: lintJournal(context) };
+  }
+
+  /** Claude writes the drafts instead of the templates. */
+  async journalDraftWithClaude(quest: FormKey, apiKey: string, overwrite = false) {
+    return new QuestPlanner({ apiKey }).writeJournal(await this.journalContext(quest), { overwrite });
+  }
+
+  /** Write the chosen drafts into the quest (one undo step). */
+  async applyJournal(quest: FormKey, draft: JournalDraft) {
+    const ws = this.requireWs();
+    await ws.transactionAsync('Write journal and objectives', async () => {
+      for (const s of draft.stages) this.quests!.setStageLog(quest, s.index, 0, s.journal);
+      const have = new Set(this.quests!.quest(quest).objectives.map((o) => o.index));
+      for (const o of draft.objectives) {
+        if (have.has(o.index))
+          ws.editRecord(quest, (d: any) => {
+            const ob = d.objectives.find((x: any) => x.index === o.index);
+            if (ob) ob.text = o.text;
+          });
+        else this.quests!.addObjective(quest, o.index, o.text);
+      }
+      const g = await this.graphs!.graph(quest);
+      const stages = new Set([...draft.objectives.map((o) => o.shownAtStage), ...draft.objectives.flatMap((o) => (o.completedAtStage === null ? [] : [o.completedAtStage]))]);
+      for (const st of stages) {
+        const n = g.nodes.find((x) => x.stage === st);
+        if (!n) continue;
+        const shows = [...new Set([...n.shows, ...draft.objectives.filter((o) => o.shownAtStage === st).map((o) => o.index)])];
+        const completes = [...new Set([...n.completes, ...draft.objectives.filter((o) => o.completedAtStage === st).map((o) => o.index)])];
+        if (shows.length !== n.shows.length || completes.length !== n.completes.length) await this.graphs!.setStageObjectives(quest, st, shows, completes);
+      }
+    });
+  }
+
+  /** The writer on a plan: fill in the missing journal entries and objectives (templates, or Claude with a key). */
+  async planJournal(plan: QuestPlan, apiKey?: string) {
+    const ctx = journalContextFromPlan(plan);
+    const draft = apiKey ? await new QuestPlanner({ apiKey }).writeJournal(ctx) : draftJournal(ctx);
+    const next = applyJournalToPlan(plan, draft);
+    return { plan: next, ...this.reviewQuestPlan(next) };
   }
 
   // ---------------------------------------------------------------- quest from writing

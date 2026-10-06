@@ -49,15 +49,16 @@ BRYNJA: I've lost my mother's ring. It was here this morning, I swear it. [if st
   PLAYER: Not now.
     BRYNJA: If you change your mind, I'll be here. [goodbye]
 PLAYER: I found your ring. [if stage 20]
-BRYNJA: Oh, thank the gods! Here, you've earned this. [takes ring x1] [gives gold x100] [stage 100] [emotion happy] [goodbye]`,
+BRYNJA: Oh, thank the gods! Here, you've earned this. [gesture applaud] [takes ring x1] [gives gold x100] [stage 100] [emotion happy] [goodbye]`,
       },
       {
         title: 'Eirik',
         screenplay: `PLAYER: Have you seen a ring around here? [if stage 10]
-EIRIK: A ring? Ha! Saw something shiny roll across a table earlier. Didn't think it was worth getting up for. [goodbye]`,
+EIRIK: A ring? Ha! Saw something shiny roll across a table earlier. Didn't think it was worth getting up for. [gesture point] [goodbye]`,
       },
     ],
     rewards: [],
+    animations: [{ atStage: 20, characterKey: 'eirik', gesture: 'laugh' }],
     assumptions: ['The ring starts on a table in the tavern', 'Brynja pays 100 gold in her dialogue rather than as a separate reward'],
     questions: ['Should Eirik be suspicious, or just lazy?'],
   };

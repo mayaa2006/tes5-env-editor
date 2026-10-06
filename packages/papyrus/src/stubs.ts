@@ -109,6 +109,10 @@ Event OnReset()
 EndEvent
 `,
   Actor: `Scriptname Actor extends ObjectReference Hidden
+Bool Function PlayIdle(Idle akIdle) native
+Bool Function PlayIdleWithTarget(Idle akIdle, ObjectReference akTarget) native
+Function SetLookAt(ObjectReference akTarget, Bool abPathingLookAt = False) native
+Function ClearLookAt() native
 Float Function GetActorValue(String asValueName) native
 Float Function GetAV(String asValueName)
   Return GetActorValue(asValueName)

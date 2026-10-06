@@ -21,10 +21,11 @@ import {
 } from '@xyflow/react';
 import { useMeasured } from './measured';
 import '@xyflow/react/dist/style.css';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormKey } from '@tes5/esp';
 import { parseScreenplay, type DialogueGraph as Graph, type DialogueInfoNode, type DialogueTopicNode } from '@tes5/workspace';
-import { Checkbox, FormLink, FormPicker, Icon, Modal, TextInput, useQuery, useSummaries } from '../../components/ui';
+import { Checkbox, Field, FormLink, FormPicker, Icon, Modal, TextInput, useDebounced, useQuery, useSummaries } from '../../components/ui';
+import { GesturePicker } from './GesturePicker';
 import { engine, useStore } from '../../state/store';
 import { InfoConditions, InfoFragmentEditor, NewResponse, patchRecord } from './QuestDesigner';
 
@@ -107,6 +108,8 @@ function Inner({ quest, questEditorId, focus, onListView }: { quest: FormKey; qu
   const [newResponseFor, setNewResponseFor] = useState<FormKey | null>(null);
   const [scriptOpen, setScriptOpen] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const { data: lint } = useQuery(() => client?.call('lintDialogue', quest), [quest]);
   useEffect(() => setSelected(focus ?? null), [focus]);
   const flow = useReactFlow();
   const { onChanges, withSize } = useMeasured();
@@ -173,9 +176,32 @@ function Inner({ quest, questEditorId, focus, onListView }: { quest: FormKey; qu
         <button className="btn small ghost" onClick={onListView}>
           List view
         </button>
+        <button
+          className={`btn small ${lint?.some((l) => l.severity === 'error') ? 'warn' : 'ghost'}`}
+          onClick={() => setChecking(!checking)}
+          data-testid="dlg-check"
+          title="Checks for lines nobody answers, choices that never appear, lines still offered after the quest moved on, stages that don't exist, over-long lines and placeholders"
+        >
+          {lint?.length ? `⚠ ${lint.length} to check` : '✓ Dialogue OK'}
+        </button>
       </div>
       <div className="row" style={{ flex: 1, minHeight: 0, alignItems: 'stretch', gap: 0 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
+          {checking && (
+            <div className="card" style={{ position: 'absolute', right: 12, top: 12, width: 380, maxHeight: '70%', overflow: 'auto', zIndex: 5 }} data-testid="dlg-lint">
+              <div className="card-title">Dialogue check</div>
+              {lint?.length ? (
+                lint.map((l, n) => (
+                  <div key={n} className={`small ${l.severity === 'error' ? 'err' : 'warn'}`} style={{ marginBottom: 6, cursor: l.form ? 'pointer' : undefined }} onClick={() => l.form && setSelected(l.form)} title={l.detail}>
+                    {l.severity === 'error' ? '✖' : '⚠'} {l.message}
+                    {l.detail && <div className="dim">{l.detail}</div>}
+                  </div>
+                ))
+              ) : (
+                <div className="ok small">Nothing to fix: every line is answered, every choice can be reached, and stages exist.</div>
+              )}
+            </div>
+          )}
           {g.topics.length ? (
             <ReactFlow
               nodes={nodes}
@@ -270,6 +296,7 @@ function InfoPanel({ i, g, questEditorId, onAddChoice }: { i: DialogueInfoNode; 
           <TextInput key={n} value={l} onCommit={(text) => patchRecord(i.formKey, 'Edit response', (d) => (d.responses[n].text = text))} />
         ))}
         <Checkbox checked={i.goodbye} onChange={(on) => patchRecord(i.formKey, 'Goodbye flag', (d) => (d.data.flags = on ? d.data.flags | 1 : d.data.flags & ~1))} label="Ends the conversation" />
+        <ResponseGesture info={i.formKey} />
         <div>
           <h3 style={{ margin: '6px 0' }}>Player choices after this</h3>
           {i.choices.map((c) => {
@@ -386,11 +413,36 @@ Brynja: Find it and I'll pay you.
     PLAYER: Not interested.
       Brynja: Suit yourself. [goodbye]`;
 
+function ResponseGesture({ info }: { info: FormKey }) {
+  const client = useStore((s) => s.client);
+  const { data } = useQuery(() => client?.call('responseGesture', info), [info]);
+  return (
+    <Field label="Gesture" title="An animation the speaker plays as they start this line (wave, point, laugh…). It's written into the response's begin script; other lines there are kept.">
+      <GesturePicker value={data ?? null} onChange={(g) => engine((c) => c.call('setResponseGesture', info, g), { success: g ? 'Gesture set' : 'Gesture removed' })} testId="dlg-gesture" />
+    </Field>
+  );
+}
+
 function ScreenplayDialog({ quest, onClose }: { quest: FormKey; onClose: () => void }) {
   const client = useStore((s) => s.client);
+  const area = useRef<HTMLTextAreaElement>(null);
+  // Add a [gesture …] tag to the end of the line the cursor is on.
+  const insertGesture = (g: string | null) => {
+    if (!g) return;
+    const el = area.current;
+    const at = el ? el.selectionStart : text.length;
+    let end = text.indexOf('\n', at);
+    if (end < 0) end = text.length;
+    const next = `${text.slice(0, end).replace(/\s+$/, '')} [gesture ${g}]${text.slice(end)}`;
+    setText(next);
+    requestAnimationFrame(() => el?.focus());
+  };
   const { data: existing } = useQuery(() => client?.call('dialogueScreenplay', quest), [quest], { revision: false });
   const [text, setText] = useState('');
   const parsed = useMemo(() => parseScreenplay(text), [text]);
+  const dtext = useDebounced(text, 300);
+  const { data: lint } = useQuery(() => (dtext.trim() ? client?.call('lintScreenplay', quest, dtext) : Promise.resolve([])), [dtext], { revision: false });
+  const blocking = (lint ?? []).filter((l) => l.severity === 'error');
   const counts = useMemo(() => {
     let topics = 0;
     let responses = 0;
@@ -417,7 +469,7 @@ function ScreenplayDialog({ quest, onClose }: { quest: FormKey; onClose: () => v
           </button>
           <button
             className="btn primary"
-            disabled={!text.trim() || parsed.errors.length > 0}
+            disabled={!text.trim() || parsed.errors.length > 0 || blocking.length > 0}
             onClick={async () => {
               const r = await engine((c) => c.call('importScreenplay', quest, text), { busy: 'Creating dialogue…' });
               if (r) {
@@ -434,12 +486,13 @@ function ScreenplayDialog({ quest, onClose }: { quest: FormKey; onClose: () => v
     >
       <div className="row" style={{ gap: 12, alignItems: 'flex-start' }}>
         <div className="grow">
-          <textarea className="input mono" style={{ width: '100%', height: 320, whiteSpace: 'pre' }} value={text} onChange={(e) => setText(e.target.value)} placeholder={SCRIPT_HELP} spellCheck={false} data-testid="dlg-script-text" onKeyDown={(e) => e.stopPropagation()} />
-          {parsed.errors.length > 0 && text.trim() && (
-            <div className="small warn" style={{ marginTop: 6, maxHeight: 90, overflow: 'auto' }}>
-              {parsed.errors.map((e) => (
-                <div key={`${e.line}${e.message}`}>
-                  Line {e.line}: {e.message}
+          <textarea ref={area} className="input mono" style={{ width: '100%', height: 320, whiteSpace: 'pre' }} value={text} onChange={(e) => setText(e.target.value)} placeholder={SCRIPT_HELP} spellCheck={false} data-testid="dlg-script-text" onKeyDown={(e) => e.stopPropagation()} />
+          {text.trim() && (lint ?? []).length > 0 && (
+            <div className="small" style={{ marginTop: 6, maxHeight: 110, overflow: 'auto' }} data-testid="dlg-script-lint">
+              {lint!.map((e, n) => (
+                <div key={n} className={e.severity === 'error' ? 'err' : 'warn'} title={e.detail}>
+                  {e.line ? `Line ${e.line}: ` : ''}
+                  {e.message}
                 </div>
               ))}
             </div>
@@ -451,8 +504,9 @@ function ScreenplayDialog({ quest, onClose }: { quest: FormKey; onClose: () => v
           </p>
           <p>Indent player lines under an answer to make them choices after it.</p>
           <p>
-            Tags: <span className="mono">[goodbye]</span> ends the talk, <span className="mono">[stage 20]</span> sets a quest stage after the line, <span className="mono">[if stage 10]</span> only at that stage, <span className="mono">[emotion happy]</span>.
+            Tags: <span className="mono">[goodbye]</span> ends the talk, <span className="mono">[stage 20]</span> sets a quest stage after the line, <span className="mono">[if stage 10]</span> only at that stage, <span className="mono">[emotion happy]</span>, <span className="mono">[gives gold x100]</span> / <span className="mono">[takes Ring x1]</span>, <span className="mono">[gesture wave]</span> plays an animation.
           </p>
+          <GesturePicker value={null} none="Add a gesture to this line…" onChange={insertGesture} testId="dlg-insert-gesture" />
           <p>New lines are added; existing dialogue is kept.</p>
           {existing && existing.trim() && (
             <details>

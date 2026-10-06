@@ -15,6 +15,7 @@ import type { QuestAliasModel, QuestService } from './quest';
 import type { ScriptService } from './scripts';
 import { newTriggerId, type TriggerEventKind, type TriggerHost, type TriggerService, type TriggerSpec } from './triggers';
 import { WorldService } from './world';
+import { gestureActorName, gestureCode, parseGestureLine } from './gestures';
 
 export type QuestEdgeKind = TriggerEventKind | 'talk' | 'script';
 
@@ -48,6 +49,8 @@ export interface QuestStageNode {
   /** Objectives shown / completed by this stage's script. */
   shows: number[];
   completes: number[];
+  /** Animations the stage's script plays (line = the script line, to remove it). */
+  gestures: { line: string; actor: string; gesture: string; label: string }[];
 }
 
 export interface QuestGraph {
@@ -131,9 +134,12 @@ export class QuestGraphService {
       const code = await this.fragmentCode(quest, st.index);
       const shows: number[] = [];
       const completes: number[] = [];
+      const gestures: QuestStageNode['gestures'] = [];
       for (const line of code.split('\n')) {
         const m = OBJ.exec(line);
         if (m) (m[1]!.toLowerCase() === 'displayed' ? shows : completes).push(Number(m[2]));
+        const gl = parseGestureLine(this.ws, line);
+        if (gl) gestures.push({ line: line.trim(), actor: gestureActorName(gl.actor), gesture: gl.gesture.id, label: gl.gesture.label });
       }
       const le = st.logEntries[0];
       nodes.push({
@@ -146,6 +152,7 @@ export class QuestGraphService {
         hasScript: !!code.trim(),
         shows,
         completes,
+        gestures,
       });
       for (const m of code.matchAll(SET_STAGE)) edges.push({ id: `frag:${st.index}:${m[1]}`, from: st.index, to: Number(m[1]), kind: 'script', label: 'Right away (stage script)', source: { type: 'fragment', stage: st.index } });
     }
@@ -346,6 +353,28 @@ export class QuestGraphService {
     if (!lines.length) return;
     const code = await this.fragmentCode(quest, stage);
     await this.quests.setStageFragment(quest, stage, [code.trimEnd(), ...lines].filter(Boolean).join('\n'));
+  }
+
+  /** Make a character play a gesture when the quest reaches a stage. */
+  async addStageGesture(quest: FormKey, stage: number, actor: FormKey, gesture: string): Promise<void> {
+    await this.ws.transactionAsync(`Stage ${stage} animation`, async () => {
+      if (!this.quests.quest(quest).stages.some((s) => s.index === stage)) this.quests.addStage(quest, stage);
+      const id = this.aliasFor(quest, actor);
+      const alias = this.quests.quest(quest).aliases.find((a) => a.id === id)!;
+      await this.appendStageCode(quest, stage, [gestureCode(this.ws, gesture, `Alias_${alias.name}.GetActorReference()`)]);
+    });
+  }
+
+  /** Remove one line (e.g. a gesture) from a stage's script. */
+  async removeStageLine(quest: FormKey, stage: number, line: string): Promise<void> {
+    await this.ws.transactionAsync(`Stage ${stage} script`, async () => {
+      const code = await this.fragmentCode(quest, stage);
+      const lines = code.split('\n');
+      const i = lines.findIndex((l) => l.trim() === line.trim());
+      if (i < 0) return;
+      lines.splice(i, 1);
+      await this.quests.setStageFragment(quest, stage, lines.join('\n').trim());
+    });
   }
 
   /** Which objectives a stage shows/completes (rewrites those lines of the stage script). */

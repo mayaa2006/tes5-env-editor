@@ -12,6 +12,7 @@ import { rng, type EnvironmentService } from './environment';
 import { emptyMorphs, FEMALE_FLAG, type NpcService } from './npc';
 import type { QuestService } from './quest';
 import type { NewQuestEdge, QuestGraphService } from './questgraph';
+import { lintQuestDialogue } from './dialoguelint';
 import { validatePlan, type PlanCharacter, type PlanItem, type PlanLocation, type QuestPlan } from './questplan';
 import { WorldService, type Vec3 } from './world';
 
@@ -345,7 +346,7 @@ export class QuestBuilder {
     for (const conv of plan.conversations) {
       const text = rewriteScreenplay(conv.screenplay, speakerIds, itemIds);
       try {
-        const r = await this.dialogue.importScreenplay(quest, text, (info, code) => this.quests.setInfoFragment(info, 'end', code));
+        const r = await this.dialogue.importScreenplay(quest, text, (info, code, which) => this.quests.setInfoFragment(info, which, code));
         report.dialogue.topics += r.topics;
         report.dialogue.responses += r.responses;
       } catch (e) {
@@ -377,6 +378,9 @@ export class QuestBuilder {
       await this.graphs.addEdge(quest, { from: s.from, to: s.to, kind: s.kind, target } as NewQuestEdge);
     }
 
+    // Gestures at quest events.
+    for (const a of plan.animations) await this.graphs.addStageGesture(quest, a.atStage, npcs.get(a.characterKey)!, a.gesture);
+
     // Rewards.
     const byStage = new Map<number, string[]>();
     for (const r of plan.rewards) {
@@ -391,6 +395,7 @@ export class QuestBuilder {
     if (created.length) report.notes.push(`New characters need their faces exported from the Creation Kit before release (select them, Ctrl+F4), or they'll have dark faces. The Release tab lists them.`);
     if (!plan.startsWithGame) report.notes.push('The quest doesn’t start with the game; start it from another quest or a trigger (Start Quest).');
     report.problems = (await this.graphs.graph(quest)).problems;
+    for (const l of await lintQuestDialogue(quest, { quests: this.quests, dialogue: this.dialogue, graphs: this.graphs })) report.warnings.push(`Dialogue: ${l.message}`);
     return report;
   }
 

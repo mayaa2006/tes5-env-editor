@@ -12,6 +12,8 @@ import { validateNavmesh } from '@tes5/navmesh';
 import { zipSync } from 'fflate';
 import { boundsMismatches, eslReport, existingNavmeshes } from './automations';
 import { type Workspace } from './engine';
+import { DialogueService } from './dialogue';
+import { lintQuestDialogue } from './dialoguelint';
 import { EnvironmentService } from './environment';
 import { basename, joinPath } from './fs';
 import type { NpcService } from './npc';
@@ -206,6 +208,13 @@ export class ReleaseService {
         const targets = Object.values(al.fill).filter((v): v is FormKey => typeof v === 'string' && v.includes(':'));
         if (al.fillType === 'none' && !optional) add({ severity: 'warning', category: 'quests', message: `${label(key)}: alias “${al.name}” has no way to be filled`, detail: 'A required alias that can\'t fill stops the quest from starting.', form: key });
         for (const t of targets) if (!this.ws.exists(t)) add({ severity: 'error', category: 'quests', message: `${label(key)}: alias “${al.name}” points to ${t}, which doesn't exist`, detail: 'The alias can\'t fill, so the quest won\'t start.', form: key });
+      }
+      // Dialogue problems (lines nobody answers, choices never offered, stages that don't exist, …).
+      try {
+        for (const l of await lintQuestDialogue(key, { quests: this.quests, dialogue: new DialogueService(this.ws, this.quests), graphs: this.graphs }))
+          add({ severity: l.severity, category: 'dialogue', message: `${label(key)}: ${l.message}`, detail: l.detail, form: l.form ?? key });
+      } catch {
+        // unreadable dialogue is reported by the record checks
       }
       // Lines without a voice type are silent and flash past.
       for (const v of this.quests.voiceFiles(key)) {
