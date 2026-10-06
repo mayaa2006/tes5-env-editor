@@ -289,8 +289,12 @@ function BodyTab({ a, races, commit }: { a: NpcAppearance; races: { formKey: For
 }
 
 function HeadTab({ a, parts, commit }: { a: NpcAppearance; parts: HeadPartInfo[]; commit: (p: Partial<NpcAppearance>) => void }) {
+  const client = useStore((s) => s.client);
   const byKey = new Map(parts.map((p) => [p.formKey, p]));
-  const fits = (p: HeadPartInfo) => p.playable && (a.female ? p.female : p.male);
+  // Only parts the race allows (its "valid races" list), for this sex — what the game's own creator offers.
+  const { data: fitting } = useQuery(() => client?.call('headParts', { race: a.race, female: a.female }), [a.race, a.female]);
+  const allowed = new Set((fitting ?? []).map((p) => p.formKey));
+  const fits = (p: HeadPartInfo) => allowed.has(p.formKey);
   const choose = (type: HeadPartInfo['type'], key: FormKey | null) => {
     const kept = a.headParts.filter((k) => byKey.get(k)?.type !== type || type === 'Scar');
     const next = type === 'Scar' ? (key ? (kept.includes(key) ? kept.filter((k) => k !== key) : [...kept, key]) : kept.filter((k) => byKey.get(k)?.type !== 'Scar')) : key ? [...kept, key] : kept;
