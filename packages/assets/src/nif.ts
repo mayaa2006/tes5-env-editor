@@ -69,7 +69,17 @@ class Reader {
   constructor(readonly b: Uint8Array) {
     this.dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
   }
+  /** Throw instead of reading past the end (corrupt files must fail fast, not allocate gigabytes). */
+  need(n: number): void {
+    if (!(n >= 0) || this.pos + n > this.b.byteLength) throw new RangeError(`NIF data ends early (need ${n} bytes at ${this.pos})`);
+  }
+  /** A count read from the file, checked against the bytes left (each item takes at least `each` bytes). */
+  count(n: number, each: number): number {
+    this.need(n * each);
+    return n;
+  }
   u8() {
+    this.need(1);
     return this.b[this.pos++]!;
   }
   u16() {
@@ -101,11 +111,13 @@ class Reader {
     return halfToFloat(this.u16());
   }
   bytes(n: number) {
+    this.need(n);
     const v = this.b.subarray(this.pos, this.pos + n);
     this.pos += n;
     return v;
   }
   str(n: number) {
+    this.need(n);
     let s = '';
     for (let i = 0; i < n; i++) s += String.fromCharCode(this.b[this.pos + i]!);
     this.pos += n;
@@ -194,18 +206,19 @@ function readHeader(r: Reader): Header {
     r.exportString(); // export script
     if (bsVersion >= 103) r.exportString(); // max file path
   }
-  const numBlockTypes = r.u16();
+  const numBlockTypes = r.count(r.u16(), 4);
   const blockTypes: string[] = [];
   for (let i = 0; i < numBlockTypes; i++) blockTypes.push(r.sized());
+  r.count(numBlocks, 6);
   const blockTypeIndex: number[] = [];
   for (let i = 0; i < numBlocks; i++) blockTypeIndex.push(r.u16() & 0x7fff);
   const blockSizes: number[] = [];
   for (let i = 0; i < numBlocks; i++) blockSizes.push(r.u32());
-  const numStrings = r.u32();
+  const numStrings = r.count(r.u32(), 4);
   r.u32(); // max string length
   const strings: string[] = [];
   for (let i = 0; i < numStrings; i++) strings.push(r.sized());
-  const numGroups = r.u32();
+  const numGroups = r.count(r.u32(), 4);
   for (let i = 0; i < numGroups; i++) r.u32();
   return { version, userVersion, bsVersion, numBlocks, blockTypes, blockTypeIndex, blockSizes, strings, dataStart: r.pos };
 }
@@ -238,7 +251,7 @@ interface ParsedBlock {
 function readObjectNET(r: Reader, h: Header, isLightingShader: boolean): string {
   if (isLightingShader && h.bsVersion >= 83 && h.bsVersion <= 130) r.u32(); // shader type, returned separately
   const nameIdx = r.i32();
-  const n = r.u32();
+  const n = r.count(r.u32(), 4);
   for (let i = 0; i < n; i++) r.i32();
   r.i32(); // controller
   return nameIdx >= 0 ? (h.strings[nameIdx] ?? '') : '';
@@ -337,7 +350,7 @@ function readNiGeometry(r: Reader, h: Header, type: string): ParsedBlock {
   const av = readAVObject(r, h);
   const dataRef = r.i32();
   const skinRef = r.i32();
-  const numMaterials = r.u32();
+  const numMaterials = r.count(r.u32(), 8);
   for (let i = 0; i < numMaterials; i++) r.i32();
   for (let i = 0; i < numMaterials; i++) r.i32();
   r.i32(); // active material
@@ -399,7 +412,7 @@ function readGeometryData(r: Reader, h: Header, type: string): ParsedBlock {
     }
   } else {
     // NiTriStripsData → triangle list
-    const numStrips = r.u16();
+    const numStrips = r.count(r.u16(), 2);
     const lengths: number[] = [];
     for (let i = 0; i < numStrips; i++) lengths.push(r.u16());
     const hasPoints = r.u8() !== 0;
@@ -544,7 +557,7 @@ export function parseNif(bytes: Uint8Array): NifFile {
   r.pos = pos;
   const roots: number[] = [];
   try {
-    const n = r.u32();
+    const n = r.count(r.u32(), 4);
     for (let i = 0; i < n; i++) roots.push(r.i32());
   } catch {
     roots.push(0);

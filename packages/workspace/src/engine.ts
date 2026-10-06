@@ -59,6 +59,8 @@ export interface PluginSlot {
   isLocalized: boolean;
   masters: string[];
   strings?: Partial<Record<StringsKind, StringTable>>;
+  /** Why the plugin couldn't be read or loaded (it is skipped). */
+  error?: string;
 }
 
 export interface WorkspaceOptions {
@@ -212,7 +214,15 @@ export class Workspace {
     this.slots.length = 0;
     for (const e of order) {
       const path = onDisk.get(e.name.toLowerCase())!;
-      const header = readPluginHeader(await this.readHeaderBytes(path), e.name);
+      let header: ReturnType<typeof readPluginHeader>;
+      try {
+        header = readPluginHeader(await this.readHeaderBytes(path), e.name);
+        void header.masters; // parse the header now so a corrupt one is caught here
+      } catch (err) {
+        this.slots.push({ name: e.name, active: false, path, isMaster: /\.esm$/i.test(e.name), isLight: /\.esl$/i.test(e.name), isLocalized: false, masters: [], error: `Unreadable header: ${(err as Error).message}` });
+        this.emit({ type: 'warning', message: `${e.name} can't be read and was skipped (${(err as Error).message})` });
+        continue;
+      }
       this.slots.push({
         name: e.name,
         active: e.active,
@@ -255,11 +265,26 @@ export class Workspace {
     for (let i = 0; i < active.length; i++) {
       const s = active[i]!;
       onProgress?.(s.name, i, active.length);
-      if (s.plugin || !s.path) continue;
+      if (s.plugin || !s.path || !s.active) continue;
+      // A broken plugin (or one whose masters are missing) is skipped, not fatal:
+      // big load orders often contain one, and everything else should still open.
       const missing = s.masters.filter((m) => !this.slot(m)?.active);
-      if (missing.length) throw new WorkspaceError(`${s.name} requires missing/inactive masters: ${missing.join(', ')}`);
-      s.plugin = parsePlugin(await this.fs.readFile(s.path), s.name);
-      s.mapper = new FormIdMapper(s.name, s.plugin.masters);
+      if (missing.length) {
+        s.active = false;
+        s.error = `Missing or skipped master(s): ${missing.join(', ')}`;
+        this.emit({ type: 'warning', message: `${s.name} was skipped: it needs ${missing.join(', ')}` });
+        continue;
+      }
+      try {
+        s.plugin = parsePlugin(await this.fs.readFile(s.path), s.name);
+        s.mapper = new FormIdMapper(s.name, s.plugin.masters);
+        s.error = undefined;
+      } catch (err) {
+        s.plugin = undefined;
+        s.active = false;
+        s.error = `Corrupt: ${(err as Error).message}`;
+        this.emit({ type: 'warning', message: `${s.name} is damaged and was skipped (${(err as Error).message})` });
+      }
     }
     this.vfs.options.plugins = this.slots.filter((s) => s.active).map((s) => s.name);
     await this.vfs.build();

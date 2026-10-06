@@ -32,6 +32,8 @@ export const FileTypeFlags = {
 } as const;
 
 const COMPRESSION_TOGGLE = 0x40000000;
+/** Largest single file we will extract (1 GiB). */
+const MAX_FILE_SIZE = 1 << 30;
 
 /** Random-access byte source (a Uint8Array, or a file handle in Node). */
 export interface ByteSource {
@@ -188,6 +190,7 @@ export class BsaArchive {
   read(pathOrEntry: string | BsaFileEntry): Uint8Array {
     const e = typeof pathOrEntry === 'string' ? this.entry(pathOrEntry) : pathOrEntry;
     if (!e) throw new Error(`${this.name}: file not found: ${pathOrEntry as string}`);
+    if (e.offset + e.storedSize > this.source.size) throw new Error(`${this.name}: ${e.path} lies outside the archive (corrupt BSA)`);
     let data = this.source.read(e.offset, e.storedSize);
     if (this.archiveFlags & ArchiveFlags.EmbedFileNames) {
       const n = data[0]!;
@@ -196,6 +199,8 @@ export class BsaArchive {
     if (!e.compressed) return data.slice();
     const originalSize = readU32(data, 0);
     const payload = data.subarray(4);
+    // zlib can't expand more than ~1032:1 and LZ4 ~255:1; anything beyond that is corruption.
+    if (originalSize > MAX_FILE_SIZE || originalSize > payload.byteLength * 1100 + 64) throw new Error(`${this.name}: ${e.path} has an impossible size (corrupt BSA)`);
     if (this.version === 105) return decompressFrame(payload, originalSize);
     const out = new Uint8Array(originalSize);
     unzlibSync(payload, { out });

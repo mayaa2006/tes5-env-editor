@@ -138,7 +138,14 @@ function LoadOrderPicker() {
                 <td>
                   <Checkbox checked={active.has(p.name)} onChange={(v) => toggle(p.name, v)} label="" />
                 </td>
-                <td>{p.name}</td>
+                <td>
+                  {p.name}
+                  {p.error && (
+                    <div className="small warn" title={p.error}>
+                      {p.error}
+                    </div>
+                  )}
+                </td>
                 <td>
                   <div className="chips">
                     {p.isMaster && <span className="chip">ESM</span>}

@@ -444,3 +444,41 @@ describe('deleting forms', () => {
     expect(warnings.join()).toMatch(/still point to the deleted/);
   });
 });
+
+describe('damaged load orders', () => {
+  it('skips corrupt plugins and plugins with missing masters instead of failing', async () => {
+    const fs = new MemoryFileSystem();
+    const demo = createDemoData(fs);
+    // Corrupt one plugin's header and add one whose master doesn't exist.
+    const dirty = `${demo.dataDir}/DirtyPatch.esp`;
+    const b = await fs.readFile(dirty);
+    b.fill(0xee, 60, 90);
+    await fs.writeFile(dirty, b);
+    const orphan = new Workspace(fs, { game: 'SkyrimSE', roots: [demo.dataDir], outputDir: demo.dataDir, loadOrder: [{ name: 'DemoWorld.esm', active: true }] });
+    await orphan.scan();
+    await orphan.load();
+    orphan.createPlugin('NeedsMissing.esp');
+    orphan.active!.plugin!.setMasters(['Missing.esm']);
+    await orphan.save();
+
+    const ws = new Workspace(fs, {
+      game: 'SkyrimSE',
+      roots: [demo.dataDir],
+      outputDir: demo.dataDir,
+      loadOrder: [
+        { name: 'DemoWorld.esm', active: true },
+        { name: 'DirtyPatch.esp', active: true },
+        { name: 'NeedsMissing.esp', active: true },
+      ],
+    });
+    const warnings: string[] = [];
+    ws.on((e) => e.type === 'warning' && warnings.push(e.message));
+    await ws.scan();
+    await ws.load();
+    expect(ws.slot('DemoWorld.esm')!.plugin).toBeDefined();
+    expect(ws.slot('DirtyPatch.esp')!.error).toMatch(/Unreadable|Corrupt/);
+    expect(ws.slot('NeedsMissing.esp')!.error).toMatch(/Missing.esm/);
+    expect(warnings.length).toBe(2);
+    expect(ws.search({ sigs: ['STAT'] }).total).toBeGreaterThan(5);
+  });
+});

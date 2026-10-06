@@ -45,7 +45,7 @@ export interface SessionInfo {
   canRedo: boolean;
   undoLabel?: string;
   redoLabel?: string;
-  loadOrder: { name: string; active: boolean; loaded: boolean; isMaster: boolean; isLight: boolean; isLocalized: boolean; masters: string[]; isActivePlugin: boolean }[];
+  loadOrder: { name: string; active: boolean; loaded: boolean; isMaster: boolean; isLight: boolean; isLocalized: boolean; masters: string[]; isActivePlugin: boolean; error?: string }[];
 }
 
 export interface MeshPayload {
@@ -187,6 +187,7 @@ export class EngineHost {
         isLocalized: s.isLocalized,
         masters: s.masters,
         isActivePlugin: s.name === ws.activeName,
+        error: s.error,
       })),
     };
   }

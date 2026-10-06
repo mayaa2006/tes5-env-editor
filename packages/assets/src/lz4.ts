@@ -190,6 +190,8 @@ export function decompressFrame(data: Uint8Array, sizeHint?: number): Uint8Array
   if (hasDictId) p += 4;
   p++; // header checksum
   const blockMax = [0, 0, 0, 0, 1 << 16, 1 << 18, 1 << 20, 1 << 22][(bd >> 4) & 7] ?? 1 << 22;
+  // A corrupt header can claim any size; never trust more than ~255:1 expansion of the input.
+  if (contentSize !== undefined && contentSize > data.byteLength * 256 + 1024) throw new Error(`LZ4 frame claims ${contentSize} bytes from ${data.byteLength} (corrupt data)`);
   let out = new Uint8Array(contentSize ?? blockMax);
   let op = 0;
   for (;;) {
