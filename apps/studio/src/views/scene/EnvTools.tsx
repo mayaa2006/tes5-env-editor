@@ -36,7 +36,7 @@ const DEG = Math.PI / 180;
 const select = (keys: FormKey[] | undefined) => keys?.length && useStore.getState().setSceneSelection(keys);
 const toast = (kind: 'success' | 'info' | 'warning', text: string) => useStore.getState().toast(kind, text);
 
-export function EnvTools({ cell, interior, viewport, handlers, refs, onClose }: { cell: FormKey; interior: boolean; viewport: React.RefObject<Viewport | null>; handlers: React.RefObject<ToolHandlers>; refs: PlacedRef[]; onClose: () => void }) {
+export function EnvTools({ cell, interior, viewport, handlers, refs }: { cell: FormKey; interior: boolean; viewport: React.RefObject<Viewport | null>; handlers: React.RefObject<ToolHandlers>; refs: PlacedRef[] }) {
   const [tab, setTab] = useState<Tab>('place');
   // Leaving a tab (or the panel) stops its view mode.
   useEffect(
@@ -47,13 +47,7 @@ export function EnvTools({ cell, interior, viewport, handlers, refs, onClose }: 
     [tab, viewport],
   );
   return (
-    <div className="card env-tools" data-testid="env-tools">
-      <div className="card-title">
-        <span className="grow">World tools</span>
-        <button className="btn icon ghost" onClick={onClose} title="Close">
-          <Icon name="close" size={12} />
-        </button>
-      </div>
+    <div className="env-tools" data-testid="env-tools">
       <div className="env-tabs">
         {TABS.map((t) => (
           <button key={t.id} className={`btn small ${tab === t.id ? 'active' : 'ghost'}`} title={t.title} onClick={() => setTab(t.id)} data-testid={`env-tab-${t.id}`}>
@@ -128,7 +122,7 @@ function PlaceTab() {
         <Icon name="copy" size={12} /> Make array
       </button>
       <p className="dim small" style={{ margin: 0 }}>
-        Tip: turn on <b>Kit</b> snapping in the toolbar and press G to slide wall and floor pieces until their edges meet.
+        Tip: with <b>Kit</b> snapping on (the toolbar button), press G and slide a wall or floor piece next to another: their edges meet exactly. Hold Alt to move freely.
       </p>
     </div>
   );

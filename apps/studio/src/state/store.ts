@@ -27,6 +27,10 @@ export interface Settings {
   snapRotateDeg: number;
   snapScale: number;
   showMarkers: boolean;
+  /** While moving (G), snap edges flush to nearby pieces. */
+  kitSnap: boolean;
+  /** Properties panel shown per workspace (designers have their own editors, so it starts hidden there). */
+  inspector: Partial<Record<WorkspaceTab, boolean>>;
   textured: boolean;
   /** MO2 executable to start for test launches (as named in MO2). */
   mo2Executable: string;
@@ -44,6 +48,8 @@ const DEFAULT_SETTINGS: Settings = {
   snapRotateDeg: 15,
   snapScale: 0.1,
   showMarkers: true,
+  kitSnap: true,
+  inspector: { npc: false, quest: false },
   textured: true,
   mo2Executable: 'SKSE',
   mo2Exe: '',
@@ -82,6 +88,10 @@ interface Store {
   setSession(s: SessionInfo): void;
   setTab(t: WorkspaceTab): void;
   select(k?: FormKey): void;
+  /** Show (or hide) the properties panel in the current workspace. */
+  setInspector(open: boolean): void;
+  /** Select a form and make sure the properties panel is visible. */
+  showProperties(k: FormKey): void;
   setSceneSelection(keys: FormKey[]): void;
   setCell(k?: FormKey): void;
   setQuest(k?: FormKey): void;
@@ -111,6 +121,11 @@ export const useStore = create<Store>((set, get) => ({
   setSession: (session) => set({ session }),
   setTab: (tab) => set({ tab }),
   select: (selected) => set({ selected }),
+  setInspector: (open) => get().updateSettings({ inspector: { ...get().settings.inspector, [get().tab]: open } }),
+  showProperties: (k) => {
+    set({ selected: k });
+    get().setInspector(true);
+  },
   setSceneSelection: (sceneSelection) => set({ sceneSelection, selected: sceneSelection[sceneSelection.length - 1] ?? get().selected }),
   setCell: (cell) => set({ cell, sceneSelection: [] }),
   setQuest: (quest) => set({ quest, selected: quest }),

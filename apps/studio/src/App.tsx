@@ -37,6 +37,7 @@ export function App() {
   const [savePrompt, setSavePrompt] = useState(false);
   const pluginPrompt = useStore((s) => s.pluginPrompt);
   const loaded = session.open && session.loadOrder.some((p) => p.loaded);
+  const inspectorOpen = useStore((s) => s.settings.inspector[s.tab] !== false);
 
   useEffect(() => {
     if (!client) return;
@@ -98,13 +99,13 @@ export function App() {
     );
   }
 
-  // Which side panels each workspace uses.
-  const left = tab === 'scene' ? 300 : tab === 'script' ? 260 : 0;
-  const right = tab === 'scene' || tab === 'npc' || tab === 'quest' || tab === 'records';
+  // Which side panels each workspace uses (widths shrink on small windows, see styles.css).
+  const left = tab === 'scene' ? 'var(--left-wide)' : tab === 'script' ? 'var(--left-narrow)' : '0px';
+  const right = hasInspector(tab) && inspectorOpen;
   return (
     <div className="app">
       <TopBar onSave={save} />
-      <div className="main" style={{ gridTemplateColumns: `${left}px 1fr ${right ? 'var(--right, 340px)' : '0px'}` }}>
+      <div className="main" style={{ gridTemplateColumns: `${left} 1fr ${right ? 'var(--right)' : '0px'}` }}>
         <aside className="sidebar" style={left ? undefined : { overflow: 'hidden', borderRight: 'none' }}>
           {tab === 'script' ? <ScriptSidebar /> : tab === 'scene' ? <ObjectBrowser /> : null}
         </aside>
@@ -119,7 +120,7 @@ export function App() {
             {tab === 'automations' && <AutomationsView />}
             {tab === 'plugins' && <PluginsView />}
           </Suspense>
-          {right && <BottomLog />}
+          {hasInspector(tab) && <BottomLog />}
         </main>
         <aside className="rightbar" style={right ? undefined : { overflow: 'hidden', borderLeft: 'none' }}>
           {right && <Inspector />}
@@ -146,6 +147,9 @@ export function App() {
   );
 }
 
+/** Workspaces with a properties panel on the right. */
+const hasInspector = (tab: WorkspaceTab) => tab === 'scene' || tab === 'npc' || tab === 'quest' || tab === 'records';
+
 function ScriptSidebar() {
   return (
     <Suspense fallback={null}>
@@ -161,9 +165,9 @@ function TopBar({ onSave }: { onSave: () => void }) {
   const loaded = session.open && session.loadOrder.some((p) => p.loaded);
   return (
     <header className="topbar">
-      <div className="brand">
+      <div className="brand" title="TES5 Env Editor">
         <div className="logo" />
-        TES5 Env Editor
+        <span className="brand-name">TES5 Env Editor</span>
       </div>
       {loaded && (
         <nav className="workspace-tabs" aria-label="Workspaces">
@@ -185,7 +189,8 @@ function TopBar({ onSave }: { onSave: () => void }) {
             <Icon name="redo" />
           </button>
           <TestButton />
-          <span className={`chip ${session.activePlugin ? 'accent' : 'warn'}`} title="The plugin your edits go into">
+          {hasInspector(tab) && <PropertiesToggle />}
+          <span className={`chip nowrap ${session.activePlugin ? 'accent' : 'warn'}`} title={session.activePlugin ? `Your edits go into ${session.activePlugin}${session.dirty ? ' (unsaved changes)' : ''}. Change it on the Plugins tab.` : 'No plugin selected: your first edit will ask you to create one.'}>
             {session.activePlugin ? `Editing ${session.activePlugin}` : 'No plugin selected'}
             {session.dirty ? ' •' : ''}
           </span>
@@ -195,6 +200,15 @@ function TopBar({ onSave }: { onSave: () => void }) {
         </>
       )}
     </header>
+  );
+}
+
+function PropertiesToggle() {
+  const open = useStore((s) => s.settings.inspector[s.tab] !== false);
+  return (
+    <button className={`btn ghost ${open ? 'active' : ''}`} aria-pressed={open} title={open ? 'Hide the properties panel' : 'Show the properties panel (every field of the selected form)'} onClick={() => useStore.getState().setInspector(!open)} data-testid="toggle-properties">
+      <Icon name="sliders" /> <span className="hide-narrow">Properties</span>
+    </button>
   );
 }
 

@@ -69,15 +69,21 @@ test('exploratory sweep of every workspace', async ({ page }) => {
     await page.waitForTimeout(800);
   });
   await run('world: toolbar views', async () => {
-    for (const n of ['Top', 'Front', 'Right', 'Ortho', 'Persp']) {
-      const b = page.locator('.viewport-toolbar button', { hasText: new RegExp(`^${n}$`) });
-      if (await b.count()) await b.first().click();
+    for (const n of ['Top', 'Front', 'Right', 'Frame everything']) {
+      await page.getByTestId('view-menu').click();
+      await page.getByRole('menuitem', { name: n }).click();
     }
-    await page.locator('.viewport-toolbar button[title^="Frame all"]').click();
-    for (const n of ['Markers', 'Lighting', 'Navmesh']) {
-      await page.locator('.viewport-toolbar button', { hasText: n }).first().click();
-      await page.locator('.viewport-toolbar button', { hasText: n }).first().click();
+    for (let i = 0; i < 2; i++) {
+      await page.getByTestId('view-menu').click();
+      await page.getByRole('menuitemcheckbox', { name: /^Orthographic/ }).click();
     }
+    // Show toggles keep the menu open; flip each twice.
+    await page.getByTestId('view-menu').click();
+    for (const n of ['Editor markers', 'Cell lighting preview', 'Navmesh']) {
+      await page.getByRole('menuitemcheckbox', { name: n }).click();
+      await page.getByRole('menuitemcheckbox', { name: n }).click();
+    }
+    await page.keyboard.press('Escape');
   });
   await run('world: viewport navigation', async () => {
     const c = await center();
@@ -159,8 +165,8 @@ test('exploratory sweep of every workspace', async ({ page }) => {
   });
   await run('world: gizmo tools', async () => {
     for (const t of ['Move', 'Rotate', 'Scale', 'Select']) await page.locator('.viewport-toolbar button', { hasText: new RegExp(`^\\s*${t}$`) }).first().click();
-    await page.locator('.viewport-toolbar button[title^="Snap"]').click();
-    await page.locator('.viewport-toolbar button[title^="Snap"]').click();
+    await page.locator('.viewport-toolbar button[title^="Grid snapping"]').click();
+    await page.locator('.viewport-toolbar button[title^="Grid snapping"]').click();
   });
   await run('world: drop a mesh file from Assets', async () => {
     await page.getByRole('tab', { name: 'Assets' }).click();
@@ -180,14 +186,15 @@ test('exploratory sweep of every workspace', async ({ page }) => {
     await page.getByRole('tab', { name: 'Cells' }).click();
     await page.getByTestId('cell-list').locator('..').getByText('DemoValley1_0').click();
     await page.waitForTimeout(800);
-    await page.getByRole('button', { name: /Generate/ }).click();
+    await page.getByTestId('navmesh-menu').click();
+    await page.getByRole('menuitem', { name: 'Generate navmesh…' }).click();
     await page.getByTestId('generate-navmesh').click();
     await expect(page.locator('.toast').filter({ hasText: /Navmesh:/ }).last()).toBeVisible();
     await page.getByTestId('cell-list').locator('..').getByText('DemoValley0_0').click();
     await page.waitForTimeout(500);
   });
   await run('world: new interior cell', async () => {
-    await page.locator('.viewport-toolbar button', { hasText: 'Cell' }).click();
+    await page.getByTestId('new-cell').click();
     await page.getByRole('dialog').getByRole('button', { name: 'Create' }).click();
     await expect(page.locator('.viewport-toolbar strong')).toHaveText('MyNewInterior');
   });

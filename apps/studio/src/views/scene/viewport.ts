@@ -148,6 +148,8 @@ export class Viewport {
   private navMeshes: { key: FormKey; nav: Navmesh; mine: boolean }[] = [];
   /** Snap moved objects' bounding boxes to their neighbours' (kit pieces). */
   private kitSnap = false;
+  /** Alt held during a move: skip kit snapping this time. */
+  private altHeld = false;
   private kitTargets?: { key: FormKey; box: THREE.Box3 }[];
   private kitStart?: THREE.Box3;
   private brush?: { radius: number; ring: THREE.Line; painting: boolean; erase: boolean; points: THREE.Vector3[] };
@@ -1000,6 +1002,7 @@ export class Viewport {
     this.mouse.set(e.clientX, e.clientY);
     if (this.modal && !this.modal.gizmo) {
       this.ctrlHeld = e.ctrlKey;
+      this.altHeld = e.altKey;
       this.updateModal();
       return;
     }
@@ -1154,6 +1157,10 @@ export class Viewport {
     if (e.key === 'Control') {
       this.ctrlHeld = false;
       this.updateGizmoSnap();
+      if (this.modal) this.updateModal();
+    }
+    if (e.key === 'Alt') {
+      this.altHeld = false;
       if (this.modal) this.updateModal();
     }
   };
@@ -1427,6 +1434,10 @@ export class Viewport {
       this.ctrlHeld = true;
       return this.updateModal();
     }
+    if (e.key === 'Alt') {
+      this.altHeld = true;
+      return this.updateModal();
+    }
     if (k === 'x' || k === 'y' || k === 'z') {
       if (m.axis === k && m.plane === e.shiftKey) m.axis = null;
       else {
@@ -1479,7 +1490,7 @@ export class Viewport {
     if (m.kind === 'move') {
       let delta = this.moveDelta(m.pivot, m.mouse0, m.axis, m.plane, typed);
       let snappedTo: FormKey | undefined;
-      if (this.kitSnap && typed === undefined) ({ delta, to: snappedTo } = this.kitSnapDelta(delta, m.axis, m.plane));
+      if (this.kitSnap && !this.altHeld && typed === undefined) ({ delta, to: snappedTo } = this.kitSnapDelta(delta, m.axis, m.plane));
       for (const [k, s] of m.start) {
         const o = this.entries.get(k)!.obj;
         o.position.copy(s.pos).add(delta);
@@ -1527,7 +1538,8 @@ export class Viewport {
       text = `Scale ${f.toFixed(3)}${m.axis ? ' (Skyrim scale is always uniform)' : ''}`;
     }
     if (m.typed) text += `   [${m.typed}]`;
-    this.cb.status(`${text}${axisName ? `   ${axisName}` : ''}${this.snapping ? '   snap' : ''}`);
+    const kitHint = m.kind === 'move' && this.kitSnap ? (this.altHeld ? '   kit snap off (Alt)' : text.includes('snapped to') ? '' : '   kit snap on (hold Alt to skip)') : '';
+    this.cb.status(`${text}${axisName ? `   ${axisName}` : ''}${this.snapping ? '   snap' : ''}${kitHint}`);
     this.drawAxisGuide(m);
     this.invalidate(true);
   }

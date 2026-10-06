@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Icon, Tabs, useDebounced, useQuery } from '../components/ui';
 import { useStore } from '../state/store';
+import { NewCellDialog } from './scene/NewCellDialog';
 
 type Tab = 'objects' | 'cells' | 'assets';
 
@@ -47,8 +48,8 @@ function Objects() {
   }, [types]);
   return (
     <div className="panel" style={{ minHeight: 0 }}>
-      <div className="searchbox row">
-        <select className="input" style={{ width: 150 }} value={sig} onChange={(e) => setSig(e.target.value)}>
+      <div className="searchbox col" style={{ gap: 4 }}>
+        <select className="input" value={sig} onChange={(e) => setSig(e.target.value)} title="Kind of object">
           {grouped.map(([cat, ts]) => (
             <optgroup key={cat} label={cat}>
               {ts.map((t) => (
@@ -59,7 +60,8 @@ function Objects() {
             </optgroup>
           ))}
         </select>
-        <input className="input" placeholder="Filter…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input className="input" placeholder="Filter by name or Editor ID…" value={q} onChange={(e) => setQ(e.target.value)} />
+        {PLACEABLE.includes(sig) && <div className="faint small">Drag one into the 3D view to place it.</div>}
       </div>
       <ul className="list scroll" style={{ flex: 1 }} data-testid="object-list">
         {list?.items.map((i) => (
@@ -92,6 +94,7 @@ function Cells() {
   const setCell = useStore((s) => s.setCell);
   const setTab = useStore((s) => s.setTab);
   const [q, setQ] = useState('');
+  const [newCell, setNewCell] = useState(false);
   const { data: cells } = useQuery(() => client?.call('cells', {}), [client]);
   const { data: worlds } = useQuery(() => client?.call('worldspaces'), [client]);
   const filtered = (cells ?? []).filter((c) => !q || (c.editorId ?? '').toLowerCase().includes(q.toLowerCase()) || (c.name ?? '').toLowerCase().includes(q.toLowerCase()));
@@ -119,7 +122,12 @@ function Cells() {
         <input className="input" placeholder="Find cell…" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
       <div className="scroll" style={{ flex: 1 }}>
-        <div className="panel-header">Interiors ({interiors.length})</div>
+        <div className="panel-header row">
+          <span className="grow">Interiors ({interiors.length})</span>
+          <button className="btn small ghost" title="Create a new interior cell" onClick={() => setNewCell(true)} data-testid="new-cell">
+            <Icon name="plus" size={12} /> New
+          </button>
+        </div>
         <ul className="list" data-testid="cell-list">
           {interiors.map(item)}
         </ul>
@@ -132,6 +140,7 @@ function Cells() {
           </div>
         ))}
       </div>
+      {newCell && <NewCellDialog onClose={() => setNewCell(false)} />}
     </div>
   );
 }

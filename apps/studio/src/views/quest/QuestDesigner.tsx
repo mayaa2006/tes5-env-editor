@@ -31,6 +31,19 @@ export async function patchRecord(key: FormKey, label: string, fn: (d: Record<st
   return !!r;
 }
 
+/** Readable names for how an alias gets filled. */
+const FILL_LABELS: Record<string, string> = {
+  specific: 'Specific',
+  uniqueActor: 'Unique actor',
+  locationAlias: 'From a location alias',
+  external: 'From another quest',
+  create: 'Created at',
+  findMatching: 'Found by conditions',
+  refAliasLocation: 'Location of a reference alias',
+  fromEvent: 'From the starting event',
+  none: 'Not set',
+};
+
 export default function QuestDesigner() {
   const quest = useStore((s) => s.quest);
   return (
@@ -236,9 +249,9 @@ function Overview({ q }: { q: QuestModel }) {
         </div>
       </Field>
       <div className="card small dim">
-        Everything else (dialogue conditions, Story Manager event, text display globals…) is in the properties panel on the right.
+        Everything else (dialogue conditions, Story Manager event, text display globals…) is in the properties panel.
         <div style={{ marginTop: 6 }}>
-          <button className="btn small" onClick={() => useStore.getState().select(q.formKey)}>
+          <button className="btn small" onClick={() => useStore.getState().showProperties(q.formKey)}>
             Show all quest fields
           </button>
         </div>
@@ -442,7 +455,7 @@ function Aliases({ q }: { q: QuestModel }) {
                 {a.name} <span className="chip">{a.kind === 'ref' ? 'Reference' : 'Location'}</span>
               </td>
               <td className="small">
-                <span className="dim">{a.fillType}</span>{' '}
+                <span className="dim">{FILL_LABELS[a.fillType] ?? a.fillType}</span>{' '}
                 {Object.entries(a.fill)
                   .filter(([, v]) => typeof v === 'string' && v.includes(':'))
                   .map(([k, v]) => (
@@ -586,7 +599,7 @@ function Topic({ q, t }: { q: QuestModel; t: TopicModel }) {
           </div>
           <TextInput value={t.text ?? ''} placeholder="(no player line — e.g. a greeting)" onCommit={(name) => patchRecord(t.formKey, 'Edit topic text', (d) => (d.name = name))} />
         </div>
-        <button className="btn icon ghost" title="Show topic fields" onClick={() => useStore.getState().select(t.formKey)}>
+        <button className="btn icon ghost" title="Show topic fields" onClick={() => useStore.getState().showProperties(t.formKey)}>
           <Icon name="link" size={13} />
         </button>
       </div>

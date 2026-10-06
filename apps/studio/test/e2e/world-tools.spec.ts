@@ -12,7 +12,7 @@ async function pick(page: Page, button: Locator, search: string, item: string) {
 
 async function openCell(page: Page, name: string) {
   await page.getByTestId('cell-list').locator('..').getByText(name, { exact: true }).click();
-  await expect(page.getByTestId('outliner')).toBeVisible();
+  await expect(page.getByTestId('viewport')).toBeVisible();
 }
 
 const toastText = (page: Page, re: RegExp) => page.locator('.toast').filter({ hasText: re }).last();
@@ -45,15 +45,19 @@ test('dress and build with the world tools', async ({ page }) => {
   if (shots) await page.screenshot({ path: `${shots}/11-clutter.png` });
 
   // Array: four more pillars in a row.
+  await page.getByTestId('outliner-toggle').click();
   await page.getByTestId('outliner').locator('.list-item', { hasText: 'DemoPillar' }).first().click();
+  await page.getByTestId('env-tools-toggle').click();
   await panel.getByTestId('env-tab-place').click();
   await expect(panel).toContainText('1 selected');
   await panel.getByTestId('env-array').click();
   await expect(toastText(page, /Made 4 copies/)).toBeVisible();
+  await page.getByTestId('outliner-toggle').click();
   await expect(page.getByTestId('outliner').locator('.list-item', { hasText: 'DemoPillar' })).toHaveCount(5);
 
   // Linked door: select the tavern door, make a matching one outside.
   await page.getByTestId('outliner').getByText('DemoTavernDoorRef').click();
+  await page.getByTestId('env-tools-toggle').click();
   await panel.getByTestId('env-tab-doors').click();
   await expect(panel).toContainText('is not a load door yet');
   await pick(page, panel.locator('button.input').nth(1), 'DemoValley0', 'DemoValley0_0');
@@ -114,9 +118,9 @@ test('dress and build with the world tools', async ({ page }) => {
   if (shots) await page.screenshot({ path: `${shots}/13-room.png` });
 
   // Kit snapping: moving a wall piece with G snaps it flush to its neighbours.
-  await page.getByTestId('env-tools-toggle').click();
-  await page.getByTestId('kit-snap').click();
+  // It's on by default.
   await expect(page.getByTestId('kit-snap')).toHaveClass(/active/);
+  await page.getByTestId('outliner-toggle').click();
   await page.getByTestId('outliner').locator('.list-item', { hasText: 'DemoWallCorner' }).first().click();
   const v = (await page.getByTestId('viewport').boundingBox())!;
   await page.mouse.move(v.x + v.width / 2, v.y + v.height / 2);
@@ -124,5 +128,13 @@ test('dress and build with the world tools', async ({ page }) => {
   await page.mouse.move(v.x + v.width / 2 + 6, v.y + v.height / 2 + 3, { steps: 3 });
   await expect(page.locator('.viewport-mode')).toContainText('snapped to');
   await page.keyboard.press('Escape');
+  // And it can be turned off (remembered in the settings).
+  await page.getByTestId('kit-snap').click();
+  await expect(page.getByTestId('kit-snap')).not.toHaveClass(/active/);
+  await page.keyboard.press('g');
+  await page.mouse.move(v.x + v.width / 2 + 9, v.y + v.height / 2 + 5, { steps: 3 });
+  await expect(page.locator('.viewport-mode')).not.toContainText('snapped to');
+  await page.keyboard.press('Escape');
+  await page.getByTestId('kit-snap').click();
   expect(errors).toEqual([]);
 });
