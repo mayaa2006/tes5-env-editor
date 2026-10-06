@@ -22,7 +22,7 @@ const PLAN = {
     {
       key: 'halvar', name: 'Halvar', existing: 'DemoBlacksmith', basedOn: null, sex: null, race: null, role: 'Smith', appearance: 'Fine clothes and a hood, grey hair',
       look: { weight: null, height: null, hair: null, hairColor: 'grey', facialHair: null, eyes: null, scar: null },
-      voice: null, locationKey: null, essential: null, className: null, level: null,
+      voice: null, locationKey: null, spot: null, essential: null, className: null, level: null,
       outfit: { items: ['Blue Fine Clothes', 'Brown Hood', 'Leather Boots'], saveAs: 'HalvarSundayBest' },
       factions: [{ faction: 'Merchants', rank: 0 }], inventory: [], routine: [],
     },

@@ -5,7 +5,8 @@
  * aliases), the conversations (through the screenplay importer) and the
  * rewards. It's one undo step; if anything fails, nothing is left behind.
  */
-import { FACE_MORPHS, parseFormKey, type FormKey } from '@tes5/esp';
+import { FACE_MORPHS, QuestFlag, parseFormKey, type FormKey } from '@tes5/esp';
+import { joinPath } from './fs';
 import { WorkspaceError, type Workspace } from './engine';
 import { CharacterEditor } from './characteredit';
 import { ITEM_SIGS, formExpression, resolveItem, type DialogueService } from './dialogue';
@@ -14,9 +15,10 @@ import { emptyMorphs, FEMALE_FLAG, type NpcService } from './npc';
 import type { QuestService } from './quest';
 import type { NewQuestEdge, QuestGraphService } from './questgraph';
 import { lintQuestDialogue } from './dialoguelint';
+import { Placer } from './placement';
 import { createPackage, stageConditions, type PackageSpec } from './routines';
-import { validatePlan, type PlanCharacter, type PlanItem, type PlanLocation, type QuestPlan } from './questplan';
-import { WorldService, type Vec3 } from './world';
+import { validatePlan, type PlanCharacter, type PlanItem, type PlanLocation, type PlanStep, type QuestPlan } from './questplan';
+import { WorldService } from './world';
 
 const ESSENTIAL = 0x2;
 const UNIQUE = 0x20;
@@ -49,12 +51,114 @@ export interface QuestBuildReport {
   changed: { formKey: FormKey; label: string; changes: string[] }[];
   reused: { kind: PlanEntryKind; formKey: FormKey; label: string }[];
   dialogue: { topics: number; responses: number; greetings: number; scenes: number };
+  /** For updates: what was changed, in words. */
+  updated: string[];
   /** Things worth knowing (what was assumed or left for you). */
   notes: string[];
   /** Things that may not work as the plan intended. */
   warnings: string[];
   /** Problems the quest map finds in the result. */
   problems: string[];
+}
+
+/** What a build made, kept next to the plugin so a revised plan can update the quest. */
+export interface BuildRecord {
+  version: 1;
+  quest: FormKey;
+  prefix: string;
+  plan: QuestPlan;
+  cells: Record<string, FormKey>;
+  npcs: Record<string, FormKey>;
+  items: Record<string, FormKey>;
+  placedItems: Record<string, FormKey>;
+  inContainer: Record<string, FormKey>;
+  containerBases: Record<string, FormKey>;
+  /** Conversation title → the topics, scenes and shared greeting/chatter responses it made. */
+  conversations: Record<string, FormKey[]>;
+  /** Lines added to stage scripts, and why (reward, gesture, player, conversation:<title>). */
+  stageLines: { stage: number; line: string; why: string }[];
+  /** Character key → packages made for their routine (and forcegreet topics). */
+  packages: Record<string, { base: FormKey[]; alias: FormKey[] }>;
+}
+
+interface BuildSession {
+  plan: QuestPlan;
+  resolution: PlanResolution[];
+  random: () => number;
+  prefix: string;
+  quest: FormKey | null;
+  placer: Placer;
+  cells: Map<string, FormKey>;
+  npcs: Map<string, FormKey>;
+  items: Map<string, FormKey>;
+  placedItems: Map<string, FormKey>;
+  inContainer: Map<string, FormKey>;
+  containerBases: Map<FormKey, FormKey>;
+  perCell: Map<FormKey, number>;
+  conversations: Map<string, FormKey[]>;
+  stageLines: BuildRecord['stageLines'];
+  packages: Map<string, { base: FormKey[]; alias: FormKey[] }>;
+  report: QuestBuildReport;
+}
+
+function startStageOf(plan: QuestPlan): number {
+  const stages = [...plan.stages].sort((a, b) => a.index - b.index);
+  return stages.find((x) => x.startsQuest)?.index ?? stages[0]?.index ?? 0;
+}
+
+/** What changed about a character between two plans, as a character entry carrying only the changes (null if nothing). */
+function characterDelta(was: PlanCharacter, now: PlanCharacter): PlanCharacter | null {
+  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  const d: PlanCharacter = { ...now, spot: null, outfit: null, inventory: [], factions: [], className: null, level: null, look: null, essential: null, routine: [] };
+  let changed = false;
+  if (!same(was.outfit, now.outfit) && now.outfit) (d.outfit = now.outfit), (changed = true);
+  if (!same(was.factions, now.factions)) (d.factions = now.factions.filter((f) => !was.factions.some((x) => same(x, f)))), (changed ||= d.factions.length > 0);
+  if (!same(was.inventory, now.inventory)) (d.inventory = now.inventory.filter((i) => !was.inventory.some((x) => same(x, i)))), (changed ||= d.inventory.length > 0);
+  if (was.className !== now.className && now.className) (d.className = now.className), (changed = true);
+  if (was.level !== now.level && now.level !== null) (d.level = now.level), (changed = true);
+  if (was.essential !== now.essential && now.essential !== null) (d.essential = now.essential), (changed = true);
+  if (!same(was.look, now.look) && now.look) {
+    const l = { ...now.look };
+    for (const k of Object.keys(l) as (keyof typeof l)[]) if (was.look && same(was.look[k], l[k])) (l as any)[k] = null;
+    d.look = l;
+    changed = true;
+  }
+  return changed ? { ...d, existing: d.existing ?? now.name } : null;
+}
+
+/** The differences between two plans, in words (for the update preview). */
+export function describeDiff(old: QuestPlan, next: QuestPlan, fromRecord: boolean): string[] {
+  const out: string[] = [];
+  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  if (old.title !== next.title) out.push(`Rename the quest “${next.title}”`);
+  if (old.startsWithGame !== next.startsWithGame) out.push(next.startsWithGame ? 'Start the quest with the game' : 'Stop starting the quest with the game');
+  for (const st of old.stages) if (!next.stages.some((x) => x.index === st.index)) out.push(`Remove stage ${st.index} (and what leads to it)`);
+  for (const st of next.stages) {
+    const was = old.stages.find((x) => x.index === st.index);
+    if (!was) out.push(`Add stage ${st.index}`);
+    else if (was.journal !== st.journal) out.push(`Rewrite stage ${st.index}'s journal entry`);
+  }
+  for (const c of next.characters) {
+    const was = old.characters.find((x) => x.key === c.key);
+    if (!was) out.push(`Add ${c.name}`);
+    else if (!same({ ...was, routine: [] }, { ...c, routine: [] })) out.push(`Change ${c.name}`);
+    if (was && !same(was.routine, c.routine)) out.push(`Change ${c.name}'s routine`);
+  }
+  for (const i of next.items) if (!old.items.some((x) => x.key === i.key)) out.push(`Add the item ${i.name}`);
+  for (const l of next.locations) if (!old.locations.some((x) => x.key === l.key)) out.push(`Add the place ${l.name}`);
+  if (!same(old.objectives, next.objectives)) out.push('Update the objectives');
+  const stepKey = (x: QuestPlan['steps'][number]) => `${x.from}|${x.to}|${x.kind}|${x.targetKey}`;
+  for (const st of old.steps) if (st.kind !== 'talk' && !next.steps.some((x) => stepKey(x) === stepKey(st))) out.push(`Remove “${st.note}”`);
+  for (const st of next.steps) if (st.kind !== 'talk' && !old.steps.some((x) => stepKey(x) === stepKey(st))) out.push(`Add “${st.note}”`);
+  for (const c of next.conversations) {
+    const was = old.conversations.find((x) => x.title === c.title);
+    if (!was) out.push(`Add the conversation “${c.title}”`);
+    else if (was.screenplay !== c.screenplay) out.push(fromRecord ? `Rewrite the conversation “${c.title}”` : `“${c.title}” changed, but the quest's own dialogue is kept (it wasn't made from a plan)`);
+  }
+  for (const c of old.conversations) if (!next.conversations.some((x) => x.title === c.title)) out.push(fromRecord ? `Remove the conversation “${c.title}”` : `“${c.title}” is kept (it wasn't made from a plan)`);
+  if (!same(old.rewards, next.rewards)) out.push('Update the rewards');
+  if (!same(old.animations, next.animations)) out.push('Update the animations at quest stages');
+  return out.length ? out : ['Nothing needs changing'];
 }
 
 function pascal(s: string): string {
@@ -185,286 +289,418 @@ export class QuestBuilder {
     return out;
   }
 
-  // ---------------------------------------------------------------- placing
-
-  /** Somewhere sensible in a cell: characters on the floor around the middle, items on tables. */
-  private spot(cell: FormKey, what: 'actor' | 'item', n: number): Vec3 {
-    const refs = this.world.references(cell).filter((r) => !r.deleted && !r.disabled && !r.marker);
-    if (!refs.length) return { x: n * 80, y: 0, z: what === 'item' ? 100 : 0 };
-    if (what === 'item') {
-      const tables = refs.filter((r) => /table|desk|counter|shelf/i.test(`${r.baseEditorId ?? ''} ${r.baseName ?? ''}`));
-      const t = tables[n % Math.max(1, tables.length)];
-      if (t) {
-        const b = t.base ? this.env.boundsOf(t.base) : undefined;
-        const top = t.transform.position.z + (b ? b.max.z * t.transform.scale : 80);
-        return { x: t.transform.position.x + ((n * 17) % 30) - 15, y: t.transform.position.y + ((n * 11) % 20) - 10, z: top + 20 };
-      }
-    }
-    const floor = Math.min(...refs.map((r) => r.transform.position.z));
-    const c = refs.reduce((a, r) => ({ x: a.x + r.transform.position.x / refs.length, y: a.y + r.transform.position.y / refs.length }), { x: 0, y: 0 });
-    const angle = n * 2.4 + (what === 'item' ? 1.2 : 0);
-    const radius = what === 'item' ? 90 : 140 + 30 * Math.floor(n / 3);
-    return { x: c.x + Math.cos(angle) * radius, y: c.y + Math.sin(angle) * radius, z: what === 'item' ? floor + 60 : floor };
-  }
-
   // ---------------------------------------------------------------- building
 
   /** Build the quest. Throws (and changes nothing) if the plan has errors. */
   async build(plan: QuestPlan, opts: { seed?: number } = {}): Promise<QuestBuildReport> {
+    const resolution = this.check(plan);
+    return this.ws.transactionAsync(plan.stages.length ? `Build quest ${plan.editorId}` : `Build ${plan.title}`, async () => {
+      const s = this.session(plan, resolution, opts.seed ?? 1);
+      await this.buildAll(s);
+      if (s.quest) await this.saveRecord(s);
+      return s.report;
+    });
+  }
+
+  /** Errors that stop a plan being built, and what each entry resolves to. */
+  private check(plan: QuestPlan): PlanResolution[] {
     const errors = validatePlan(plan).filter((i) => i.severity === 'error').map((i) => i.message);
     const resolution = this.resolve(plan);
     errors.push(...resolution.filter((r) => r.error).map((r) => r.error!));
     if (errors.length) throw new WorkspaceError(`The plan can't be built yet:\n${errors.map((e) => `• ${e}`).join('\n')}`);
     if (!this.ws.active) throw new WorkspaceError('Open or create a plugin first');
-    return this.ws.transactionAsync(plan.stages.length ? `Build quest ${plan.editorId}` : `Build ${plan.title}`, () => this.buildInner(plan, resolution, opts.seed ?? 1));
+    return resolution;
   }
 
-  private async buildInner(plan: QuestPlan, resolution: PlanResolution[], seed: number): Promise<QuestBuildReport> {
+  private session(plan: QuestPlan, resolution: PlanResolution[], seed: number, record?: BuildRecord): BuildSession {
     const random = rng(seed);
-    const prefix = plan.editorId.replace(/[^A-Za-z0-9_]/g, '');
-    const res = (kind: PlanEntryKind, key: string) => resolution.find((r) => r.kind === kind && r.key === key)!;
-    const report: QuestBuildReport = { quest: null, editorId: '', created: [], changed: [], reused: [], dialogue: { topics: 0, responses: 0, greetings: 0, scenes: 0 }, notes: [...plan.assumptions.map((a) => `Assumed: ${a}`)], warnings: [], problems: [] };
+    return {
+      plan,
+      resolution,
+      random,
+      prefix: (record?.prefix ?? plan.editorId).replace(/[^A-Za-z0-9_]/g, ''),
+      quest: record?.quest ?? null,
+      placer: new Placer(this.env, this.world, random),
+      cells: new Map(Object.entries(record?.cells ?? {})),
+      npcs: new Map(Object.entries(record?.npcs ?? {})),
+      items: new Map(Object.entries(record?.items ?? {})),
+      placedItems: new Map(Object.entries(record?.placedItems ?? {})),
+      inContainer: new Map(Object.entries(record?.inContainer ?? {})),
+      containerBases: new Map(Object.entries(record?.containerBases ?? {})) as Map<FormKey, FormKey>,
+      perCell: new Map(),
+      conversations: new Map(Object.entries(record?.conversations ?? {})),
+      stageLines: [...(record?.stageLines ?? [])],
+      packages: new Map(Object.entries(record?.packages ?? {})),
+      report: { quest: record?.quest ?? null, editorId: record ? (this.ws.view(record.quest)?.editorId ?? plan.editorId) : '', created: [], changed: [], reused: [], updated: [], dialogue: { topics: 0, responses: 0, greetings: 0, scenes: 0 }, notes: [...plan.assumptions.map((a) => `Assumed: ${a}`)], warnings: [], problems: [] },
+    };
+  }
 
+  private res(s: BuildSession, kind: PlanEntryKind, key: string): PlanResolution {
+    return s.resolution.find((r) => r.kind === kind && r.key === key)!;
+  }
+
+  private async buildAll(s: BuildSession): Promise<void> {
+    const { plan, report } = s;
     // The quest and its stages first (items the player starts with are given in a stage script).
     // A plan with no stages only changes characters, places and items.
     const stages = [...plan.stages].sort((a, b) => a.index - b.index);
-    let quest = null as unknown as FormKey;
     if (stages.length) {
       let editorId = plan.editorId;
       if (this.ws.byEditorId(editorId)) {
         editorId = this.ws.uniqueEditorId(editorId);
         report.notes.push(`The Editor ID ${plan.editorId} was taken, so the quest is ${editorId}`);
       }
-      quest = this.quests.createQuest(editorId, plan.title, { startGameEnabled: plan.startsWithGame });
-      report.quest = quest;
+      s.quest = this.quests.createQuest(editorId, plan.title, { startGameEnabled: plan.startsWithGame });
+      report.quest = s.quest;
       report.editorId = editorId;
-      report.created.push({ kind: 'quest', formKey: quest, label: `${plan.title} (${editorId})` });
+      report.created.push({ kind: 'quest', formKey: s.quest, label: `${plan.title} (${editorId})` });
+      const start = startStageOf(plan);
+      for (const st of stages) this.addStage(s.quest, st, start);
     }
-    const startStage = stages.find((s) => s.startsQuest)?.index ?? stages[0]?.index ?? 0;
-    for (const s of stages) {
-      const log = s.journal.trim();
-      this.quests.addStage(quest, s.index, log || s.completesQuest || s.failsQuest ? log : undefined, { startUp: s.index === startStage, completesQuest: s.completesQuest, failsQuest: s.failsQuest });
+    for (const l of plan.locations) this.buildLocation(s, l);
+    for (const i of plan.items) this.buildItem(s, i);
+    for (const c of plan.characters) this.buildCharacter(s, c);
+    for (const c of plan.characters) await this.placeCharacter(s, c);
+    await this.placeItems(s, plan.items);
+    if (!s.quest) {
+      await this.buildRoutines(s, plan.characters);
+      this.finishNotes(report);
+      return;
     }
+    const quest = s.quest;
+    await this.buildObjectives(s);
+    for (const conv of plan.conversations) await this.buildConversation(s, conv);
+    for (const st of plan.steps) await this.buildStep(s, st);
+    await this.buildRoutines(s, plan.characters);
+    await this.buildStageLines(s, 'gesture');
+    await this.buildStageLines(s, 'reward');
+    this.finishNotes(report);
+    if (!plan.startsWithGame) report.notes.push('The quest doesn’t start with the game; start it from another quest or a trigger (Start Quest).');
+    await this.finishChecks(s, quest);
+  }
 
-    // Places.
-    const cells = new Map<string, FormKey>();
-    for (const l of plan.locations) {
-      const r = res('location', l.key);
-      if (r.existing) {
-        cells.set(l.key, r.existing);
-        report.reused.push({ kind: 'location', formKey: r.existing, label: this.label(r.existing) });
-        continue;
-      }
-      const cell = this.world.createInteriorCell(this.ws.uniqueEditorId(`${prefix}${pascal(l.name)}`), l.name, { ambient: [60, 55, 50] });
-      cells.set(l.key, cell);
-      report.created.push({ kind: 'location', formKey: cell, label: `${l.name} (new interior)` });
-      report.notes.push(`${l.name} is a new, empty interior. Build the room in World → Tools and connect a door to it.`);
-    }
+  private async finishChecks(s: BuildSession, quest: FormKey): Promise<void> {
+    s.report.problems = (await this.graphs.graph(quest)).problems;
+    for (const l of await lintQuestDialogue(quest, { quests: this.quests, dialogue: this.dialogue, graphs: this.graphs })) s.report.warnings.push(`Dialogue: ${l.message}`);
+  }
 
-    // Items.
-    const items = new Map<string, FormKey>();
-    const placedItems = new Map<string, FormKey>();
-    for (const i of plan.items) {
-      const r = res('item', i.key);
-      let item = r.existing;
-      if (item) report.reused.push({ kind: 'item', formKey: item, label: this.label(item) });
-      else item = this.createItem(i, r.template!, prefix, report);
-      items.set(i.key, item);
-    }
+  private addStage(quest: FormKey, st: QuestPlan['stages'][number], start: number): void {
+    const log = st.journal.trim();
+    this.quests.addStage(quest, st.index, log || st.completesQuest || st.failsQuest ? log : undefined, { startUp: st.index === start, completesQuest: st.completesQuest, failsQuest: st.failsQuest });
+  }
 
-    // Characters (new ones copied and set up; existing ones changed as the plan says).
-    const changeCtx = (isNew: boolean) => ({
-      items,
-      prefix,
-      random,
+  private buildLocation(s: BuildSession, l: PlanLocation): void {
+    const r = this.res(s, 'location', l.key);
+    if (r.existing) {
+      s.cells.set(l.key, r.existing);
+      s.report.reused.push({ kind: 'location', formKey: r.existing, label: this.label(r.existing) });
+      return;
+    }
+    const cell = this.world.createInteriorCell(this.ws.uniqueEditorId(`${s.prefix}${pascal(l.name)}`), l.name, { ambient: [60, 55, 50] });
+    s.cells.set(l.key, cell);
+    s.report.created.push({ kind: 'location', formKey: cell, label: `${l.name} (new interior)` });
+    s.report.notes.push(`${l.name} is a new, empty interior. Build the room in World → Tools and connect a door to it.`);
+  }
+
+  private buildItem(s: BuildSession, i: PlanItem): void {
+    const r = this.res(s, 'item', i.key);
+    let item = r.existing;
+    if (item) s.report.reused.push({ kind: 'item', formKey: item, label: this.label(item) });
+    else item = this.createItem(i, r.template!, s.prefix, s.report);
+    s.items.set(i.key, item);
+  }
+
+  private changeCtx(s: BuildSession, isNew: boolean) {
+    return {
+      items: s.items,
+      prefix: s.prefix,
+      random: s.random,
       isNew,
-      created: (kind: 'outfit', formKey: FormKey, label: string) => void report.created.push({ kind, formKey, label }),
-      note: (t: string) => void report.notes.push(t),
-      warn: (t: string) => void report.warnings.push(t),
-    });
-    const npcs = new Map<string, FormKey>();
-    const perCell = new Map<FormKey, number>();
-    const nextSlot = (cell: FormKey) => {
-      const n = perCell.get(cell) ?? 0;
-      perCell.set(cell, n + 1);
-      return n;
+      created: (kind: 'outfit', formKey: FormKey, label: string) => void s.report.created.push({ kind, formKey, label }),
+      note: (t: string) => void s.report.notes.push(t),
+      warn: (t: string) => void s.report.warnings.push(t),
     };
-    for (const c of plan.characters) {
-      const r = res('character', c.key);
-      if (r.existing) {
-        npcs.set(c.key, r.existing);
-        const changes = this.characters.describe(c);
-        if (changes.length) {
-          this.characters.apply(r.existing, c, changeCtx(false));
-          report.changed.push({ formKey: r.existing, label: this.label(r.existing), changes });
-        } else report.reused.push({ kind: 'character', formKey: r.existing, label: this.label(r.existing) });
-        continue;
-      }
-      const npc = this.createCharacter(c, r.template!, prefix, random, report);
-      this.characters.apply(npc, c, changeCtx(true));
-      npcs.set(c.key, npc);
-    }
+  }
 
-    // Put the characters and items where the plan says they start.
-    const dropMe: FormKey[] = [];
-    for (const c of plan.characters) {
-      if (res('character', c.key).existing || !c.locationKey) {
-        if (!res('character', c.key).existing) report.warnings.push(`${c.name} wasn't given a place, so they aren't in the world yet. Place them from the Objects tab.`);
-        continue;
-      }
-      const cell = cells.get(c.locationKey)!;
-      const npc = npcs.get(c.key)!;
-      const ref = this.world.placeReference(cell, npc, { position: this.spot(cell, 'actor', nextSlot(cell)), rotation: { x: 0, y: 0, z: random() * Math.PI * 2 } }, { persistent: true, editorId: this.ws.uniqueEditorId(`${this.ws.view(npc)?.editorId ?? prefix}Ref`) });
-      report.created.push({ kind: 'placed', formKey: ref, label: `${c.name} in ${this.label(cell)}` });
+  /** New characters copied and set up; existing ones changed as the plan says. */
+  private buildCharacter(s: BuildSession, c: PlanCharacter): void {
+    const r = this.res(s, 'character', c.key);
+    if (r.existing) {
+      s.npcs.set(c.key, r.existing);
+      const changes = this.characters.describe(c);
+      if (changes.length) {
+        this.characters.apply(r.existing, c, this.changeCtx(s, false));
+        s.report.changed.push({ formKey: r.existing, label: this.label(r.existing), changes });
+      } else s.report.reused.push({ kind: 'character', formKey: r.existing, label: this.label(r.existing) });
+      return;
     }
+    const npc = this.createCharacter(c, r.template!, s.prefix, s.random, s.report);
+    this.characters.apply(npc, c, this.changeCtx(s, true));
+    s.npcs.set(c.key, npc);
+  }
+
+  private async placeCharacter(s: BuildSession, c: PlanCharacter): Promise<void> {
+    const existing = this.res(s, 'character', c.key)?.existing;
+    if (existing || !c.locationKey) {
+      if (!existing) s.report.warnings.push(`${c.name} wasn't given a place, so they aren't in the world yet. Place them from the Objects tab.`);
+      return;
+    }
+    const cell = s.cells.get(c.locationKey)!;
+    const npc = s.npcs.get(c.key)!;
+    const spot = await s.placer.actorSpot(cell, c.spot);
+    if (c.spot && !spot.near) s.report.notes.push(`${c.name}: nothing like “${c.spot}” in ${this.label(cell)}, so they stand on open floor.`);
+    const ref = this.world.placeReference(cell, npc, { position: spot.position, rotation: { x: 0, y: 0, z: spot.yaw } }, { persistent: true, editorId: this.ws.uniqueEditorId(`${this.ws.view(npc)?.editorId ?? s.prefix}Ref`) });
+    s.report.created.push({ kind: 'placed', formKey: ref, label: `${c.name} in ${this.label(cell)}${spot.near ? `, ${c.spot}` : ''}` });
+  }
+
+  private nextSlot(s: BuildSession, cell: FormKey): number {
+    const n = s.perCell.get(cell) ?? 0;
+    s.perCell.set(cell, n + 1);
+    return n;
+  }
+
+  /** Items where the plan says they start: in a place (on furniture or in a container), with a character, or with the player. */
+  private async placeItems(s: BuildSession, list: PlanItem[]): Promise<void> {
+    const dropMe: FormKey[] = [];
     const playerGets: string[] = [];
-    for (const i of plan.items) {
-      const item = items.get(i.key)!;
+    for (const i of list) {
+      const item = s.items.get(i.key)!;
       if (i.startsWith === 'location' && i.startsAtKey) {
-        const cell = cells.get(i.startsAtKey)!;
-        const ref = this.world.placeReference(cell, item, { position: this.spot(cell, 'item', nextSlot(cell)), rotation: { x: 0, y: 0, z: random() * Math.PI * 2 } }, { persistent: true, editorId: this.ws.uniqueEditorId(`${prefix}${pascal(i.name)}Ref`) });
-        placedItems.set(i.key, ref);
+        const cell = s.cells.get(i.startsAtKey)!;
+        const where = s.placer.itemSpot(cell, i.spot, this.nextSlot(s, cell));
+        if (where.kind === 'container') {
+          // A container's contents belong to its base, so this one gets its own copy of the base.
+          const ref = where.container;
+          let base = s.containerBases.get(ref.formKey);
+          if (!base) {
+            base = this.ws.duplicateRecord(ref.base!, this.ws.uniqueEditorId(`${s.prefix}${pascal(ref.baseName ?? ref.baseEditorId ?? 'Container')}`));
+            s.containerBases.set(ref.formKey, base);
+            this.ws.editRecord(ref.formKey, (d: any) => void (d.base = base), 'Use its own container');
+            s.report.created.push({ kind: 'item', formKey: base, label: `${this.label(base)}: a copy of ${ref.baseName ?? ref.baseEditorId} for the one in ${this.label(cell)}` });
+          }
+          this.ws.editRecord(base, (d: any) => void (d.items = [...(d.items ?? []), { item: { item, count: 1 } }]), 'Put in container');
+          s.inContainer.set(i.key, ref.formKey);
+          s.report.created.push({ kind: 'placed', formKey: ref.formKey, label: `${i.name} in the ${(ref.baseName ?? 'container').toLowerCase()} in ${this.label(cell)}` });
+          continue;
+        }
+        if (i.spot && !where.on) s.report.notes.push(`${i.name}: nothing like “${i.spot}” in ${this.label(cell)}, so it's on the floor.`);
+        const ref = this.world.placeReference(cell, item, { position: where.position, rotation: { x: 0, y: 0, z: s.random() * Math.PI * 2 } }, { persistent: true, editorId: this.ws.uniqueEditorId(`${s.prefix}${pascal(i.name)}Ref`) });
+        s.placedItems.set(i.key, ref);
         dropMe.push(ref);
-        report.created.push({ kind: 'placed', formKey: ref, label: `${i.name} in ${this.label(cell)}` });
+        s.report.created.push({ kind: 'placed', formKey: ref, label: `${i.name} ${where.on ? `on the ${(where.on.baseName ?? where.on.baseEditorId ?? 'table').toLowerCase()}` : 'on the floor'} in ${this.label(cell)}` });
       } else if (i.startsWith === 'character' && i.startsAtKey) {
-        const npc = npcs.get(i.startsAtKey)!;
+        const npc = s.npcs.get(i.startsAtKey)!;
         this.ws.editRecord(npc, (d: any) => void (d.items = [...(d.items ?? []), { item: { item, count: 1 } }]), 'Add to inventory');
-        if (parseFormKey(npc).plugin !== this.ws.activeName) report.warnings.push(`${i.name} was added to ${this.label(npc)}'s inventory, which changes a character from ${parseFormKey(npc).plugin} (other mods that change them will conflict).`);
+        if (parseFormKey(npc).plugin !== this.ws.activeName) s.report.warnings.push(`${i.name} was added to ${this.label(npc)}'s inventory, which changes a character from ${parseFormKey(npc).plugin} (other mods that change them will conflict).`);
       } else if (i.startsWith === 'player') playerGets.push(`Game.GetPlayer().AddItem(${formExpression(item)}, 1)`);
     }
     if (dropMe.length) {
       const { missed } = await this.env.dropToSurface(dropMe);
-      if (missed.length) report.notes.push(`${missed.length} item(s) had nothing under them to rest on; check where they are in the World tab.`);
+      if (missed.length) s.report.notes.push(`${missed.length} item(s) had nothing under them to rest on; check where they are in the World tab.`);
     }
-    if (playerGets.length && quest) await this.graphs.appendStageCode(quest, startStage, playerGets);
-    if (!quest) {
-      if (playerGets.length) report.warnings.push('Items the player should start with need a quest to give them; they were left out.');
-      await this.buildRoutines(plan, null, npcs, cells, prefix, report);
-      this.finishNotes(plan, report);
-      return report;
-    }
+    if (!playerGets.length) return;
+    if (!s.quest) s.report.warnings.push('Items the player should start with need a quest to give them; they were left out.');
+    else await this.addStageLines(s, startStageOf(s.plan), playerGets, 'player');
+  }
 
-    // Objectives and their quest markers.
-    const markerFor = (key: string | null): FormKey | undefined => {
-      if (!key) return undefined;
-      if (npcs.has(key)) return npcs.get(key);
-      if (placedItems.has(key)) return placedItems.get(key);
-      if (cells.has(key)) return this.graphs.markerIn(quest, cells.get(key)!);
-      return undefined;
-    };
-    for (const o of [...plan.objectives].sort((a, b) => a.index - b.index)) {
-      const target = markerFor(o.targetKey);
-      if (o.targetKey && !target) report.notes.push(`Objective ${o.index} (“${o.text}”) has no quest marker: ${o.targetKey} isn't somewhere in the world the marker can point at.`);
-      this.quests.addObjective(quest, o.index, o.text, target ? this.graphs.aliasFor(quest, target) : undefined);
-    }
-    for (const s of stages) {
-      const shows = plan.objectives.filter((o) => o.shownAtStage === s.index).map((o) => o.index);
-      const completes = plan.objectives.filter((o) => o.completedAtStage === s.index).map((o) => o.index);
-      if (shows.length || completes.length) await this.graphs.setStageObjectives(quest, s.index, shows, completes);
-    }
+  /** The quest alias a plan key's marker / trigger uses (items in containers get one created inside). */
+  private aliasOf(s: BuildSession, key: string | null): number | undefined {
+    const quest = s.quest!;
+    if (!key) return undefined;
+    if (s.npcs.has(key)) return this.graphs.aliasFor(quest, s.npcs.get(key)!);
+    if (s.placedItems.has(key)) return this.graphs.aliasFor(quest, s.placedItems.get(key)!);
+    if (s.inContainer.has(key)) return this.graphs.itemInContainerAlias(quest, s.items.get(key)!, s.inContainer.get(key)!);
+    if (s.cells.has(key)) return this.graphs.aliasFor(quest, this.graphs.markerIn(quest, s.cells.get(key)!));
+    return undefined;
+  }
 
-    // Conversations (keys and names turned into the real Editor IDs).
-    const speakerIds = new Map<string, string>();
-    for (const c of plan.characters) {
-      const id = this.ws.view(npcs.get(c.key)!)?.editorId;
+  private addObjective(s: BuildSession, o: QuestPlan['objectives'][number]): void {
+    const alias = this.aliasOf(s, o.targetKey);
+    if (o.targetKey && alias === undefined) s.report.notes.push(`Objective ${o.index} (“${o.text}”) has no quest marker: ${o.targetKey} isn't somewhere in the world the marker can point at.`);
+    this.quests.addObjective(s.quest!, o.index, o.text, alias);
+  }
+
+  private async buildObjectives(s: BuildSession): Promise<void> {
+    for (const o of [...s.plan.objectives].sort((a, b) => a.index - b.index)) this.addObjective(s, o);
+    await this.syncStageObjectives(s);
+  }
+
+  /** Every stage's script shows/completes exactly the objectives the plan says (other script lines are kept). */
+  private async syncStageObjectives(s: BuildSession): Promise<void> {
+    const quest = s.quest!;
+    for (const st of this.quests.quest(quest).stages) {
+      const shows = s.plan.objectives.filter((o) => o.shownAtStage === st.index).map((o) => o.index);
+      const completes = s.plan.objectives.filter((o) => o.completedAtStage === st.index).map((o) => o.index);
+      const node = (await this.graphs.graph(quest)).nodes.find((n) => n.stage === st.index);
+      if (shows.length || completes.length || node?.shows.length || node?.completes.length) await this.graphs.setStageObjectives(quest, st.index, shows, completes);
+    }
+  }
+
+  /** Speakers and items in a screenplay → the Editor IDs that were built for them. */
+  private screenplayIds(s: BuildSession): { speakers: Map<string, string>; items: Map<string, string> } {
+    const speakers = new Map<string, string>();
+    for (const c of s.plan.characters) {
+      const id = s.npcs.has(c.key) ? this.ws.view(s.npcs.get(c.key)!)?.editorId : undefined;
       if (!id) continue;
-      speakerIds.set(c.key.toLowerCase(), id);
-      speakerIds.set(c.name.toLowerCase(), id);
-      for (const w of c.name.split(/\s+/)) if (w.length > 2 && !speakerIds.has(w.toLowerCase())) speakerIds.set(w.toLowerCase(), id);
+      speakers.set(c.key.toLowerCase(), id);
+      speakers.set(c.name.toLowerCase(), id);
+      for (const w of c.name.split(/\s+/)) if (w.length > 2 && !speakers.has(w.toLowerCase())) speakers.set(w.toLowerCase(), id);
     }
-    const itemIds = new Map<string, string>();
-    for (const i of plan.items) {
-      const id = i.kind === 'gold' ? 'gold' : this.ws.view(items.get(i.key)!)?.editorId;
+    const items = new Map<string, string>();
+    for (const i of s.plan.items) {
+      const id = i.kind === 'gold' ? 'gold' : s.items.has(i.key) ? this.ws.view(s.items.get(i.key)!)?.editorId : undefined;
       if (!id) continue;
-      itemIds.set(i.key.toLowerCase(), id);
-      itemIds.set(i.name.toLowerCase(), id);
+      items.set(i.key.toLowerCase(), id);
+      items.set(i.name.toLowerCase(), id);
     }
-    for (const conv of plan.conversations) {
-      const text = rewriteScreenplay(conv.screenplay, speakerIds, itemIds);
-      try {
-        const r = await this.dialogue.importScreenplay(quest, text, (info, code, which) => this.quests.setInfoFragment(info, which, code), this.sceneHooks());
-        report.dialogue.topics += r.topics;
-        report.dialogue.responses += r.responses;
-        report.dialogue.greetings += r.greetings;
-        report.dialogue.scenes += r.scenes;
-      } catch (e) {
-        throw new WorkspaceError(`The conversation “${conv.title}” couldn't be made: ${(e as Error).message}`);
-      }
+    return { speakers, items };
+  }
+
+  /** A conversation: its topics, scenes and stage-script lines are recorded so an update can replace them. */
+  private async buildConversation(s: BuildSession, conv: QuestPlan['conversations'][number]): Promise<void> {
+    const quest = s.quest!;
+    const ids = this.screenplayIds(s);
+    const text = rewriteScreenplay(conv.screenplay, ids.speakers, ids.items);
+    const topicsBefore = new Set(this.quests.topics(quest).map((t) => t.formKey));
+    const scenesBefore = new Set(this.scenesOf(quest));
+    const linesBefore = await this.stageCode(quest);
+    try {
+      const r = await this.dialogue.importScreenplay(quest, text, (info, code, which) => this.quests.setInfoFragment(info, which, code), this.sceneHooks());
+      s.report.dialogue.topics += r.topics;
+      s.report.dialogue.responses += r.responses;
+      s.report.dialogue.greetings += r.greetings;
+      s.report.dialogue.scenes += r.scenes;
+    } catch (e) {
+      throw new WorkspaceError(`The conversation “${conv.title}” couldn't be made: ${(e as Error).message}`);
     }
+    const made = [...this.quests.topics(quest).map((t) => t.formKey).filter((k) => !topicsBefore.has(k)), ...this.scenesOf(quest).filter((k) => !scenesBefore.has(k))];
+    // Greetings and chatter share one topic per quest, so their responses are recorded instead.
+    const shared = this.quests
+      .topics(quest)
+      .filter((t) => topicsBefore.has(t.formKey) && (t.subtype === 'HELO' || t.subtype === 'IDLE'))
+      .flatMap((t) => t.infos.map((i) => i.formKey));
+    const sharedBefore = new Set(s.conversations.get(conv.title)?.filter((k) => this.ws.summary(k)?.sig === 'INFO') ?? []);
+    s.conversations.set(conv.title, [...made, ...shared.filter((k) => !sharedBefore.has(k) && !this.ownedByOtherConversation(s, k, conv.title))]);
+    for (const [stage, lines] of await this.newLines(quest, linesBefore)) for (const line of lines) s.stageLines.push({ stage, line, why: `conversation:${conv.title}` });
+  }
 
-    // What moves the quest on.
-    const said = new Set<number>();
-    for (const conv of plan.conversations) for (const m of conv.screenplay.matchAll(/\[stage\s+(\d+)\]/gi)) said.add(Number(m[1]));
-    for (const s of plan.steps) {
-      if (s.kind === 'talk') {
-        if (!said.has(s.to)) report.warnings.push(`Nothing said in a conversation sets stage ${s.to} (“${s.note}”). Add [stage ${s.to}] to the line that should.`);
-        continue;
+  private ownedByOtherConversation(s: BuildSession, key: FormKey, title: string): boolean {
+    for (const [t, keys] of s.conversations) if (t !== title && keys.includes(key)) return true;
+    return false;
+  }
+
+  private scenesOf(quest: FormKey): FormKey[] {
+    return this.ws
+      .search({ sigs: ['SCEN'], limit: 100_000 })
+      .items.filter((x) => (this.ws.view(x.formKey)?.data as any)?.quest === quest)
+      .map((x) => x.formKey);
+  }
+
+  private async stageCode(quest: FormKey): Promise<Map<number, string[]>> {
+    const out = new Map<number, string[]>();
+    for (const st of this.quests.quest(quest).stages) out.set(st.index, (await this.graphs.fragmentCode(quest, st.index)).split('\n').map((l) => l.trim()).filter(Boolean));
+    return out;
+  }
+
+  private async newLines(quest: FormKey, before: Map<number, string[]>): Promise<Map<number, string[]>> {
+    const out = new Map<number, string[]>();
+    for (const [stage, lines] of await this.stageCode(quest)) {
+      const old = [...(before.get(stage) ?? [])];
+      const added: string[] = [];
+      for (const l of lines) {
+        const i = old.indexOf(l);
+        if (i >= 0) old.splice(i, 1);
+        else added.push(l);
       }
-      if (s.kind === 'script') {
-        if (s.from === null) report.warnings.push(`“${s.note}” should happen right away, but it doesn't say after which stage; it was left out.`);
-        else await this.graphs.addEdge(quest, { from: s.from, to: s.to, kind: 'script' });
-        continue;
-      }
-      let target: FormKey | undefined;
-      if (s.targetKey && npcs.has(s.targetKey)) target = npcs.get(s.targetKey);
-      else if (s.targetKey && placedItems.has(s.targetKey)) target = placedItems.get(s.targetKey);
-      else if (s.targetKey && cells.has(s.targetKey)) target = cells.get(s.targetKey);
-      if (!target) {
-        report.warnings.push(`“${s.note}” (${s.kind}) can't be detected: ${s.targetKey ?? 'its target'} isn't placed in the world. Set stage ${s.to} from a conversation instead (for example with [gives …] and [stage ${s.to}]).`);
-        continue;
-      }
-      await this.graphs.addEdge(quest, { from: s.from, to: s.to, kind: s.kind, target } as NewQuestEdge);
+      if (added.length) out.set(stage, added);
     }
+    return out;
+  }
 
-    // Routines and quest behaviour (AI packages).
-    await this.buildRoutines(plan, quest, npcs, cells, prefix, report);
+  private async addStageLines(s: BuildSession, stage: number, lines: string[], why: string): Promise<void> {
+    if (!lines.length) return;
+    await this.graphs.appendStageCode(s.quest!, stage, lines);
+    for (const line of lines) s.stageLines.push({ stage, line: line.trim(), why });
+  }
 
-    // Gestures at quest events.
-    for (const a of plan.animations) await this.graphs.addStageGesture(quest, a.atStage, npcs.get(a.characterKey)!, a.gesture);
-
-    // Rewards.
+  /** Gestures at quest events, or rewards: lines in stage scripts. */
+  private async buildStageLines(s: BuildSession, why: 'gesture' | 'reward'): Promise<void> {
+    const quest = s.quest!;
+    if (why === 'gesture') {
+      for (const a of s.plan.animations) {
+        const before = await this.stageCode(quest);
+        await this.graphs.addStageGesture(quest, a.atStage, s.npcs.get(a.characterKey)!, a.gesture);
+        for (const [stage, lines] of await this.newLines(quest, before)) for (const line of lines) s.stageLines.push({ stage, line, why });
+      }
+      return;
+    }
     const byStage = new Map<number, string[]>();
-    for (const r of plan.rewards) {
+    for (const r of s.plan.rewards) {
       const lines = byStage.get(r.atStage) ?? [];
       if (r.gold) lines.push(`Game.GetPlayer().AddItem(${formExpression(resolveItem(this.ws, 'gold')!)}, ${r.gold})`);
-      if (r.itemKey) lines.push(`Game.GetPlayer().AddItem(${formExpression(items.get(r.itemKey)!)}, 1)`);
+      if (r.itemKey) lines.push(`Game.GetPlayer().AddItem(${formExpression(s.items.get(r.itemKey)!)}, 1)`);
       byStage.set(r.atStage, lines);
     }
-    for (const [stage, lines] of byStage) await this.graphs.appendStageCode(quest, stage, lines);
+    for (const [stage, lines] of byStage) await this.addStageLines(s, stage, lines, why);
+  }
 
-    this.finishNotes(plan, report);
-    if (!plan.startsWithGame) report.notes.push('The quest doesn’t start with the game; start it from another quest or a trigger (Start Quest).');
-    report.problems = (await this.graphs.graph(quest)).problems;
-    for (const l of await lintQuestDialogue(quest, { quests: this.quests, dialogue: this.dialogue, graphs: this.graphs })) report.warnings.push(`Dialogue: ${l.message}`);
-    return report;
+  /** What moves the quest on: one step. */
+  private async buildStep(s: BuildSession, st: QuestPlan['steps'][number]): Promise<void> {
+    const quest = s.quest!;
+    if (st.kind === 'talk') {
+      const said = s.plan.conversations.some((c) => new RegExp(`\\[stage\\s+${st.to}\\]`, 'i').test(c.screenplay));
+      if (!said) s.report.warnings.push(`Nothing said in a conversation sets stage ${st.to} (“${st.note}”). Add [stage ${st.to}] to the line that should.`);
+      return;
+    }
+    if (st.kind === 'script') {
+      if (st.from === null) s.report.warnings.push(`“${st.note}” should happen right away, but it doesn't say after which stage; it was left out.`);
+      else await this.graphs.addEdge(quest, { from: st.from, to: st.to, kind: 'script' });
+      return;
+    }
+    if (st.targetKey && s.inContainer.has(st.targetKey)) {
+      await this.graphs.addAliasEdge(quest, this.aliasOf(s, st.targetKey)!, { from: st.from, to: st.to, kind: st.kind });
+      return;
+    }
+    const target = this.stepTarget(s, st);
+    if (!target) {
+      s.report.warnings.push(`“${st.note}” (${st.kind}) can't be detected: ${st.targetKey ?? 'its target'} isn't placed in the world. Set stage ${st.to} from a conversation instead (for example with [gives …] and [stage ${st.to}]).`);
+      return;
+    }
+    await this.graphs.addEdge(quest, { from: st.from, to: st.to, kind: st.kind, target } as NewQuestEdge);
+  }
+
+  private stepTarget(s: BuildSession, st: QuestPlan['steps'][number]): FormKey | undefined {
+    if (!st.targetKey) return undefined;
+    return s.npcs.get(st.targetKey) ?? s.placedItems.get(st.targetKey) ?? (s.inContainer.has(st.targetKey) ? s.items.get(st.targetKey) : undefined) ?? s.cells.get(st.targetKey);
   }
 
   /**
    * Each routine activity becomes a package: everyday ones on the character,
    * quest-bound ones (follow, forcegreet, limited to some stages) on their quest alias.
    */
-  private async buildRoutines(plan: QuestPlan, quest: FormKey | null, npcs: Map<string, FormKey>, cells: Map<string, FormKey>, prefix: string, report: QuestBuildReport): Promise<void> {
-    for (const c of plan.characters) {
+  private async buildRoutines(s: BuildSession, characters: PlanCharacter[]): Promise<void> {
+    const quest = s.quest;
+    for (const c of characters) {
       if (!c.routine?.length) continue;
-      const npc = npcs.get(c.key)!;
+      const npc = s.npcs.get(c.key)!;
       const base: FormKey[] = [];
       const alias: FormKey[] = [];
       for (const [n, r] of c.routine.entries()) {
         let location: PackageSpec['location'] = { kind: 'editor' };
         if (r.where) {
-          const cell = cells.get(r.where) ?? this.findForm(['CELL'], r.where);
+          const cell = s.cells.get(r.where) ?? this.findForm(['CELL'], r.where);
           if (cell) location = { kind: 'cell', cell };
-          else report.notes.push(`${c.name}: no place called “${r.where}”, so they ${r.activity} around where they stand.`);
+          else s.report.notes.push(`${c.name}: no place called “${r.where}”, so they ${r.activity} around where they stand.`);
         }
         const questBound = !!quest && (r.fromStage !== null || r.untilStage !== null || r.activity === 'follow' || r.activity === 'forcegreet');
         let topic: FormKey | undefined;
         if (r.activity === 'forcegreet' && quest) {
-          topic = this.quests.miscTopic(quest, 'forcegreet', `${prefix}${pascal(c.name)}ForceGreet`);
+          topic = this.quests.miscTopic(quest, 'forcegreet', `${s.prefix}${pascal(c.name)}ForceGreet`);
           this.quests.addResponse(topic, { text: r.line ?? '', speaker: npc, conditions: stageConditions(quest, r.fromStage, r.untilStage) });
         }
         try {
           const pk = createPackage(this.ws, {
-            editorId: this.ws.uniqueEditorId(`${prefix}${pascal(c.name)}${pascal(r.activity)}${n + 1}`),
+            editorId: this.ws.uniqueEditorId(`${s.prefix}${pascal(c.name)}${pascal(r.activity)}${n + 1}`),
             activity: r.activity,
             hours: r.hours,
             conditions: questBound && quest ? stageConditions(quest, r.fromStage, r.untilStage) : [],
@@ -473,35 +709,381 @@ export class QuestBuilder {
             ownerQuest: questBound && quest ? quest : undefined,
           });
           (questBound ? alias : base).push(pk);
-          report.created.push({ kind: 'package', formKey: pk, label: `${c.name}: ${this.characters.describe({ ...c, outfit: null, inventory: [], factions: [], className: null, level: null, look: null, essential: null, existing: null, routine: [r] }).join('')}` });
+          if (topic) alias.push(topic);
+          s.report.created.push({ kind: 'package', formKey: pk, label: `${c.name}: ${this.characters.describe({ ...c, spot: null, outfit: null, inventory: [], factions: [], className: null, level: null, look: null, essential: null, existing: null, routine: [r] }).join('')}` });
         } catch (e) {
-          if (e instanceof WorkspaceError) report.warnings.push(`${c.name}: ${e.message}`);
+          if (e instanceof WorkspaceError) s.report.warnings.push(`${c.name}: ${e.message}`);
           else throw e;
         }
       }
+      const packs = alias.filter((k) => this.ws.summary(k)?.sig === 'PACK');
+      s.packages.set(c.key, { base, alias });
       if (base.length) {
         // Timed activities first: a character does the first package whose time and conditions fit.
         const timed = (k: FormKey) => ((this.ws.view(k)!.data as any).schedule?.hour ?? -1) >= 0;
         const ordered = [...base.filter(timed), ...base.filter((k) => !timed(k))];
         this.ws.editRecord(npc, (d: any) => void (d.packages = [...ordered, ...(d.packages ?? [])]), `${c.name}'s routine`);
-        if (parseFormKey(npc).plugin !== this.ws.activeName) report.notes.push(`${c.name}'s new routine comes before their old packages, and overrides them as a character from ${parseFormKey(npc).plugin}.`);
+        if (parseFormKey(npc).plugin !== this.ws.activeName) s.report.notes.push(`${c.name}'s new routine comes before their old packages, and overrides them as a character from ${parseFormKey(npc).plugin}.`);
       }
-      if (alias.length && quest) {
+      if (packs.length && quest) {
         const id = this.graphs.aliasFor(quest, npc);
         this.ws.editRecord(quest, (d: any) => {
           const a = (d.aliases ?? []).find((x: any) => x.value?.id === id);
-          if (a) a.value.packages = [...(a.value.packages ?? []), ...alias];
+          if (a) a.value.packages = [...(a.value.packages ?? []), ...packs];
         });
-        report.notes.push(`${c.name}'s quest behaviour is on their quest alias, so it only applies while the quest runs.`);
+        s.report.notes.push(`${c.name}'s quest behaviour is on their quest alias, so it only applies while the quest runs.`);
       }
     }
+  }
+
+  /** Take a character's routine back out (their packages unlinked; forcegreet topics removed). */
+  private removeRoutine(s: BuildSession, key: string): void {
+    const rec = s.packages.get(key);
+    if (!rec) return;
+    const npc = s.npcs.get(key);
+    if (npc && rec.base.length) this.ws.editRecord(npc, (d: any) => void (d.packages = (d.packages ?? []).filter((k: FormKey) => !rec.base.includes(k))));
+    if (s.quest && rec.alias.length)
+      this.ws.editRecord(s.quest, (d: any) => {
+        for (const a of d.aliases ?? []) if (a.value?.packages) a.value.packages = a.value.packages.filter((k: FormKey) => !rec.alias.includes(k));
+      });
+    for (const k of [...rec.base, ...rec.alias]) if (this.ws.exists(k) && parseFormKey(k).plugin === this.ws.activeName) this.ws.deleteRecord(k);
+    s.packages.delete(key);
+  }
+
+  // ---------------------------------------------------------------- updating
+
+  private recordPath(): string {
+    return joinPath(this.ws.options.outputDir, 'TES5EnvEditor', `${this.ws.activeName ?? 'plugin'}.plans.json`);
+  }
+
+  private async readRecords(): Promise<Record<string, BuildRecord>> {
+    await this.ws.filesSettled();
+    try {
+      return JSON.parse(new TextDecoder().decode(await this.ws.fs.readFile(this.recordPath())));
+    } catch {
+      return {};
+    }
+  }
+
+  private async saveRecord(s: BuildSession): Promise<void> {
+    const all = await this.readRecords();
+    const obj = <T>(m: Map<string, T>) => Object.fromEntries(m) as Record<string, T>;
+    all[s.quest!] = {
+      version: 1,
+      quest: s.quest!,
+      prefix: s.prefix,
+      plan: s.plan,
+      cells: obj(s.cells),
+      npcs: obj(s.npcs),
+      items: obj(s.items),
+      placedItems: obj(s.placedItems),
+      inContainer: obj(s.inContainer),
+      containerBases: obj(s.containerBases),
+      conversations: obj(s.conversations),
+      stageLines: s.stageLines,
+      packages: obj(s.packages),
+    };
+    // Written as part of the edit, so undo and redo keep the record in step with the plugin.
+    const path = this.recordPath();
+    let before: Uint8Array | null = null;
+    try {
+      before = await this.ws.fs.readFile(path);
+    } catch {
+      before = null;
+    }
+    const after = new TextEncoder().encode(JSON.stringify(all, null, 1));
+    await this.ws.fs.mkdir(joinPath(this.ws.options.outputDir, 'TES5EnvEditor'));
+    await this.ws.fs.writeFile(path, after);
+    this.ws.trackFileChange({ path, before, after });
+  }
+
+  /** The record of how a quest was built from a plan (null when it wasn't, or was undone). */
+  async record(quest: FormKey): Promise<BuildRecord | null> {
+    const r = (await this.readRecords())[quest];
+    if (!r || !this.ws.exists(quest)) return null;
+    return r;
+  }
+
+  /**
+   * The plan for an existing quest: exactly as it was built when it came from
+   * a plan, otherwise read from the quest (stages, journal, objectives, the
+   * quest map's connections, its characters and its dialogue as a script).
+   */
+  async planFor(quest: FormKey): Promise<{ plan: QuestPlan; fromRecord: boolean }> {
+    const r = await this.record(quest);
+    if (r) return { plan: structuredClone(r.plan), fromRecord: true };
+    return { plan: await this.planFromQuest(quest), fromRecord: false };
+  }
+
+  private async planFromQuest(quest: FormKey): Promise<QuestPlan> {
+    const q = this.quests.quest(quest);
+    const g = await this.graphs.graph(quest);
+    const keyOf = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 24) || 'thing';
+    const characters: PlanCharacter[] = [];
+    const items: PlanItem[] = [];
+    const locations: PlanLocation[] = [];
+    const keys = new Map<FormKey, string>();
+    const unique = (base: string) => {
+      let k = base;
+      for (let i = 2; [...keys.values()].includes(k); i++) k = `${base}${i}`;
+      return k;
+    };
+    for (const a of q.aliases) {
+      const f = a.fill as Record<string, any>;
+      const target: FormKey | undefined = f.actor ?? f.reference ?? f.object;
+      if (!target || keys.has(target)) continue;
+      const sum = this.ws.summary(target);
+      const name = sum?.name ?? sum?.editorId ?? a.name;
+      if (sum?.sig === 'NPC_') {
+        const key = unique(keyOf(name));
+        keys.set(target, key);
+        characters.push({ key, name, existing: sum.editorId ?? target, basedOn: null, sex: null, race: null, role: a.name, appearance: '', look: null, voice: null, locationKey: null, spot: null, essential: null, className: null, level: null, outfit: null, factions: [], inventory: [], routine: [] });
+      }
+    }
+    // People who speak in its dialogue are characters of the quest too.
+    for (const i of this.dialogue.graph(quest).infos) {
+      const sum = i.speaker ? this.ws.summary(i.speaker) : undefined;
+      if (!i.speaker || !sum || sum.sig !== 'NPC_' || keys.has(i.speaker)) continue;
+      const name = sum.name ?? sum.editorId ?? i.speaker;
+      const key = unique(keyOf(name));
+      keys.set(i.speaker, key);
+      characters.push({ key, name, existing: sum.editorId ?? i.speaker, basedOn: null, sex: null, race: null, role: 'Speaks in the quest', appearance: '', look: null, voice: null, locationKey: null, spot: null, essential: null, className: null, level: null, outfit: null, factions: [], inventory: [], routine: [] });
+    }
+    const stages = g.nodes.map((n) => ({ index: n.stage, journal: n.text, startsQuest: n.startUp, completesQuest: n.completesQuest, failsQuest: n.failsQuest }));
+    const objectives = g.objectives.map((o) => ({ index: o.index, text: o.text, shownAtStage: g.nodes.find((n) => n.shows.includes(o.index))?.stage ?? stages[0]?.index ?? 0, completedAtStage: g.nodes.find((n) => n.completes.includes(o.index))?.stage ?? null, targetKey: null }));
+    const steps = g.edges.map((e) => ({ from: e.from, to: e.to, kind: e.kind === 'hit' || e.kind === 'load' ? ('script' as const) : (e.kind as PlanStep['kind']), targetKey: e.target ? (keys.get(e.target) ?? null) : null, note: e.label }));
+    const screenplay = this.dialogue.toScreenplay(quest).trim();
+    return {
+      title: q.name ?? q.editorId ?? 'Quest',
+      editorId: q.editorId ?? 'Quest',
+      summary: '',
+      startsWithGame: (q.flags & QuestFlag.StartGameEnabled) !== 0,
+      characters,
+      locations,
+      items,
+      stages,
+      objectives,
+      steps,
+      conversations: screenplay ? [{ title: 'Existing dialogue', screenplay }] : [],
+      rewards: [],
+      animations: [],
+      assumptions: [],
+      questions: [],
+    };
+  }
+
+  /** What an update would change, in words (nothing is changed). */
+  async previewUpdate(quest: FormKey, next: QuestPlan): Promise<string[]> {
+    const { plan: old, fromRecord } = await this.planFor(quest);
+    return describeDiff(old, next, fromRecord);
+  }
+
+  /**
+   * Change an existing quest to match a revised plan, one undo step. Only the
+   * differences are applied, so edits made by hand elsewhere are kept.
+   * Dialogue is replaced only where it came from the plan.
+   */
+  async update(quest: FormKey, next: QuestPlan, opts: { seed?: number } = {}): Promise<QuestBuildReport> {
+    const resolution = this.check(next);
+    const record = await this.record(quest);
+    const { plan: old, fromRecord } = await this.planFor(quest);
+    return this.ws.transactionAsync(`Update quest ${this.ws.view(quest)?.editorId ?? ''}`, async () => {
+      const base: BuildRecord = record ?? { version: 1, quest, prefix: old.editorId, plan: old, cells: {}, npcs: Object.fromEntries(old.characters.map((c) => [c.key, this.findForm(['NPC_'], c.existing)!])), items: {}, placedItems: {}, inContainer: {}, containerBases: {}, conversations: {}, stageLines: [], packages: {} };
+      const s = this.session(next, resolution, opts.seed ?? 1, base);
+      s.report.notes = next.assumptions.filter((a) => !old.assumptions.includes(a)).map((a) => `Assumed: ${a}`);
+      await this.applyDiff(s, old, fromRecord);
+      await this.saveRecord(s);
+      await this.finishChecks(s, quest);
+      return s.report;
+    });
+  }
+
+  private async applyDiff(s: BuildSession, old: QuestPlan, fromRecord: boolean): Promise<void> {
+    const quest = s.quest!;
+    const next = s.plan;
+    const say = (t: string) => s.report.updated.push(t);
+    // The quest itself.
+    if (next.title !== old.title) {
+      this.ws.editRecord(quest, (d: any) => void (d.name = next.title));
+      say(`Renamed the quest “${next.title}”`);
+    }
+    if (next.startsWithGame !== old.startsWithGame) {
+      this.graphs.setStartGameEnabled(quest, next.startsWithGame);
+      say(next.startsWithGame ? 'The quest now starts with the game' : 'The quest no longer starts with the game');
+    }
+    // Stages: removed ones lose their connections first.
+    const oldStages = new Map(old.stages.map((x) => [x.index, x]));
+    const newStages = new Map(next.stages.map((x) => [x.index, x]));
+    for (const [index] of oldStages) {
+      if (newStages.has(index)) continue;
+      for (const e of (await this.graphs.graph(quest)).edges.filter((e) => e.from === index || e.to === index)) await this.graphs.removeEdge(quest, e);
+      this.quests.removeStage(quest, index);
+      say(`Removed stage ${index}`);
+    }
+    const start = startStageOf(next);
+    for (const [index, st] of newStages) {
+      const was = oldStages.get(index);
+      if (!was) {
+        this.addStage(quest, st, start);
+        say(`Added stage ${index}`);
+        continue;
+      }
+      if (was.journal !== st.journal) {
+        this.quests.setStageLog(quest, index, 0, st.journal);
+        say(`Rewrote stage ${index}'s journal entry`);
+      }
+      if (was.completesQuest !== st.completesQuest || was.failsQuest !== st.failsQuest || was.startsQuest !== st.startsQuest) {
+        this.ws.editRecord(quest, (d: any) => {
+          const x = d.stages.find((y: any) => y.index.index === index);
+          x.index.flags = index === start ? x.index.flags | 2 : x.index.flags & ~2;
+          x.logEntries ??= [];
+          if (!x.logEntries[0]) x.logEntries.push({ flags: 0, text: '' });
+          x.logEntries[0].flags = (st.completesQuest ? 1 : 0) | (st.failsQuest ? 2 : 0);
+        });
+        say(`Changed what stage ${index} does (starts, completes or fails the quest)`);
+      }
+    }
+    // New places, items and characters; changed characters.
+    const keysOf = <T extends { key: string }>(list: T[]) => new Map(list.map((x) => [x.key, x]));
+    const oldChars = keysOf(old.characters);
+    for (const l of next.locations) if (!s.cells.has(l.key)) {
+      this.buildLocation(s, l);
+      say(`Added the place ${l.name}`);
+    }
+    const newItems = next.items.filter((i) => !s.items.has(i.key));
+    for (const i of newItems) {
+      this.buildItem(s, i);
+      say(`Added the item ${i.name}`);
+    }
+    for (const c of next.characters) {
+      const was = oldChars.get(c.key);
+      if (!was || !s.npcs.has(c.key)) {
+        this.buildCharacter(s, c);
+        await this.placeCharacter(s, c);
+        say(`Added ${c.name}`);
+        continue;
+      }
+      const delta = characterDelta(was, c);
+      if (delta) {
+        this.characters.apply(s.npcs.get(c.key)!, delta, this.changeCtx(s, false));
+        say(`Changed ${c.name}: ${this.characters.describe(delta).join('; ')}`);
+      }
+      if (JSON.stringify(was.routine ?? []) !== JSON.stringify(c.routine ?? [])) {
+        this.removeRoutine(s, c.key);
+        await this.buildRoutines(s, [c]);
+        say(`Changed ${c.name}'s routine`);
+      }
+    }
+    for (const c of old.characters) if (!next.characters.some((x) => x.key === c.key)) s.report.notes.push(`${c.name} is no longer in the plan, but was left in the plugin (delete them yourself if they're not needed).`);
+    for (const c of next.characters) if (!oldChars.has(c.key) && c.routine?.length) await this.buildRoutines(s, [c]);
+    await this.placeItems(s, newItems);
+    // Objectives.
+    const oldObj = new Map(old.objectives.map((o) => [o.index, o]));
+    const newObj = new Map(next.objectives.map((o) => [o.index, o]));
+    for (const [index, o] of oldObj)
+      if (!newObj.has(index)) {
+        this.ws.editRecord(quest, (d: any) => void (d.objectives = (d.objectives ?? []).filter((x: any) => x.index !== index)));
+        say(`Removed objective ${index} (“${o.text}”)`);
+      }
+    for (const [index, o] of newObj) {
+      const was = oldObj.get(index);
+      if (!was) {
+        this.addObjective(s, o);
+        say(`Added objective “${o.text}”`);
+      } else if (was.text !== o.text || was.targetKey !== o.targetKey) {
+        const alias = this.aliasOf(s, o.targetKey);
+        this.ws.editRecord(quest, (d: any) => {
+          const x = d.objectives.find((y: any) => y.index === index);
+          x.text = o.text;
+          x.targets = alias !== undefined ? [{ target: { alias, ignoresLocks: 0, unused: new Uint8Array(3) } }] : [];
+        });
+        say(`Changed objective ${index} to “${o.text}”`);
+      }
+    }
+    if (JSON.stringify(old.objectives.map((o) => [o.index, o.shownAtStage, o.completedAtStage])) !== JSON.stringify(next.objectives.map((o) => [o.index, o.shownAtStage, o.completedAtStage]))) {
+      await this.syncStageObjectives(s);
+      say('Updated when objectives are shown and completed');
+    }
+    // Conversations: those from the plan are replaced when they change; dialogue made by hand is kept.
+    const oldConv = new Map(old.conversations.map((c) => [c.title, c]));
+    const newConv = new Map(next.conversations.map((c) => [c.title, c]));
+    for (const [title, conv] of oldConv) {
+      const now = newConv.get(title);
+      if (now && now.screenplay === conv.screenplay) continue;
+      if (!fromRecord || !s.conversations.has(title)) {
+        if (!now) s.report.notes.push(`“${title}” was left as it is: it wasn't made from a plan, so it isn't removed automatically.`);
+        continue;
+      }
+      await this.removeConversation(s, title);
+      if (!now) say(`Removed the conversation “${title}”`);
+    }
+    for (const [title, conv] of newConv) {
+      const was = oldConv.get(title);
+      if (was && was.screenplay === conv.screenplay) continue;
+      if (was && !fromRecord) {
+        s.report.notes.push(`“${title}” was changed in the plan, but the quest's own dialogue was kept; add the new lines with Dialogue → Write as script.`);
+        continue;
+      }
+      await this.buildConversation(s, conv);
+      say(was ? `Rewrote the conversation “${title}”` : `Added the conversation “${title}”`);
+    }
+    // Steps.
+    const stepKey = (x: QuestPlan['steps'][number]) => `${x.from}|${x.to}|${x.kind}|${x.targetKey}`;
+    const oldSteps = new Map(old.steps.map((x) => [stepKey(x), x]));
+    const newSteps = new Map(next.steps.map((x) => [stepKey(x), x]));
+    for (const [k, st] of oldSteps) {
+      if (newSteps.has(k) || st.kind === 'talk') continue;
+      const g = await this.graphs.graph(quest);
+      const target = this.stepTarget(s, st);
+      const edge = g.edges.find((e) => e.from === st.from && e.to === st.to && e.kind === st.kind && (st.kind === 'script' || !target || e.target === target || e.target === undefined));
+      if (edge) {
+        await this.graphs.removeEdge(quest, edge);
+        say(`Removed “${st.note}”`);
+      }
+    }
+    for (const [k, st] of newSteps) {
+      if (oldSteps.has(k)) continue;
+      await this.buildStep(s, st);
+      if (st.kind !== 'talk') say(`Added “${st.note}”`);
+    }
+    // Stage-script lines: gestures and rewards.
+    for (const why of ['gesture', 'reward'] as const) {
+      const before = why === 'gesture' ? JSON.stringify(old.animations) : JSON.stringify(old.rewards);
+      const after = why === 'gesture' ? JSON.stringify(next.animations) : JSON.stringify(next.rewards);
+      if (before === after) continue;
+      await this.removeStageLines(s, why);
+      await this.buildStageLines(s, why);
+      say(why === 'gesture' ? 'Updated the animations at quest stages' : 'Updated the rewards');
+    }
+    if (!s.report.updated.length) say('Nothing needed changing');
+  }
+
+  private async removeStageLines(s: BuildSession, why: string): Promise<void> {
+    for (const l of s.stageLines.filter((x) => x.why === why)) await this.graphs.removeStageLine(s.quest!, l.stage, l.line);
+    s.stageLines = s.stageLines.filter((x) => x.why !== why);
+  }
+
+  private async removeConversation(s: BuildSession, title: string): Promise<void> {
+    const keys = s.conversations.get(title) ?? [];
+    // Scenes first (their stage-script start lines go with them), then infos and topics.
+    for (const k of keys.filter((x) => this.ws.summary(x)?.sig === 'SCEN')) if (this.ws.exists(k)) this.ws.deleteRecord(k);
+    await this.removeStageLines(s, `conversation:${title}`);
+    for (const k of keys.filter((x) => this.ws.summary(x)?.sig === 'INFO')) if (this.ws.exists(k)) this.ws.deleteRecord(k);
+    for (const k of keys.filter((x) => this.ws.summary(x)?.sig === 'DIAL')) {
+      if (!this.ws.exists(k)) continue;
+      for (const i of this.quests.infos(k)) this.ws.deleteRecord(i.formKey);
+      const branch = (this.ws.view(k)?.data as any)?.branch as FormKey | undefined;
+      this.ws.deleteRecord(k);
+      if (branch && this.ws.exists(branch) && parseFormKey(branch).plugin === this.ws.activeName && (this.ws.view(branch)?.data as any)?.startingTopic === k) this.ws.deleteRecord(branch);
+    }
+    s.conversations.delete(title);
   }
 
   private sceneHooks() {
     return { aliasFor: (q: FormKey, npc: FormKey) => this.graphs.aliasFor(q, npc), appendStageCode: (q: FormKey, stage: number, lines: string[]) => this.graphs.appendStageCode(q, stage, lines) };
   }
 
-  private finishNotes(plan: QuestPlan, report: QuestBuildReport): void {
+  private finishNotes(report: QuestBuildReport): void {
     const created = report.created.filter((c) => c.kind === 'character');
     if (created.length) report.notes.push(`New characters need their faces exported from the Creation Kit before release (select them, Ctrl+F4), or they'll have dark faces. The Release tab lists them.`);
   }

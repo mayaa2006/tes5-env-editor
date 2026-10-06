@@ -100,11 +100,33 @@ test('build a quest on the map', async ({ page }) => {
       return settled;
     }, { intervals: [200] })
     .toBe(true);
-  const h = (await answer.locator('.react-flow__handle-right').boundingBox())!;
-  const pane = (await page.locator('[data-testid=dialogue-graph] .react-flow').boundingBox())!;
+  // The handle must have stopped moving (the fit animation can start after the viewport looked still).
+  const handle = answer.locator('.react-flow__handle-right');
+  let lastBox = '';
+  await expect
+    .poll(async () => {
+      const b = JSON.stringify(await handle.boundingBox());
+      const still = b === lastBox;
+      lastBox = b;
+      return still;
+    }, { intervals: [250] })
+    .toBe(true);
+  const h = (await handle.boundingBox())!;
+  // Drop on a spot that really is empty canvas (not a node, edge label or control), whatever the layout.
+  const target = await page.evaluate(() => {
+    const pane = document.querySelector('[data-testid=dialogue-graph] .react-flow')!.getBoundingClientRect();
+    for (let fy = 0.9; fy >= 0.1; fy -= 0.1)
+      for (let fx = 0.9; fx >= 0.1; fx -= 0.1) {
+        const x = pane.left + pane.width * fx;
+        const y = pane.top + pane.height * fy;
+        if (document.elementFromPoint(x, y)?.classList.contains('react-flow__pane')) return { x, y };
+      }
+    return null;
+  });
+  expect(target).not.toBeNull();
   await page.mouse.move(h.x + h.width / 2, h.y + h.height / 2);
   await page.mouse.down();
-  await page.mouse.move(pane.x + pane.width - 60, pane.y + pane.height - 60, { steps: 10 });
+  await page.mouse.move(target!.x, target!.y, { steps: 10 });
   await page.mouse.up();
   await page.getByRole('dialog').getByPlaceholder('What the player can say next').fill('Can I help?');
   await page.getByRole('dialog').getByPlaceholder('What the player can say next').blur();

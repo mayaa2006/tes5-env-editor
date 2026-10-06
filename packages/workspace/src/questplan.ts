@@ -37,6 +37,7 @@ export const PlanCharacterSchema = z.object({
   look: PlanLookSchema.nullable().describe('The appearance as settings; for existing characters only set what the text asks to change, otherwise null'),
   voice: z.string().nullable().describe('Voice type Editor ID or description, e.g. "FemaleCommoner"'),
   locationKey: z.string().nullable().describe('Key of the location where they stand; null if they already exist in the world'),
+  spot: z.string().nullable().describe('Where in that location, e.g. "behind the bar", "by the forge", "next to the fire"; null for anywhere sensible'),
   essential: z.boolean().nullable().describe("True: can't be killed. For existing characters null leaves it as it is"),
   className: z.string().nullable().describe('Class name or Editor ID (e.g. "Warrior", "Citizen"); null to leave or keep the copied one'),
   level: z.number().int().nullable(),
@@ -79,6 +80,7 @@ export const PlanItemSchema = z.object({
   value: z.number().nullable(),
   startsWith: z.enum(['location', 'character', 'player', 'nowhere']).describe('Where the item is when the quest begins'),
   startsAtKey: z.string().nullable().describe('Location or character key for startsWith location/character'),
+  spot: z.string().nullable().describe('Where in the location, e.g. "in the chest by the bed", "on the bar", "under the table"; null for a table'),
 });
 
 export const PlanStageSchema = z.object({

@@ -5,6 +5,7 @@
  * dialogue) as one undo step.
  */
 import { useEffect, useState } from 'react';
+import type { FormKey } from '@tes5/esp';
 import type { PlanIssue, PlanResolution, PlannerMode, QuestBuildReport, QuestPlan } from '@tes5/workspace';
 import { Field, Help, Icon, Modal, TextInput } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
@@ -26,21 +27,31 @@ const MODES: { id: PlannerMode; title: string; text: string; placeholder: string
   },
 ];
 
-export default function QuestFromText({ onClose }: { onClose: () => void }) {
-  const [step, setStep] = useState<'write' | 'review' | 'done'>('write');
+export default function QuestFromText({ onClose, existing }: { onClose: () => void; existing?: FormKey }) {
+  const [step, setStep] = useState<'write' | 'review' | 'done'>(existing ? 'review' : 'write');
+  const [fromRecord, setFromRecord] = useState(true);
   const [mode, setMode] = useState<PlannerMode>('document');
   const [source, setSource] = useState('');
   const [review, setReview] = useState<Review>();
   const [report, setReport] = useState<QuestBuildReport>();
+  // Changing an existing quest: start from it as a plan.
+  useEffect(() => {
+    if (!existing) return;
+    void engine((c) => c.call('questPlanFor', existing), { refreshSession: false }).then((r) => {
+      if (!r) return onClose();
+      setFromRecord(r.fromRecord);
+      setReview({ plan: r.plan, issues: r.issues, resolution: r.resolution });
+    });
+  }, [existing]);
 
   return (
     <Modal
       className="wide"
       title={
         <span className="row" style={{ gap: 6 }}>
-          <Icon name="wand" /> Quest from writing
+          <Icon name="wand" /> {existing ? 'Change the quest with a plan' : 'Quest from writing'}
           <span className="dim small" style={{ fontWeight: 400 }}>
-            {step === 'write' ? '1. Write' : step === 'review' ? '2. Check the plan' : '3. Built'}
+            {existing ? (step === 'review' ? 'Change the plan, then update' : 'Updated') : step === 'write' ? '1. Write' : step === 'review' ? '2. Check the plan' : '3. Built'}
           </span>
         </span>
       }
@@ -60,12 +71,19 @@ export default function QuestFromText({ onClose }: { onClose: () => void }) {
           onClose={onClose}
         />
       )}
+      {step === 'review' && existing && !review && <div className="empty">Reading the quest…</div>}
+      {step === 'review' && existing && review && !fromRecord && (
+        <p className="small warn" style={{ marginTop: 0 }} data-testid="not-from-plan">
+          This quest wasn't built from a plan, so this plan was read from it. Updating applies your changes, but its existing dialogue is kept as it is (add new conversations, or change dialogue in the Dialogue tab).
+        </p>
+      )}
       {step === 'review' && review && (
         <ReviewPlan
+          existing={existing}
           review={review}
           setReview={setReview}
           source={source}
-          onBack={() => setStep('write')}
+          onBack={existing ? onClose : () => setStep('write')}
           onBuilt={(r) => {
             setReport(r);
             setStep('done');
@@ -160,7 +178,8 @@ function Write({ mode, setMode, source, setSource, onPlanned, onClose }: { mode:
 
 // ------------------------------------------------------------------ 2. review
 
-function ReviewPlan({ review, setReview, source, onBack, onBuilt }: { review: Review; setReview: (r: Review) => void; source: string; onBack: () => void; onBuilt: (r: QuestBuildReport) => void }) {
+function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { review: Review; setReview: (r: Review) => void; source: string; onBack: () => void; onBuilt: (r: QuestBuildReport) => void; existing?: FormKey }) {
+  const [preview, setPreview] = useState<string[] | null>(null);
   const key = useStore((s) => s.settings.anthropicApiKey);
   const { plan, issues, resolution } = review;
   const [feedback, setFeedback] = useState('');
@@ -187,7 +206,17 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt }: { review: Re
     if (r) setReview(r);
   };
   const build = async () => {
+    if (existing) {
+      // Show what will change first.
+      const p = await engine((c) => c.call('previewQuestUpdate', existing, draft), { refreshSession: false });
+      if (p) setPreview(p);
+      return;
+    }
     const r = await engine((c) => c.call('buildQuestPlan', draft), { busy: 'Building the quest…', success: `Built ${draft.title}` });
+    if (r) onBuilt(r);
+  };
+  const update = async () => {
+    const r = await engine((c) => c.call('updateQuestFromPlan', existing!, draft), { busy: 'Updating the quest…', success: `Updated ${draft.title}` });
     if (r) onBuilt(r);
   };
 
@@ -197,6 +226,26 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt }: { review: Re
 
   return (
     <div className="col" style={{ gap: 12 }} data-testid="plan-review">
+      {preview && (
+        <Modal title="Update the quest?" onClose={() => setPreview(null)} footer={
+          <>
+            <button className="btn" onClick={() => setPreview(null)}>Keep editing</button>
+            <button className="btn primary" onClick={() => void update()} disabled={preview.length === 1 && preview[0] === 'Nothing needs changing'} data-testid="confirm-update">
+              Update the quest
+            </button>
+          </>
+        }>
+          <ul className="always-list" data-testid="update-preview">
+            {preview.map((p) => (
+              <li key={p}>
+                <Icon name="chevron" size={12} />
+                <span>{p}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="dim small">Only these parts change; everything else (including edits you made by hand) stays. One undo takes it all back.</p>
+        </Modal>
+      )}
       <div className="row" style={{ gap: 12, alignItems: 'flex-start' }}>
         <div className="grow col" style={{ gap: 4 }}>
           <Field label={draft.stages.length ? 'Quest name' : 'Name'}>
@@ -393,8 +442,8 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt }: { review: Re
         </button>
         <span className="grow" />
         {errors > 0 && <span className="small err">Fix {errors} problem(s) first</span>}
-        <button className="btn primary" disabled={errors > 0} onClick={() => void build()} data-testid="build-quest" title="Creates everything as one step you can undo">
-          <Icon name="check" size={13} /> {draft.stages.length ? 'Build the quest' : 'Make the changes'}
+        <button className="btn primary" disabled={errors > 0} onClick={() => void build()} data-testid="build-quest" title={existing ? 'Shows what will change before anything is changed' : 'Creates everything as one step you can undo'}>
+          <Icon name="check" size={13} /> {existing ? 'See what will change' : draft.stages.length ? 'Build the quest' : 'Make the changes'}
         </button>
       </div>
     </div>
@@ -433,7 +482,11 @@ function Result({ report, onClose }: { report: QuestBuildReport; onClose: () => 
       <div className="row" style={{ gap: 8 }}>
         <Icon name="check" />
         <span>
-          {report.quest ? (
+          {report.updated.length ? (
+            <>
+              <b>{report.editorId}</b> is updated:
+            </>
+          ) : report.quest ? (
             <>
               <b>{report.editorId}</b> is built: {report.created.length} new record(s), {report.dialogue.responses} line(s) of dialogue.
             </>
@@ -477,6 +530,12 @@ function Result({ report, onClose }: { report: QuestBuildReport; onClose: () => 
               <li key={c.formKey}>
                 <Icon name="plus" size={12} />
                 <span>{c.label}</span>
+              </li>
+            ))}
+            {report.updated.map((u) => (
+              <li key={u} data-testid="update-line">
+                <Icon name="check" size={12} />
+                <span>{u}</span>
               </li>
             ))}
             {report.changed.map((c) => (

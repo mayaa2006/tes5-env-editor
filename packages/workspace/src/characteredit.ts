@@ -25,6 +25,10 @@ function words(text: string): string[] {
   for (const w of text.toLowerCase().split(/[^a-z0-9]+/)) {
     if (w.length < 2 || STOP.has(w)) continue;
     out.add(w);
+    // Plurals: "barrels" should find a barrel, "shelves" a shelf.
+    if (w.length > 4 && w.endsWith('ves')) out.add(`${w.slice(0, -3)}f`);
+    else if (w.length > 4 && w.endsWith('es') && /(s|x|ch|sh)es$/.test(w)) out.add(w.slice(0, -2));
+    else if (w.length > 3 && w.endsWith('s') && !w.endsWith('ss')) out.add(w.slice(0, -1));
     for (const s of SYNONYMS[w] ?? []) out.add(s);
   }
   return [...out];
@@ -89,6 +93,7 @@ export class CharacterEditor {
   /** The changes a plan entry asks for, in plain words (for the review screen). */
   describe(c: PlanCharacter): string[] {
     const out: string[] = [];
+    if (c.spot && !c.existing) out.push(`stands ${c.spot}`);
     if (c.outfit) out.push(`wears ${c.outfit.items.join(', ')}${c.outfit.saveAs ? ` (saved as ${c.outfit.saveAs})` : ''}`);
     if (c.inventory.length) out.push(`carries ${c.inventory.map((i) => `${i.count > 1 ? `${i.count} × ` : ''}${i.item}`).join(', ')}`);
     if (c.factions.length) out.push(`joins ${c.factions.map((f) => f.faction).join(', ')}`);

@@ -300,7 +300,7 @@ export class QuestService {
   addReferenceAlias(
     quest: FormKey,
     name: string,
-    fill: { uniqueActor?: FormKey; specificReference?: FormKey; createAt?: { object: FormKey; alias: number } } = {},
+    fill: { uniqueActor?: FormKey; specificReference?: FormKey; createAt?: { object: FormKey; alias: number; inside?: boolean } } = {},
     flags = 0,
   ): number {
     let id = -1;
@@ -311,7 +311,7 @@ export class QuestService {
         const alias: any = { id, name, flags, end: true };
         if (fill.uniqueActor) alias.fill = { option: 1, value: { actor: fill.uniqueActor } };
         else if (fill.specificReference) alias.fill = { option: 0, value: { reference: fill.specificReference } };
-        else if (fill.createAt) alias.fill = { option: 4, value: { object: fill.createAt.object, at: { alias: fill.createAt.alias, create: 0 }, level: 4 } };
+        else if (fill.createAt) alias.fill = { option: 4, value: { object: fill.createAt.object, at: { alias: fill.createAt.alias, create: fill.createAt.inside ? 0x8000 : 0 }, level: 4 } };
         d.aliases ??= [];
         d.aliases.push({ option: 0, value: alias });
         d.nextAliasId = id + 1;

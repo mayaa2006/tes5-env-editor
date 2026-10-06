@@ -156,8 +156,8 @@ describe('quest builder', () => {
     plan.editorId = 'CellarQuest';
     plan.locations.push({ key: 'cellar', name: 'Old Cellar', existing: null, description: 'Under the tavern' });
     plan.characters[1]!.locationKey = 'cellar';
-    plan.items.push({ key: 'note', name: 'Crumpled Note', kind: 'book', existing: null, basedOn: null, value: 1, startsWith: 'character', startsAtKey: 'eirik' });
-    plan.items.push({ key: 'charm', name: 'Lucky Charm', kind: 'misc', existing: null, basedOn: null, value: 10, startsWith: 'player', startsAtKey: null });
+    plan.items.push({ key: 'note', name: 'Crumpled Note', kind: 'book', existing: null, basedOn: null, value: 1, startsWith: 'character', startsAtKey: 'eirik', spot: null });
+    plan.items.push({ key: 'charm', name: 'Lucky Charm', kind: 'misc', existing: null, basedOn: null, value: 10, startsWith: 'player', startsAtKey: null, spot: null });
     plan.rewards.push({ atStage: 100, gold: 25, itemKey: 'charm' });
     plan.steps.push({ from: 10, to: 20, kind: 'read', targetKey: 'note', note: 'Read the note' });
     plan.steps.push({ from: 0, to: 10, kind: 'talk', targetKey: null, note: 'duplicate' });
@@ -192,7 +192,7 @@ describe('quest builder', () => {
       {
         key: 'halvar', name: 'Halvar', existing: 'Halvar the Smith', basedOn: null, sex: null, race: null, role: 'Smith', appearance: 'Now in fine clothes with a hood',
         look: { weight: null, height: null, hair: null, hairColor: 'grey', facialHair: 'none', eyes: null, scar: null },
-        voice: null, locationKey: null, essential: false, className: null, level: null,
+        voice: null, locationKey: null, spot: null, essential: false, className: null, level: null,
         outfit: { items: ['fine blue clothes', 'hood', 'Leather Boots', 'golden crown'], saveAs: 'HalvarSundayBest' },
         factions: [{ faction: 'Merchants', rank: 1 }], inventory: [{ item: 'tankard', count: 3 }], routine: [],
       },
@@ -251,6 +251,45 @@ describe('quest builder', () => {
     // Brynja's own packages are untouched (the quest behaviour lives on the alias).
     expect((ws.view(ws.byEditorId('DemoInnkeeper')!)!.data as any).packages ?? []).toEqual([]);
     expect(q.aliases.length).toBeGreaterThan(0);
+  });
+
+  it('places people at named spots or on open floor, and items in containers', async () => {
+    const { ws, builder, graphs, world, quests } = await setup();
+    const k = (e: string) => ws.byEditorId(e)!;
+    const plan = exampleQuestPlan();
+    plan.items[0]!.spot = 'in the chest';
+    plan.characters.push({ ...plan.characters[1]!, key: 'gerd', name: 'Gerd', spot: null, outfit: null, routine: [] });
+    const r = await builder.build(plan, { seed: 3 });
+    const refs = world.references(k('DemoTavern'));
+    const at = (base: FormKey) => refs.find((x) => x.base === base)!.transform;
+    // Eirik by the barrels, facing them, on the floor.
+    const eirik = at(k('InnkeeperRingQuestEirik'));
+    const barrels = refs.filter((x) => x.baseEditorId === 'DemoBarrel').map((x) => x.transform.position);
+    const nearest = barrels.reduce((a, b) => (Math.hypot(b.x - eirik.position.x, b.y - eirik.position.y) < Math.hypot(a.x - eirik.position.x, a.y - eirik.position.y) ? b : a));
+    expect(Math.hypot(nearest.x - eirik.position.x, nearest.y - eirik.position.y)).toBeLessThan(160);
+    expect(Math.abs(eirik.position.z)).toBeLessThan(5);
+    const facing = { x: Math.sin(eirik.rotation.z), y: Math.cos(eirik.rotation.z) };
+    const toward = { x: nearest.x - eirik.position.x, y: nearest.y - eirik.position.y };
+    expect(facing.x * toward.x + facing.y * toward.y).toBeGreaterThan(0);
+    // Gerd on open floor, inside the walls, clear of everyone else.
+    const gerd = at(k('InnkeeperRingQuestGerd')).position;
+    expect(Math.abs(gerd.x)).toBeLessThan(500);
+    expect(Math.abs(gerd.y)).toBeLessThan(500);
+    for (const other of refs.filter((x) => x.sig === 'ACHR' && x.base !== k('InnkeeperRingQuestGerd'))) expect(Math.hypot(other.transform.position.x - gerd.x, other.transform.position.y - gerd.y)).toBeGreaterThan(90);
+    // The ring is in the chest: that chest has its own copy of the container, holding it.
+    const chest = ws.view(k('DemoTavernChestRef'))!.data as any;
+    expect(chest.base).not.toBe(k('DemoChest'));
+    const ring = k('InnkeeperRingQuestBrynjaSRing');
+    expect((ws.view(chest.base)!.data as any).items).toEqual([{ item: { item: ring, count: 1 } }]);
+    expect(refs.some((x) => x.base === ring)).toBe(false);
+    // Picking it up still moves the quest on, and the marker points at it, through an alias created in the chest.
+    const q = quests.quest(r.quest!);
+    const ringAlias = q.aliases.find((a) => (a.fill as any).object === ring)!;
+    expect(ringAlias.fill).toMatchObject({ object: ring, at: { create: 0x8000 } });
+    const g = await graphs.graph(r.quest!);
+    expect(g.edges.find((e) => e.kind === 'pickup')).toMatchObject({ from: 10, to: 20, target: ring });
+    expect((ws.view(r.quest!)!.data as any).objectives.find((o: any) => o.index === 10).targets[0].target.alias).toBe(ringAlias.id);
+    expect(r.created.some((c) => c.label === "Brynja's Ring in the chest in The Demo Tavern (DemoTavern)")).toBe(true);
   });
 
   it('refuses plans that would not build, and changes nothing', async () => {
