@@ -50,6 +50,21 @@ test('world editing: open a cell, select, move with G, drag & drop, navmesh', as
   await page.keyboard.press('Enter');
   await expect(page.getByTitle(/Undo Move/)).toBeEnabled();
 
+  // Regression: Ctrl+Z during a grab must not undo underneath it, and
+  // switching cells mid-grab must cancel it without errors.
+  await page.keyboard.press('g');
+  await page.mouse.move(cx + 40, cy, { steps: 3 });
+  await page.keyboard.press('Control+z');
+  await expect(page.getByTitle(/Undo Move/)).toBeEnabled();
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('g');
+  await page.getByTestId('cell-list').locator('..').getByText('DemoValley0_0').click();
+  await page.mouse.move(cx + 10, cy + 10, { steps: 3 });
+  await page.mouse.move(cx + 30, cy + 20, { steps: 3 });
+  await page.getByTestId('cell-list').getByText('DemoTavern', { exact: true }).click();
+  await expect.poll(async () => (await viewportStats(page))?.objects ?? 0).toBeGreaterThan(30);
+  await page.getByTestId('outliner').getByText('DemoInnkeeperRef').click();
+
   // Drag a base object from the object browser into the viewport.
   await page.getByRole('tab', { name: 'Objects' }).click();
   await page.getByTestId('object-list').getByText('DemoBarrel', { exact: true }).waitFor();

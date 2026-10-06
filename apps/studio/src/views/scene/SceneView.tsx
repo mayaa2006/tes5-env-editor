@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormKey, Navmesh } from '@tes5/esp';
 import { addTriangle, buildGrid, deleteTriangles, setTriangleFlags } from '@tes5/navmesh';
 import type { PlacedRef } from '@tes5/workspace';
-import { Checkbox, Field, Icon, Modal, Select, TextInput, useQuery } from '../../components/ui';
+import { Checkbox, Field, Icon, Modal, Select, TextInput, useQuery, useUniqueEditorId } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 import { Viewport, type Tool } from './viewport';
 
@@ -307,7 +307,7 @@ function NoCell({ onNew, newCell, closeNew }: { onNew: () => void; newCell: bool
 }
 
 function NewCellDialog({ onClose }: { onClose: () => void }) {
-  const [edid, setEdid] = useState('MyNewInterior');
+  const [edid, setEdid] = useUniqueEditorId('MyNewInterior');
   const [name, setName] = useState('');
   return (
     <Modal

@@ -2,7 +2,7 @@
  * Environment editing: worldspaces, cells and placed references, with
  * everything the 3D viewport needs (model paths, transforms, flags).
  */
-import { GroupType, RecordFlags, isInteriorCell, parseFormKey, readCellGrid, type FormKey, type PluginRecord } from '@tes5/esp';
+import { GroupType, RecordFlags, decodeCp1252, isInteriorCell, parseFormKey, readCellGrid, type FormKey, type PluginRecord } from '@tes5/esp';
 import { WorkspaceError, type PluginSlot, type Workspace } from './engine';
 
 export interface Vec3 {
@@ -79,7 +79,7 @@ function readModel(rec: PluginRecord): string | undefined {
   if (!s) return undefined;
   let end = s.data.indexOf(0);
   if (end < 0) end = s.data.byteLength;
-  const p = new TextDecoder('latin1').decode(s.data.subarray(0, end)).replace(/\//g, '\\');
+  const p = decodeCp1252(s.data.subarray(0, end)).replace(/\//g, '\\');
   return p || undefined;
 }
 

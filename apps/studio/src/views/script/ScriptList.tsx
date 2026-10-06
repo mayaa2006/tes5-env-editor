@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Field, Icon, Modal, Select, TextInput, useQuery } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 
@@ -51,7 +51,15 @@ export default function ScriptList() {
 }
 
 function NewScriptDialog({ onClose }: { onClose: () => void }) {
+  const client = useStore((s) => s.client);
+  const { data: existing } = useQuery(() => client?.call('scriptList'), [client]);
+  const taken = (n: string) => !!existing?.some((s) => s.name.toLowerCase() === n.toLowerCase());
   const [name, setName] = useState('MyScript');
+  useEffect(() => {
+    if (!existing || !taken(name)) return;
+    for (let i = 2; ; i++) if (!taken(`MyScript${i}`)) return setName(`MyScript${i}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [existing]);
   const [ext, setExt] = useState('ObjectReference');
   return (
     <Modal
@@ -64,7 +72,7 @@ function NewScriptDialog({ onClose }: { onClose: () => void }) {
           </button>
           <button
             className="btn primary"
-            disabled={!/^[A-Za-z_]\w*$/.test(name)}
+            disabled={!/^[A-Za-z_]\w*$/.test(name) || taken(name)}
             onClick={async () => {
               const src = `ScriptName ${name} extends ${ext}\n{Describe what this script does.}\n\n${template(ext)}`;
               const ok = await engine((c) => c.call('scriptWrite', name, src), { success: `Created ${name}.psc` });
@@ -83,6 +91,7 @@ function NewScriptDialog({ onClose }: { onClose: () => void }) {
       <Field label="Name">
         <TextInput value={name} onCommit={setName} mono autoFocus />
       </Field>
+      {taken(name) && <div className="small warn">A script named {name} already exists (in your mod, the game or another mod). Pick another name.</div>}
       <Field label="Attaches to">
         <Select value={ext} options={BASES.map((b) => ({ value: b, label: b }))} onChange={setExt} />
       </Field>

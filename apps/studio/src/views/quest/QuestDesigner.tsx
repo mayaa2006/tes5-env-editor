@@ -7,7 +7,7 @@
 import { lazy, Suspense, useState } from 'react';
 import { EMOTIONS, QUEST_TYPES, QuestFlag, type FormKey } from '@tes5/esp';
 import type { InfoModel, QuestModel, TopicModel } from '@tes5/workspace';
-import { Checkbox, DragNumber, Field, FormLink, FormPicker, Icon, Modal, Select, Tabs, TextInput, useDebounced, useQuery, useSummaries } from '../../components/ui';
+import { Checkbox, DragNumber, Field, FormLink, FormPicker, Icon, Modal, Select, Tabs, TextInput, useDebounced, useQuery, useSummaries, useUniqueEditorId } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 import { ConditionList } from '../record/ConditionEditor';
 import { CodeEditor } from '../script/CodeEditor';
@@ -73,7 +73,7 @@ function QuestList() {
 }
 
 function NewQuestDialog({ onClose }: { onClose: () => void }) {
-  const [edid, setEdid] = useState('MyQuest');
+  const [edid, setEdid] = useUniqueEditorId('MyQuest');
   const [name, setName] = useState('My Quest');
   const [sge, setSge] = useState(false);
   const [runOnce, setRunOnce] = useState(true);
@@ -506,7 +506,7 @@ function Dialogue({ q }: { q: QuestModel }) {
 }
 
 function NewTopic({ q, onDone }: { q: QuestModel; onDone: () => void }) {
-  const [edid, setEdid] = useState(`${q.editorId ?? 'Quest'}Topic${q.topics.length + 1}`);
+  const [edid, setEdid] = useUniqueEditorId(`${q.editorId ?? 'Quest'}Topic${q.topics.length + 1}`);
   const [text, setText] = useState('');
   const [topLevel, setTopLevel] = useState(true);
   return (

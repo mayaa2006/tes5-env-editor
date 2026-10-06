@@ -41,6 +41,16 @@ export function encodeCp1252(s: string): Uint8Array {
   return out;
 }
 
+/** Characters of `s` that Windows-1252 can't represent (they would be saved as "?"). */
+export function cp1252Unencodable(s: string): string[] {
+  const bad = new Set<string>();
+  for (const ch of s) {
+    const c = ch.codePointAt(0)!;
+    if (!(c < 0x80 || (c >= 0xa0 && c <= 0xff) || REVERSE.has(c))) bad.add(ch);
+  }
+  return [...bad];
+}
+
 const utf8Decoder = new TextDecoder('utf-8');
 const utf8Encoder = new TextEncoder();
 

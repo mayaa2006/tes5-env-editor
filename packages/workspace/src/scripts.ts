@@ -4,7 +4,7 @@
  * the compiler through a host-provided process runner, and binds scripts and
  * property values to records (VMAD) — including automatic property filling.
  */
-import { VmadPropertyType, isFormKey, newVmad, type FormKey, type Vmad, type VmadProperty, type VmadScript } from '@tes5/esp';
+import { VmadPropertyType, decodeCp1252, isFormKey, newVmad, type FormKey, type Vmad, type VmadProperty, type VmadScript } from '@tes5/esp';
 import {
   PROPERTY_TYPE_SIGNATURES,
   PapyrusLanguageService,
@@ -332,6 +332,6 @@ function decodeText(bytes: Uint8Array): string {
   try {
     return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
   } catch {
-    return new TextDecoder('latin1').decode(bytes);
+    return decodeCp1252(bytes);
   }
 }

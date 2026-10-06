@@ -115,7 +115,7 @@ try {
   time('winners() count', () => [...ws.winners()].length);
   const statKey = ws.search({ sigs: ['STAT'], limit: 1 }).items[0]!.formKey;
   time('view(STAT)', () => ws.view(statKey));
-  time('findReferences(STAT)', () => ws.findReferences(statKey));
+  time('findReferences(STAT) in all plugins', () => ws.findReferences(statKey, { allPlugins: true }));
   ws.createPlugin('BenchMod.esp');
   const ref = world.references(cell)[0]!.formKey;
   time('first edit (override + masters)', () => world.transformReferences([{ ref, transform: { position: { x: 1, y: 2, z: 3 } } }]));

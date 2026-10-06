@@ -189,7 +189,8 @@ export class Viewport {
     el.addEventListener('contextmenu', (e) => e.preventDefault());
     el.addEventListener('pointerenter', () => (this.hovered = true));
     el.addEventListener('pointerleave', () => (this.hovered = false));
-    window.addEventListener('keydown', this.onKeyDown);
+    // Capture phase, so an active transform sees keys before app-wide shortcuts (Ctrl+Z, Ctrl+S…).
+    window.addEventListener('keydown', this.onKeyDown, { capture: true });
     window.addEventListener('keyup', this.onKeyUp);
     window.addEventListener('blur', this.onBlur);
     this.ro = new ResizeObserver(() => this.resize());
@@ -203,7 +204,7 @@ export class Viewport {
     this.disposed = true;
     cancelAnimationFrame(this.raf);
     this.ro.disconnect();
-    window.removeEventListener('keydown', this.onKeyDown);
+    window.removeEventListener('keydown', this.onKeyDown, { capture: true });
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('blur', this.onBlur);
     this.gizmo.dispose();
@@ -238,6 +239,14 @@ export class Viewport {
   }
 
   setRefs(refs: PlacedRef[]): void {
+    // A transform in progress on objects that are going away (cell switch, undo) is cancelled.
+    if (this.modal) {
+      const keep = new Set(refs.filter((r) => !r.deleted).map((r) => r.formKey));
+      if (this.modal.keys.some((k) => !keep.has(k))) {
+        if (this.modal.gizmo) this.gizmo.detach();
+        this.cancelModal();
+      }
+    }
     const seen = new Set<FormKey>();
     for (const ref of refs) {
       if (ref.deleted) continue;
@@ -381,6 +390,7 @@ export class Viewport {
   }
 
   setNavmeshes(list: { key: FormKey; nav: Navmesh; mine: boolean }[]): void {
+    if (this.navMove) this.endNavMove(false);
     this.navMeshes = list;
     if (this.navEdit) {
       const cur = list.find((n) => n.key === this.navEdit!.key);
@@ -941,6 +951,14 @@ export class Viewport {
     if (this.drag?.mode === 'look' && ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE'].includes(e.code)) {
       e.preventDefault();
       return;
+    }
+    if ((this.modal && !this.modal.gizmo) || this.navMove) {
+      // Nothing else may act while a transform is in progress (e.g. undo underneath it).
+      e.stopImmediatePropagation();
+      if ((e.ctrlKey || e.metaKey) && e.key !== 'Control' && e.key !== 'Meta') {
+        e.preventDefault();
+        return;
+      }
     }
     if (this.modal && !this.modal.gizmo) {
       this.modalKey(e);

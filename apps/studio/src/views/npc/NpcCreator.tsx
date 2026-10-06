@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FACE_MORPHS, type FormKey } from '@tes5/esp';
 import type { HeadPartInfo, NpcAppearance } from '@tes5/workspace';
-import { Field, FormPicker, Icon, Modal, Select, Slider, Tabs, TextInput, useDebounced, useQuery, DragNumber } from '../../components/ui';
+import { Field, FormPicker, Icon, Modal, Select, Slider, Tabs, TextInput, useDebounced, useQuery, DragNumber, useUniqueEditorId } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 import { HeadPreview, type PreviewPart } from './headPreview';
 
@@ -79,7 +79,7 @@ function NpcList() {
 
 function NewNpcDialog({ onClose }: { onClose: () => void }) {
   const [template, setTemplate] = useState<FormKey | null>(useStore.getState().npc ?? null);
-  const [edid, setEdid] = useState('MyNewCharacter');
+  const [edid, setEdid] = useUniqueEditorId('MyNewCharacter');
   const [name, setName] = useState('New Character');
   return (
     <Modal

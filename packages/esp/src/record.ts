@@ -143,6 +143,42 @@ export class PluginRecord {
     return (this.storedFlags & RecordFlags.Compressed) !== 0;
   }
 
+  /**
+   * Does any subrecord contain this little-endian u32 (e.g. a FormID)?
+   * Scans the raw payload without parsing or caching the record.
+   */
+  containsU32(value: number): boolean {
+    const payload = this.subs ? null : this.stored ? (this.isCompressedStored ? decompressPayload(this.stored, this.storedFlags, this) : this.stored) : null;
+    const b0 = value & 0xff;
+    const b1 = (value >>> 8) & 0xff;
+    const b2 = (value >>> 16) & 0xff;
+    const b3 = (value >>> 24) & 0xff;
+    const scan = (d: Uint8Array, from: number, to: number): boolean => {
+      for (let i = from; i + 4 <= to; i++) if (d[i] === b0 && d[i + 1] === b1 && d[i + 2] === b2 && d[i + 3] === b3) return true;
+      return false;
+    };
+    if (!payload) return this.subrecords.some((s) => scan(s.data, 0, s.data.byteLength));
+    let pos = 0;
+    let bigSize = -1;
+    const n = payload.byteLength;
+    while (pos + 6 <= n) {
+      let size = payload[pos + 4]! | (payload[pos + 5]! << 8);
+      if (payload[pos] === 0x58 && payload[pos + 1] === 0x58 && payload[pos + 2] === 0x58 && payload[pos + 3] === 0x58 && size === 4 && pos + 10 <= n) {
+        bigSize = (payload[pos + 6]! | (payload[pos + 7]! << 8) | (payload[pos + 8]! << 16) | (payload[pos + 9]! << 24)) >>> 0;
+        pos += 10;
+        continue;
+      }
+      if (bigSize >= 0) {
+        size = bigSize;
+        bigSize = -1;
+      }
+      const end = Math.min(n, pos + 6 + size);
+      if (scan(payload, pos + 6, end)) return true;
+      pos = end;
+    }
+    return false;
+  }
+
   /** Drop the parsed subrecord cache of an unmodified record (it is re-parsed on demand). */
   releaseParsed(): void {
     if (!this.modified && this.stored) this.subs = null;

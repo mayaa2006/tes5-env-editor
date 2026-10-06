@@ -369,7 +369,7 @@ export class EngineHost {
       .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
       .join('');
     const key = ws.createRecord('STAT', {
-      editorId: ws.byEditorId(edid) ? `${edid}${Date.now() % 10000}` : edid,
+      editorId: ws.uniqueEditorId(edid),
       bounds: { x1: 0, y1: 0, z1: 0, x2: 0, y2: 0, z2: 0 },
       model: { file: rel },
       directionalMaterial: { maxAngle: 90, material: null, consideredSnow: 0, unused: new Uint8Array(3) },
@@ -705,6 +705,10 @@ export class EngineHost {
 
   describeKey(key: FormKey) {
     return this.requireWs().describeKey(key);
+  }
+
+  uniqueEditorId(base: string) {
+    return this.requireWs().uniqueEditorId(base);
   }
 
   ownerOf(key: FormKey) {

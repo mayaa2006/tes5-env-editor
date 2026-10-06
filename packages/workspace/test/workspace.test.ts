@@ -370,3 +370,77 @@ describe('winner index', () => {
     expect(ws.search({ query: 'BrandNewStatic' }).total).toBe(0);
   });
 });
+
+describe('regressions', () => {
+  it('keeps FormID fields that are present but None (MESG INAM = 0) when re-saving', async () => {
+    const { ws } = await openDemo();
+    const k = key(ws, 'DemoWelcomeMsg');
+    const v = ws.view(k)!;
+    expect(v.data.icon).toBeNull();
+    ws.updateRecord(k, v.data, { unknown: v.unknown });
+    const mine = ws.versions(k).at(-1)!.record;
+    expect(mine.subrecords.map((s) => s.sig)).toEqual(ws.versions(k)[0]!.record.subrecords.map((s) => s.sig));
+    expect(ws.clean('MyMod.esp', { dryRun: true }).itmsRemoved.map((e) => e.editorId)).toContain('DemoWelcomeMsg');
+  });
+
+  it('keeps Editor IDs unique and valid', async () => {
+    const { ws } = await openDemo();
+    const crate = key(ws, 'DemoCrate');
+    const a = ws.duplicateRecord(crate);
+    const b = ws.duplicateRecord(crate);
+    expect([ws.view(a)!.editorId, ws.view(b)!.editorId]).toEqual(['DemoCrateCopy', 'DemoCrateCopy2']);
+    const v = ws.view(a)!;
+    expect(() => ws.updateRecord(a, { ...v.data, editorId: 'DemoBarrel' }, { unknown: v.unknown })).toThrow(/already used/);
+    expect(() => ws.updateRecord(a, { ...v.data, editorId: 'Bad Name!' }, { unknown: v.unknown })).toThrow(/letters, digits/);
+    // A failed edit leaves nothing behind.
+    expect(ws.view(a)!.editorId).toBe('DemoCrateCopy');
+    // Renaming frees the old ID; editing other fields with an unchanged ID is fine.
+    ws.updateRecord(a, { ...v.data, editorId: 'FreshName' }, { unknown: v.unknown });
+    expect(ws.byEditorId('DemoCrateCopy')).toBeUndefined();
+    expect(ws.byEditorId('FreshName')).toBe(a);
+    const barrel = key(ws, 'DemoBarrel');
+    const bv = ws.view(barrel)!;
+    ws.updateRecord(barrel, bv.data, { unknown: bv.unknown });
+    // Renaming a master form in the active plugin frees its old ID too.
+    ws.updateRecord(barrel, { ...bv.data, editorId: 'BarrelRenamed' }, { unknown: bv.unknown });
+    expect(ws.byEditorId('DemoBarrel')).toBeUndefined();
+    expect(() => new WorldService(ws).createInteriorCell('DemoTavern')).toThrow(/already used/);
+  });
+});
+
+describe('text encoding', () => {
+  it('shows Windows-1252 punctuation in names and warns about unencodable text', async () => {
+    const { ws } = await openDemo();
+    const npc = key(ws, 'DemoGuard');
+    const v = ws.view(npc)!;
+    ws.updateRecord(npc, { ...v.data, name: 'Ñandú — “quoted” €' }, { unknown: v.unknown });
+    expect(ws.view(npc)!.name).toBe('Ñandú — “quoted” €');
+    expect(ws.search({ sigs: ['NPC_'], query: '“quoted”' }).total).toBe(1);
+    const warnings: string[] = [];
+    ws.on((e) => e.type === 'warning' && warnings.push(e.message));
+    const v2 = ws.view(npc)!;
+    ws.updateRecord(npc, { ...v2.data, name: 'Привет' }, { unknown: v2.unknown });
+    expect(warnings.join()).toMatch(/can't be stored.*П/);
+  });
+});
+
+describe('deleting forms', () => {
+  it('relinks dialogue order and warns about remaining references', async () => {
+    const { ws } = await openDemo();
+    const quests = new QuestService(ws, new ScriptService(ws));
+    const q = quests.createQuest('DelQuest', 'Del');
+    const topic = quests.createTopic(q, { editorId: 'DelTopic', text: 'Hi?' });
+    const i1 = quests.addResponse(topic, { text: 'one' });
+    const i2 = quests.addResponse(topic, { text: 'two' });
+    const i3 = quests.addResponse(topic, { text: 'three' });
+    ws.deleteRecord(i2);
+    expect((ws.view(i3)!.data as { previousInfo: unknown }).previousInfo).toBe(i1);
+    expect(quests.topics(q)[0]!.infos.map((i) => i.responses[0]!.text)).toEqual(['one', 'three']);
+    const warnings: string[] = [];
+    ws.on((e) => e.type === 'warning' && warnings.push(e.message));
+    const crateCopy = ws.duplicateRecord(key(ws, 'DemoCrate'));
+    new WorldService(ws).placeReference(key(ws, 'DemoTavern'), crateCopy);
+    ws.deleteRecord(crateCopy);
+    expect(warnings.join()).toMatch(/still point to the deleted/);
+  });
+});

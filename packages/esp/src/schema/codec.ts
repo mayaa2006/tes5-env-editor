@@ -546,7 +546,10 @@ export function decodeRecordData(def: RecordDef, subs: readonly Subrecord[], ctx
 }
 
 function encodeMember(m: MemberDef, v: unknown, out: Subrecord[], ctx: CodecContext, record: Record<string, unknown>): void {
-  if (v === undefined || v === null) return;
+  if (v === undefined) return;
+  // A FormID field that is present but "None" is stored as 0 (e.g. MESG INAM);
+  // only an absent key removes the subrecord.
+  if (v === null && !(m.m === 'sub' && m.def.t === 'formid')) return;
   switch (m.m) {
     case 'sub': {
       if (v && typeof v === 'object' && '__raw' in (v as object)) {

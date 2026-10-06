@@ -434,4 +434,21 @@ export function useHotkeys(map: Record<string, (e: KeyboardEvent) => void>, deps
   }, [cb]);
 }
 
+/** State for a new form's Editor ID, pre-filled with the first free variant of `base`. */
+export function useUniqueEditorId(base: string): [string, (v: string) => void] {
+  const [v, setV] = useState(base);
+  useEffect(() => {
+    let alive = true;
+    void useStore
+      .getState()
+      .client?.call('uniqueEditorId', base)
+      .then((u) => alive && setV((cur) => (cur === base ? u : cur)))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [base]);
+  return [v, setV];
+}
+
 export { engine };

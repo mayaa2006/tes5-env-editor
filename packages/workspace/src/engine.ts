@@ -9,6 +9,8 @@
  * byte, so editing can't produce accidental "dirty edits".
  */
 import {
+  cp1252Unencodable,
+  decodeCp1252,
   FormIdMapper,
   GroupType,
   MissingParentError,
@@ -142,7 +144,6 @@ interface BaseIndex {
   byEdid?: Map<string, WinnerEntry>;
 }
 
-const LATIN1 = new TextDecoder('latin1');
 
 export class Workspace {
   readonly slots: PluginSlot[] = [];
@@ -523,7 +524,7 @@ export class Workspace {
     }
     let end = data.indexOf(0);
     if (end < 0) end = data.byteLength;
-    return LATIN1.decode(data.subarray(0, end));
+    return decodeCp1252(data.subarray(0, end));
   }
 
   view(key: FormKey, fromPlugin?: string): RecordView | undefined {
@@ -680,7 +681,14 @@ export class Workspace {
         if (key) return key;
       }
     }
-    return base.byEdid.get(want)?.key;
+    const hit = base.byEdid.get(want);
+    if (hit && a?.plugin) {
+      // The active plugin may have renamed this form.
+      const local = a.mapper?.toLocal(hit.key);
+      const mine = local !== undefined ? a.plugin.getRecord(local) : undefined;
+      if (mine && mine.editorId?.toLowerCase() !== want) return undefined;
+    }
+    return hit?.key;
   }
 
   // ---------------------------------------------------------------- transactions & undo
@@ -884,6 +892,8 @@ export class Workspace {
     return this.transaction(opts.label ?? `Edit ${key}`, () => {
       const rec = this.ensureInActive(key);
       if (!getRecordDef(rec.sig)) throw new WorkspaceError(`${rec.sig} has no typed schema; use setSubrecords`);
+      this.checkEditorId(data.editorId, key, rec.editorId);
+      this.warnUnencodable(data);
       if (opts.flags !== undefined) rec.flags = (opts.flags & ~RecordFlags.Compressed) | (rec.flags & RecordFlags.Compressed);
       this.prepareMasters(data);
       this.currentRecordSig = rec.sig;
@@ -894,6 +904,41 @@ export class Workspace {
       }
       return this.view(key)!;
     });
+  }
+
+  /**
+   * Editor IDs must be unique and use only letters, digits and underscores
+   * (the Creation Kit enforces the same). Only checked when the ID changes,
+   * so editing a record from another mod with an odd ID still works.
+   */
+  private checkEditorId(edid: unknown, key: FormKey | null, current: string | undefined): void {
+    if (typeof edid !== 'string' || edid === current) return;
+    if (!edid) return;
+    if (!/^[A-Za-z0-9_]+$/.test(edid)) throw new WorkspaceError(`Editor ID "${edid}" can only contain letters, digits and underscores`);
+    if (edid.length > 200) throw new WorkspaceError('Editor ID is too long (200 characters max)');
+    const existing = this.byEditorId(edid);
+    if (existing && existing !== key) throw new WorkspaceError(`Editor ID "${edid}" is already used by ${existing}`);
+  }
+
+  /** Non-localized plugins store text as Windows-1252; say so when something won't survive. */
+  private warnUnencodable(data: unknown): void {
+    if (this.active?.plugin?.isLocalized) return;
+    const bad = new Set<string>();
+    const visit = (v: unknown, depth: number): void => {
+      if (depth > 8 || v === null || v === undefined) return;
+      if (typeof v === 'string') for (const c of cp1252Unencodable(v)) bad.add(c);
+      else if (Array.isArray(v)) for (const x of v) visit(x, depth + 1);
+      else if (typeof v === 'object' && !(v instanceof Uint8Array)) for (const x of Object.values(v)) visit(x, depth + 1);
+    };
+    visit(data, 0);
+    if (bad.size) this.emit({ type: 'warning', message: `These characters can't be stored in a non-localized plugin and will be saved as "?": ${[...bad].slice(0, 10).join(' ')}` });
+  }
+
+  /** `base`, or `base2`, `base3`… — the first Editor ID not in use. */
+  uniqueEditorId(base: string): string {
+    const clean = base.replace(/[^A-Za-z0-9_]/g, '') || 'Form';
+    if (!this.byEditorId(clean)) return clean;
+    for (let i = 2; ; i++) if (!this.byEditorId(`${clean}${i}`)) return `${clean}${i}`;
   }
 
   /** Unknown subrecords are copied raw; only allowed when they can't contain shifted FormIDs. */
@@ -936,6 +981,8 @@ export class Workspace {
   /** Create a new record in the active plugin. */
   createRecord(sig: string, data: Record<string, unknown>, where: { cell?: FormKey; topic?: FormKey; worldspace?: FormKey; persistent?: boolean } = {}, flags = 0): FormKey {
     if (!getRecordDef(sig)) throw new WorkspaceError(`Creating ${sig} records is not supported yet (no schema)`);
+    this.checkEditorId(data.editorId, null, undefined);
+    this.warnUnencodable(data);
     return this.transaction(`Create ${sig}`, () => {
       const a = this.requireActive();
       this.prepareMasters(data);
@@ -962,7 +1009,7 @@ export class Workspace {
     const v = this.view(key);
     if (!v) throw new WorkspaceError(`${key} not found`);
     const data = structuredClone(v.data);
-    if ('editorId' in data || newEditorId) data.editorId = newEditorId ?? `${v.editorId ?? v.sig}Copy`;
+    if ((typeof data.editorId === 'string' && data.editorId) || newEditorId) data.editorId = newEditorId ?? this.uniqueEditorId(`${v.editorId ?? v.sig}Copy`);
     delete data.scripts; // fragments/script bindings are not shared between forms
     return this.createRecord(v.sig, data, { cell: v.parent.cell, topic: v.parent.topic, worldspace: v.parent.worldspace, persistent: v.parent.persistent }, v.flags & ~RecordFlags.Compressed);
   }
@@ -981,10 +1028,15 @@ export class Workspace {
     const local = a.mapper.toLocal(key);
     const inActive = local !== undefined ? a.plugin.getRecord(local) : undefined;
     if (owner.toLowerCase() === a.name.toLowerCase()) {
-      return this.transaction(`Delete ${key}`, () => {
+      const result = this.transaction(`Delete ${key}`, () => {
+        const rec = a.plugin.getRecord(local!);
+        if (rec?.sig === 'INFO') this.unlinkInfo(key);
         a.plugin.removeRecord(local!);
         return 'removed' as const;
       });
+      const users = this.findReferences(key, { allPlugins: true, limit: 20 }).filter((r) => r.formKey !== key);
+      if (users.length) this.emit({ type: 'warning', message: `${users.length >= 20 ? '20+' : users.length} record(s) still point to the deleted ${key}: ${users.slice(0, 4).map((u) => u.editorId ?? u.formKey).join(', ')}${users.length > 4 ? '…' : ''}` });
+      return result;
     }
     const winner = this.winner(key);
     if (!winner) throw new WorkspaceError(`${key} not found`);
@@ -1017,6 +1069,19 @@ export class Workspace {
     throw new WorkspaceError(`Deleting ${recordTypeName(winner.record.sig)} records from masters breaks anything that uses them. Remove references to it instead, or edit it.`);
   }
 
+  /** Keep a topic's response order intact when a response is removed (PNAM chain). */
+  private unlinkInfo(key: FormKey): void {
+    const v = this.view(key);
+    const prev = (v?.data as { previousInfo?: FormKey | null } | undefined)?.previousInfo ?? null;
+    const a = this.requireActive();
+    for (const r of [...a.plugin.recordsOfType('INFO')]) {
+      const k = this.keyOf(a, r.formId);
+      if (!k || k === key) continue;
+      const d = this.view(k)?.data as { previousInfo?: FormKey | null } | undefined;
+      if (d?.previousInfo === key) this.editRecord(k, (x) => ({ ...x, previousInfo: prev }), 'Relink response order');
+    }
+  }
+
   /** Revert an override (drop the active plugin's version). */
   revertRecord(key: FormKey): void {
     const a = this.requireActive();
@@ -1037,23 +1102,9 @@ export class Workspace {
       if (!s.plugin || !s.mapper) continue;
       const local = s.mapper.toLocal(key);
       if (local === undefined) continue;
-      const b0 = local & 0xff;
-      const b1 = (local >>> 8) & 0xff;
-      const b2 = (local >>> 16) & 0xff;
-      const b3 = local >>> 24;
       for (const r of s.plugin.records()) {
         if (r.formId === local) continue;
-        let hit = false;
-        for (const sub of r.subrecords) {
-          const d = sub.data;
-          for (let i = 0; i + 4 <= d.byteLength; i++) {
-            if (d[i] === b0 && d[i + 1] === b1 && d[i + 2] === b2 && d[i + 3] === b3) {
-              hit = true;
-              break;
-            }
-          }
-          if (hit) break;
-        }
+        const hit = r.containsU32(local);
         if (hit) {
           const k = this.keyOf(s, r.formId)!;
           out.push({ formKey: k, sig: r.sig, editorId: r.editorId, owner: parseFormKey(k).plugin, winner: s.name, inActive: s.name === this.activeName, deleted: r.isDeleted });
