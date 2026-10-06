@@ -8,7 +8,17 @@ import { decodeToRgba, flattenMeshes, isCompressed, parseDds, parseNif, parseTri
 import { allConditionFunctions, isFormKey, newCondition, parseFormKey, recordTypeName, type FormKey, type Navmesh, type VmadProperty } from '@tes5/esp';
 import { validateNavmesh } from '@tes5/navmesh';
 import {
+  CELL_MOODS,
+  CLUTTER_THEMES,
   DialogueService,
+  EnvironmentService,
+  type ArrayOptions,
+  type CellMood,
+  type ClutterOptions,
+  type PathOptions,
+  type RoomKit,
+  type RoomPlan,
+  type ScatterOptions,
   NpcService,
   QuestGraphService,
   QuestService,
@@ -108,6 +118,7 @@ export class EngineHost {
   triggers?: TriggerService;
   graphs?: QuestGraphService;
   dialogue?: DialogueService;
+  env?: EnvironmentService;
   private source?: string;
   /** Game folder (where SkyrimSE.exe lives) and MO2 instance, for test launches. */
   private gameDir?: string;
@@ -172,6 +183,7 @@ export class EngineHost {
     this.triggers = new TriggerService(ws, this.scripts);
     this.graphs = new QuestGraphService(ws, this.quests, this.scripts, this.triggers);
     this.dialogue = new DialogueService(ws, this.quests);
+    this.env = new EnvironmentService(ws);
     this.meshCache.clear();
     ws.on((e) => {
       if (e.type === 'filesRestored') return; // internal to the engine
@@ -351,8 +363,15 @@ export class EngineHost {
     return this.world!.placeReference(cell, base, transform, opts);
   }
 
-  transformReferences(changes: { ref: FormKey; transform: Partial<Transform> }[], label?: string) {
-    this.world!.transformReferences(changes, label);
+  async transformReferences(changes: { ref: FormKey; transform: Partial<Transform> }[], label = 'Transform') {
+    const ws = this.requireWs();
+    // Moving a load door also moves where its partner door sends the player (same undo step).
+    const doors = changes.map((c) => c.ref).filter((k) => (ws.view(k)?.data as { teleport?: unknown } | undefined)?.teleport);
+    if (!doors.length) return this.world!.transformReferences(changes, label);
+    await ws.transactionAsync(label, async () => {
+      this.world!.transformReferences(changes, label);
+      await this.env!.refreshTeleportMarkers(doors);
+    });
   }
 
   duplicateReferences(refs: FormKey[], offset: { x: number; y: number; z: number } = { x: 0, y: 0, z: 0 }): FormKey[] {
@@ -683,6 +702,81 @@ export class EngineHost {
     return { batPath, lines, consoleCommand: `bat ${TEST_BAT_NAME}`, launched, how, viaMo2: !!this.mo2 };
   }
 
+  // ---------------------------------------------------------------- environment tools
+
+  envDrop(refs: FormKey[], align = false) {
+    return this.env!.dropToSurface(refs, { align });
+  }
+
+  envArray(refs: FormKey[], opts: ArrayOptions) {
+    return this.env!.array(refs, opts);
+  }
+
+  envScatter(cell: FormKey, opts: ScatterOptions & { centers?: { x: number; y: number; z: number }[] }) {
+    return this.env!.scatter(cell, opts);
+  }
+
+  envErase(cell: FormKey, centers: { x: number; y: number; z: number }[], radius: number, bases: FormKey[]) {
+    return this.env!.erase(cell, centers, radius, bases);
+  }
+
+  envAlongPath(cell: FormKey, opts: PathOptions) {
+    return this.env!.alongPath(cell, opts);
+  }
+
+  envLighting(cell: FormKey) {
+    const env = this.env!;
+    const interior = this.world!.cells().find((c) => c.formKey === cell)?.interior ?? false;
+    return { sources: env.lightSources(cell).length, suggested: interior ? env.suggestMood(cell) : null, moods: Object.entries(CELL_MOODS).map(([id, m]) => ({ id: id as CellMood, label: m.label })) };
+  }
+
+  envLightingPass(cell: FormKey) {
+    return this.env!.lightingPass(cell);
+  }
+
+  envSetMood(cell: FormKey, mood: CellMood) {
+    this.env!.setCellMood(cell, mood);
+  }
+
+  envThemes() {
+    return Object.entries(CLUTTER_THEMES).map(([id, t]) => ({ id: id as keyof typeof CLUTTER_THEMES, label: t.label }));
+  }
+
+  envThemeItems(theme: keyof typeof CLUTTER_THEMES) {
+    const { table, floor } = this.env!.themeItems(theme);
+    const ws = this.requireWs();
+    const describe = (k: FormKey) => ({ formKey: k, label: ws.summary(k)?.name ?? ws.summary(k)?.editorId ?? k });
+    return { table: table.map(describe), floor: floor.map(describe) };
+  }
+
+  envClutter(cell: FormKey, opts: ClutterOptions) {
+    return this.env!.clutterRoom(cell, opts);
+  }
+
+  envBuildRoom(cell: FormKey, origin: { x: number; y: number; z: number }, plan: RoomPlan, kit: RoomKit) {
+    return this.env!.buildRoom(cell, origin, plan, kit);
+  }
+
+  envLinkDoors(a: FormKey, b: FormKey) {
+    return this.env!.linkDoors(a, b);
+  }
+
+  /** A new door in `targetCell` (at its middle, resting on the ground outdoors), linked to `door`. */
+  async envCreateLinkedDoor(door: FormKey, targetCell: FormKey) {
+    const ws = this.requireWs();
+    const info = this.world!.cells().find((c) => c.formKey === targetCell);
+    if (!info) throw new Error('Pick a cell');
+    const position = info.grid ? { x: info.grid.x * 4096 + 2048, y: info.grid.y * 4096 + 2048, z: 20000 } : { x: 0, y: 0, z: 0 };
+    return ws.transactionAsync('Create linked door', async () => {
+      const key = await this.env!.createLinkedDoor(door, targetCell, position);
+      if (info.grid) {
+        await this.env!.dropToSurface([key]);
+        await this.env!.refreshTeleportMarkers([key]);
+      }
+      return key;
+    });
+  }
+
   // ---------------------------------------------------------------- visual triggers
 
   triggerEvents() {
@@ -805,7 +899,13 @@ export class EngineHost {
   }
 
   async generateNavmesh(cell: FormKey, opts: { preset?: 'interior' | 'exterior' | 'detailed'; useRecast?: boolean } = {}) {
-    return generateCellNavmesh(this.requireWs(), cell, opts);
+    const res = await generateCellNavmesh(this.requireWs(), cell, opts);
+    await this.env!.stampNavmesh(cell);
+    return res;
+  }
+
+  navmeshStatus(cell: FormKey) {
+    return this.env!.navmeshStatus(cell);
   }
 
   navmeshes(cell: FormKey) {

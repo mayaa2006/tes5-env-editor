@@ -982,3 +982,79 @@ table.grid tr.diff td {
   min-width: 150px;
   font-size: 12px;
 }
+
+/* ---- world tools panel */
+.env-tools {
+  position: absolute;
+  left: 10px;
+  top: 40px;
+  width: 300px;
+  max-height: calc(100% - 90px);
+  display: flex;
+  flex-direction: column;
+  z-index: 5;
+  padding: 8px 10px;
+}
+.env-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-bottom: 8px;
+}
+.env-body {
+  overflow: auto;
+  min-height: 0;
+  padding-right: 2px;
+}
+.env-h {
+  margin: 6px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim, #aab);
+}
+.room-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+  width: 100%;
+  aspect-ratio: 1;
+}
+.room-tile {
+  position: relative;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 2px;
+  padding: 0;
+  cursor: pointer;
+}
+.room-tile.on {
+  background: color-mix(in srgb, var(--accent, #4f9cf7) 45%, transparent);
+}
+.room-door {
+  position: absolute;
+  background: #f0a040;
+}
+.room-door.n,
+.room-door.s {
+  left: 25%;
+  right: 25%;
+  height: 4px;
+}
+.room-door.n {
+  top: -1px;
+}
+.room-door.s {
+  bottom: -1px;
+}
+.room-door.e,
+.room-door.w {
+  top: 25%;
+  bottom: 25%;
+  width: 4px;
+}
+.room-door.e {
+  right: -1px;
+}
+.room-door.w {
+  left: -1px;
+}

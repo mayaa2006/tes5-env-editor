@@ -455,8 +455,11 @@ export class EnvironmentService {
 
   // ---------------------------------------------------------------- scatter / erase
 
-  /** Brush-style scatter of a palette around a point (one undo step). */
-  async scatter(cell: FormKey, opts: ScatterOptions): Promise<FormKey[]> {
+  /**
+   * Brush-style scatter of a palette around a point, or around every point of
+   * a brush stroke (`centers`); one undo step either way.
+   */
+  async scatter(cell: FormKey, opts: ScatterOptions & { centers?: Vec3[] }): Promise<FormKey[]> {
     const items = opts.items.filter((i) => (i.weight ?? 1) > 0);
     if (!items.length) throw new WorkspaceError('Pick at least one object to scatter');
     for (const i of items) if (!this.ws.exists(i.base)) throw new WorkspaceError(`${i.base} not found`);
@@ -474,45 +477,50 @@ export class EnvironmentService {
     const [s0, s1] = opts.scale ?? [0.8, 1.2];
     // Existing objects from the palette count towards spacing.
     const paletteBases = new Set(items.map((i) => i.base));
+    const centers = opts.centers?.length ? opts.centers : [opts.center];
+    const near = (p: Vec3) => centers.some((c) => Math.hypot(p.x - c.x, p.y - c.y) < opts.radius + 512);
     const taken: { x: number; y: number; r: number }[] = this.world
       .references(cell)
-      .filter((r) => r.base && paletteBases.has(r.base) && !r.disabled && Math.hypot(r.transform.position.x - opts.center.x, r.transform.position.y - opts.center.y) < opts.radius + 512)
+      .filter((r) => r.base && paletteBases.has(r.base) && !r.disabled && near(r.transform.position))
       .map((r) => ({ x: r.transform.position.x, y: r.transform.position.y, r: (this.footprint(r.base!) * r.transform.scale) / 2 }));
     const placements: { base: FormKey; t: Transform }[] = [];
     // Interiors have ceilings: only look a little above the brush; exteriors follow hills.
     const reach = this.cellInfo(cell).interior ? 96 : Math.max(128, opts.radius);
-    for (let attempt = 0; attempt < target * 12 && placements.length < target; attempt++) {
-      const a = random() * Math.PI * 2;
-      const d = Math.sqrt(random()) * opts.radius;
-      const x = opts.center.x + Math.cos(a) * d;
-      const y = opts.center.y + Math.sin(a) * d;
-      const base = pick();
-      const scale = s0 + (s1 - s0) * random();
-      const radius = (opts.spacing ?? this.footprint(base) * 0.8) * scale * 0.5;
-      if (taken.some((t) => Math.hypot(t.x - x, t.y - y) < t.r + radius)) continue;
-      const yaw = opts.randomYaw === false ? 0 : random() * Math.PI * 2;
-      const res = this.rest(surfaces, base, { x, y, z: opts.center.z }, { x: 0, y: 0, z: yaw }, scale, {
-        align: opts.alignToSlope ?? 0,
-        sink: opts.sink,
-        reach,
-        ignore: opts.terrainOnly ? (o) => o !== null : undefined,
-      });
-      if (!res) continue;
-      const up = Math.abs(res.hit.normal.z);
-      if (up < minNz) continue;
-      taken.push({ x, y, r: radius });
-      placements.push({ base, t: res.transform });
+    for (const center of centers) {
+      const goal = placements.length + target;
+      for (let attempt = 0; attempt < target * 12 && placements.length < goal; attempt++) {
+        const a = random() * Math.PI * 2;
+        const d = Math.sqrt(random()) * opts.radius;
+        const x = center.x + Math.cos(a) * d;
+        const y = center.y + Math.sin(a) * d;
+        const base = pick();
+        const scale = s0 + (s1 - s0) * random();
+        const radius = (opts.spacing ?? this.footprint(base) * 0.8) * scale * 0.5;
+        if (taken.some((t) => Math.hypot(t.x - x, t.y - y) < t.r + radius)) continue;
+        const yaw = opts.randomYaw === false ? 0 : random() * Math.PI * 2;
+        const res = this.rest(surfaces, base, { x, y, z: center.z }, { x: 0, y: 0, z: yaw }, scale, {
+          align: opts.alignToSlope ?? 0,
+          sink: opts.sink,
+          reach,
+          ignore: opts.terrainOnly ? (o) => o !== null : undefined,
+        });
+        if (!res) continue;
+        const up = Math.abs(res.hit.normal.z);
+        if (up < minNz) continue;
+        taken.push({ x, y, r: radius });
+        placements.push({ base, t: res.transform });
+      }
     }
     if (!placements.length) return [];
     return this.ws.transaction(`Scatter ${placements.length} object(s)`, () => placements.map((p) => this.world.placeReference(cell, p.base, p.t)));
   }
 
-  /** Remove (or disable, for master references) palette objects inside a radius. */
-  erase(cell: FormKey, center: Vec3, radius: number, bases: FormKey[]): number {
+  /** Remove (or disable, for master references) palette objects inside a radius of any of the points. */
+  erase(cell: FormKey, center: Vec3 | Vec3[], radius: number, bases: FormKey[]): number {
     const set = new Set(bases);
-    const hits = this.world
-      .references(cell)
-      .filter((r) => r.base && set.has(r.base) && !r.disabled && !r.deleted && Math.hypot(r.transform.position.x - center.x, r.transform.position.y - center.y) <= radius && Math.abs(r.transform.position.z - center.z) <= Math.max(radius, 256));
+    const centers = Array.isArray(center) ? center : [center];
+    const inside = (p: Vec3) => centers.some((c) => Math.hypot(p.x - c.x, p.y - c.y) <= radius && Math.abs(p.z - c.z) <= Math.max(radius, 256));
+    const hits = this.world.references(cell).filter((r) => r.base && set.has(r.base) && !r.disabled && !r.deleted && inside(r.transform.position));
     if (!hits.length) return 0;
     this.ws.transaction(`Erase ${hits.length} object(s)`, () => {
       for (const h of hits) this.ws.deleteRecord(h.formKey);

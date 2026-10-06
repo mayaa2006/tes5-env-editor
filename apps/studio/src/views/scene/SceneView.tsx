@@ -8,6 +8,7 @@ import { addTriangle, buildGrid, deleteTriangles, setTriangleFlags } from '@tes5
 import type { PlacedRef } from '@tes5/workspace';
 import { Checkbox, Field, Icon, Modal, Select, TextInput, useQuery, useUniqueEditorId } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
+import { EnvTools, type ToolHandlers } from './EnvTools';
 import { Viewport, type Tool } from './viewport';
 
 const NAV_FLAGS = { preferred: 0x0040, water: 0x0200, noLarge: 0x0010 } as const;
@@ -33,14 +34,20 @@ export default function SceneView() {
   const [newCell, setNewCell] = useState(false);
   const [outliner, setOutliner] = useState(true);
   const [ortho, setOrtho] = useState(false);
+  const [tools, setTools] = useState(false);
+  const [kitSnap, setKitSnap] = useState(false);
+  const toolHandlers = useRef<ToolHandlers>({});
   const framedCell = useRef<string | undefined>(undefined);
 
   const { data: cells } = useQuery(() => client?.call('cells', {}), [client]);
   const info = cells?.find((c) => c.formKey === cell);
-  const { data: refs } = useQuery(() => (cell ? client?.call('references', cell) : undefined), [cell]);
+  // Tagged with their cell: while a new cell loads, the previous cell's list must not be framed as the new one.
+  const { data: refsFor } = useQuery(() => (cell ? client?.call('references', cell).then((list) => ({ cell, list })) : undefined), [cell]);
+  const refs = refsFor && refsFor.cell === cell ? refsFor.list : undefined;
   const { data: lighting } = useQuery(() => (cell ? client?.call('cellLighting', cell) : undefined), [cell]);
   const { data: terrain } = useQuery(() => (cell && info && !info.interior ? client?.call('terrain', cell) : undefined), [cell, info?.interior]);
   const { data: navmeshes } = useQuery(() => (cell ? client?.call('navmeshes', cell) : undefined), [cell]);
+  const { data: navStatus } = useQuery(() => (cell && session.activePlugin ? client?.call('navmeshStatus', cell) : undefined), [cell, session.activePlugin]);
 
   // Latest values for viewport callbacks (created once).
   const live = useRef({ cell, navEdit, navmeshes, session });
@@ -79,6 +86,10 @@ export default function SceneView() {
         ),
       tab: () => toggleNavEdit(),
       navDrawChanged: setNavDrawing,
+      brushStroke: (pts, erase) => toolHandlers.current.brushStroke?.(pts, erase),
+      brushRadius: (r) => toolHandlers.current.brushRadius?.(r),
+      pathDone: (pts) => toolHandlers.current.pathDone?.(pts),
+      toolCancelled: () => toolHandlers.current.cancelled?.(),
     });
     vpRef.current = vp;
     (window as unknown as { __viewport?: Viewport }).__viewport = vp;
@@ -147,6 +158,7 @@ export default function SceneView() {
   useEffect(() => vpRef.current?.setSelection(sceneSelection), [sceneSelection, refs]);
   useEffect(() => vpRef.current?.setTool(tool), [tool]);
   useEffect(() => vpRef.current?.setSnapping(snap), [snap]);
+  useEffect(() => vpRef.current?.setKitSnap(kitSnap), [kitSnap]);
   useEffect(() => vpRef.current?.setNavVisible(showNav), [showNav]);
   useEffect(() => {
     vpRef.current?.setOptions({
@@ -209,6 +221,9 @@ export default function SceneView() {
         <button className={`btn small ${snap ? 'active' : 'ghost'}`} title={`Snap (${settings.snapMove} units, ${settings.snapRotateDeg}°). Hold Ctrl while transforming to toggle.`} onClick={() => setSnap(!snap)}>
           <Icon name="magnet" size={13} />
         </button>
+        <button className={`btn small ${kitSnap ? 'active' : 'ghost'}`} title="Kit snapping: while moving (G), edges snap flush to nearby pieces — for walls, floors and other kit pieces" onClick={() => setKitSnap(!kitSnap)} data-testid="kit-snap">
+          Kit
+        </button>
         <span className="sep" />
         <button className="btn small ghost" title="Top view (Numpad 7)" onClick={() => (vpRef.current?.view('top'), setOrtho(true))}>
           Top
@@ -239,6 +254,15 @@ export default function SceneView() {
         <GenerateNavmesh cell={cell} interior={info?.interior ?? true} />
         <button className={`btn small ${navEdit ? 'active' : 'ghost'}`} title="Edit navmesh triangles (Tab)" onClick={toggleNavEdit}>
           Edit
+        </button>
+        {navStatus === 'stale' && (
+          <span className="chip warn" title="Objects that shape the navmesh moved, appeared or disappeared since it was generated. Generate again to update it." data-testid="nav-stale">
+            ⚠ Navmesh out of date
+          </span>
+        )}
+        <span className="sep" />
+        <button className={`btn small ${tools ? 'active' : 'ghost'}`} title="World tools: paint, paths, lighting, clutter, rooms, doors" onClick={() => setTools(!tools)} data-testid="env-tools-toggle">
+          <Icon name="wand" size={13} /> Tools
         </button>
         <span className="spacer" />
         <button className="btn small ghost" title="Create a new interior cell" onClick={() => setNewCell(true)}>
@@ -284,6 +308,7 @@ export default function SceneView() {
             )}
           </div>
           {dropping && <div className="drop-hint">Drop to place it here</div>}
+          {tools && !navEdit && <EnvTools cell={cell} interior={info?.interior ?? true} viewport={vpRef} handlers={toolHandlers} refs={refs ?? []} onClose={() => setTools(false)} />}
           {navEdit && <NavEditPanel count={navmeshes?.find((n) => n.formKey === navEdit)?.geometry.triangles.length ?? 0} selected={navSel} drawing={navDrawing} onDraw={() => vpRef.current?.setNavDraw(!vpRef.current.isNavDrawing)} onFlag={(flag, on) => void editNav((nav, sel) => setTriangleFlags(nav, sel, flag, on), 'Set navmesh flags')} onDelete={() => void editNav((nav, sel) => deleteTriangles(nav, sel), 'Delete navmesh triangles')} onDone={toggleNavEdit} />}
         </div>
         {outliner && <Outliner refs={refs ?? []} hiddenTick={hiddenTick} viewport={vpRef} />}
