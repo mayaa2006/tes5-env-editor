@@ -502,3 +502,28 @@ export const LCTN: RecordDef = record(
 );
 
 export { array, KEYWORDS };
+
+export const IDLE: RecordDef = record(
+  'IDLE',
+  'Idle Animation',
+  [
+    EDID,
+    CONDITIONS,
+    sub('DNAM', 'behaviorGraph', 'Behavior Graph', zstring()),
+    sub('ENAM', 'animationEvent', 'Animation Event', zstring()),
+    sub('ANAM', 'related', 'Related Idles (parent, previous)', array(formid(['IDLE', 'AACT']))),
+    sub(
+      'DATA',
+      'data',
+      'Data',
+      struct([
+        ['loopMin', 'Looping Min', u8()],
+        ['loopMax', 'Looping Max', u8()],
+        ['flags', 'Flags', flags('u8', flagList('Parent', 'Sequence', 'No Attacking', 'Blocking'))],
+        ['animationGroupSection', 'Animation Group Section', u8()],
+        ['replayDelay', 'Replay Delay', u16()],
+      ]),
+    ),
+  ],
+  { category: 'Miscellaneous' },
+);

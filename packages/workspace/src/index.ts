@@ -18,3 +18,6 @@ export * from './release';
 export * from './questplan';
 export * from './questbuilder';
 export * from './planner';
+export * from './gestures';
+export * from './dialoguelint';
+export * from './journal';

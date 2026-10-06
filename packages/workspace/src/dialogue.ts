@@ -16,10 +16,12 @@
  * line has been said, [if stage N] only offers it at that stage,
  * [emotion happy] sets the emotion, [gives Item x2] / [takes Item x1] move
  * items between the speaker and the player (Item is an Editor ID or name;
- * "gold" means gold coins).
+ * "gold" means gold coins), [gesture wave] makes the speaker play an
+ * animation as they start the line (see gestures.ts).
  */
 import { EMOTIONS, conditionFunctionByName, newCondition, parseFormKey, type Condition, type FormKey } from '@tes5/esp';
 import { WorkspaceError, type Workspace } from './engine';
+import { gestureCode } from './gestures';
 import type { QuestService } from './quest';
 
 export interface DialogueTopicNode {
@@ -266,7 +268,7 @@ export class DialogueService {
    * Create a whole conversation from a screenplay. Everything is one undo
    * step; stage scripts are written through `setInfoFragment`.
    */
-  async importScreenplay(quest: FormKey, source: string, setInfoFragment: (info: FormKey, code: string) => Promise<unknown>): Promise<{ topics: number; responses: number }> {
+  async importScreenplay(quest: FormKey, source: string, setInfoFragment: (info: FormKey, code: string, which: 'begin' | 'end') => Promise<unknown>): Promise<{ topics: number; responses: number }> {
     const parsed = parseScreenplay(source);
     if (parsed.errors.length) throw new WorkspaceError(parsed.errors.map((e) => `Line ${e.line}: ${e.message}`).join('\n'));
     const speakers = this.resolveSpeakers(parsed.speakers);
@@ -310,7 +312,15 @@ export class DialogueService {
           const { item, count } = this.itemTag(v, r.line);
           code.push(`Game.GetPlayer().${verb}(${formExpression(item)}, ${count})`);
         }
-        if (code.length) await setInfoFragment(info, code.join('\n'));
+        if (code.length) await setInfoFragment(info, code.join('\n'), 'end');
+        // A gesture plays as the line starts.
+        if (r.tags.gesture) {
+          try {
+            await setInfoFragment(info, gestureCode(this.ws, r.tags.gesture, 'akSpeaker'), 'begin');
+          } catch (e) {
+            throw new WorkspaceError(`Line ${r.line}: ${(e as Error).message}`);
+          }
+        }
         const children: FormKey[] = [];
         for (const c of r.choices) children.push(await makeTopic(c, myBranch, need));
         if (children.length) this.ws.editRecord(info, (d: any) => void (d.linkTo = [...(d.linkTo ?? []), ...children]));

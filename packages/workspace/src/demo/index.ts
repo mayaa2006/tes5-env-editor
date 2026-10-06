@@ -377,6 +377,9 @@ function buildDemoMaster(): Plugin {
     fadeValue: 1,
   });
 
+  // Two idle animations (for gestures in dialogue).
+  rec(p, 'IDLE', id(), { editorId: 'IdleWave', behaviorGraph: 'Actors\\Character\\Behaviors\\0_Master.hkx', animationEvent: 'IdleWave', related: [], data: { loopMin: 0, loopMax: 0, flags: 0, animationGroupSection: 0, replayDelay: 0 } });
+  rec(p, 'IDLE', id(), { editorId: 'IdleLaugh', behaviorGraph: 'Actors\\Character\\Behaviors\\0_Master.hkx', animationEvent: 'IdleLaugh', related: [], data: { loopMin: 0, loopMax: 0, flags: 0, animationGroupSection: 0, replayDelay: 0 } });
   // ---- interior cell: the Demo Tavern
   const tavern = 0xa00;
   rec(p, 'CELL', tavern, {

@@ -28,12 +28,14 @@ import {
 } from '@xyflow/react';
 import { useMeasured } from './measured';
 import '@xyflow/react/dist/style.css';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormKey } from '@tes5/esp';
 import type { NewQuestEdge, QuestEdge, QuestEdgeKind, QuestGraph, QuestStageNode } from '@tes5/workspace';
 import { Checkbox, Field, FormLink, FormPicker, Icon, Modal, TextInput, useQuery } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 import { patchRecord } from './QuestDesigner';
+import { GesturePicker } from './GesturePicker';
+const JournalWriter = lazy(() => import('./JournalWriter'));
 
 export const EDGE_KINDS: Record<QuestEdgeKind, { icon: string; color: string; title: string; needs?: string; sigs?: string[]; help: string }> = {
   talk: { icon: '💬', color: '#4f9cf7', title: 'Talk to someone', help: 'The player picks a line in a conversation.' },
@@ -153,6 +155,7 @@ function QuestMapInner({ quest, onOpenDialogue, onOpenStages }: { quest: FormKey
   const [selected, setSelected] = useState<{ kind: 'stage'; stage: number } | { kind: 'edge'; edge: QuestEdge } | null>(null);
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
   const [showProblems, setShowProblems] = useState(false);
+  const [writing, setWriting] = useState(false);
   const { onChanges, withSize } = useMeasured();
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const wrap = useRef<HTMLDivElement>(null);
@@ -239,6 +242,11 @@ function QuestMapInner({ quest, onOpenDialogue, onOpenStages }: { quest: FormKey
 
   return (
     <div className="qmap" data-testid="quest-map">
+      {writing && (
+        <Suspense fallback={null}>
+          <JournalWriter quest={quest} onClose={() => setWriting(false)} />
+        </Suspense>
+      )}
       <div className="viewport-toolbar">
         <button
           className="btn small"
@@ -261,6 +269,9 @@ function QuestMapInner({ quest, onOpenDialogue, onOpenStages }: { quest: FormKey
           }}
         >
           Tidy up
+        </button>
+        <button className="btn small ghost" onClick={() => setWriting(true)} data-testid="map-write-journal" title="Draft journal entries and objectives from the arrows on the map, in Skyrim's style">
+          <Icon name="file" size={12} /> Write journal
         </button>
         <span className="sep" />
         <Checkbox checked={g.startGameEnabled} onChange={(on) => engine((c) => c.call('setQuestStartGameEnabled', quest, on))} label="Running from game start" help="The quest runs from the moment the game loads. Dialogue-only quests usually need this, or their lines never appear." />
@@ -426,11 +437,54 @@ function StagePanel({ quest, g, stage, onOpenStages }: { quest: FormKey; g: Ques
             </button>
           </div>
         </div>
+        <StageGestures quest={quest} n={n} />
         <button className="btn small ghost" onClick={onOpenStages} title="The Stages tab has the full stage script editor">
           <Icon name="script" size={12} /> {n.hasScript ? 'Edit stage script (Stages tab)' : 'Add a stage script (Stages tab)'}
         </button>
       </div>
     </>
+  );
+}
+
+function StageGestures({ quest, n }: { quest: FormKey; n: QuestStageNode }) {
+  const [who, setWho] = useState<FormKey | null>(null);
+  const [gesture, setGesture] = useState<string | null>(null);
+  return (
+    <div data-testid="stage-gestures">
+      <h3 style={{ margin: '6px 0' }}>
+        Animations at this stage
+      </h3>
+      {n.gestures.map((g) => (
+        <div key={g.line} className="row small" style={{ gap: 4 }}>
+          <span className="grow">
+            {g.actor}: {g.label}
+          </span>
+          <button className="btn icon ghost" title="Remove this animation" onClick={() => engine((c) => c.call('removeStageLine', quest, n.stage, g.line))}>
+            <Icon name="close" size={11} />
+          </button>
+        </div>
+      ))}
+      <div className="col" style={{ gap: 4, marginTop: 4 }}>
+        <FormPicker value={who} sigs={['NPC_', 'ACHR']} onChange={setWho} placeholder="Who…" />
+        <div className="row" style={{ gap: 4 }}>
+          <div className="grow">
+            <GesturePicker value={gesture} onChange={setGesture} none="Which animation…" testId="stage-gesture" />
+          </div>
+          <button
+            className="btn small"
+            disabled={!who || !gesture}
+            title="When the quest reaches this stage, they play it (they must be loaded nearby to be seen)"
+            onClick={async () => {
+              const ok = await engine(async (c) => (await c.call('addStageGesture', quest, n.stage, who!, gesture!), true));
+              if (ok) setGesture(null);
+            }}
+            data-testid="add-stage-gesture"
+          >
+            Add
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

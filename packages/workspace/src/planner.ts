@@ -14,6 +14,9 @@ import Anthropic from '@anthropic-ai/sdk';
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 import type { BetaMessageStreamParams } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import { WorkspaceError, type Workspace } from './engine';
+import { GESTURES } from './gestures';
+import { z } from 'zod';
+import type { JournalContext, JournalDraft } from './journal';
 import { QuestPlanSchema, type QuestPlan } from './questplan';
 import { WorldService } from './world';
 
@@ -57,7 +60,8 @@ PLAYER: I found your ring. [if stage 20]
 BRYNJA: My ring! Here, take this. [takes ring x1] [gives gold x100] [stage 100] [goodbye]
 
 Speaker names are character keys in capitals (BRYNJA for the key "brynja"); the player is PLAYER.
-Tags at the end of a line: [stage N] sets stage N once the line is said; [if stage N] only offers the line at stage N; [goodbye] ends the conversation; [emotion happy|sad|angry|fear|surprise|disgust|puzzled] sets the delivery; [gives KEY xN] / [takes KEY xN] move an item between the speaker and the player (KEY is an item key, or gold).
+Tags at the end of a line: [stage N] sets stage N once the line is said; [if stage N] only offers the line at stage N; [goodbye] ends the conversation; [emotion happy|sad|angry|fear|surprise|disgust|puzzled] sets the delivery; [gives KEY xN] / [takes KEY xN] move an item between the speaker and the player (KEY is an item key, or gold); [gesture NAME] makes the speaker play an animation as they say the line.
+Gestures: ${GESTURES.map((g) => `${g.id} (${g.label.toLowerCase()})`).join(', ')}. Use them where a stage direction or the action calls for one (a wave in greeting, pointing the way, laughing, applause); don't put one on every line. For a character reacting when the quest reaches a stage outside dialogue, add it to "animations".
 Put [if stage N] on lines that only make sense at one point of the quest, so they don't show up at the wrong time. When a conversation moves the quest on, add a talk step with the same "to" stage.`;
 
 const MODES: Record<PlannerMode, string> = {
@@ -155,7 +159,27 @@ export class QuestPlanner {
     );
   }
 
-  private async run(params: BetaMessageStreamParams, repair = true): Promise<QuestPlan> {
+  /** Claude writes the journal entries and objectives in Skyrim's style. */
+  async writeJournal(ctx: JournalContext, opts: { overwrite?: boolean } = {}): Promise<JournalDraft> {
+    const params: BetaMessageStreamParams = {
+      model: this.model,
+      max_tokens: 16000,
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'medium', format: betaZodOutputFormat(JournalDraftSchema) },
+      system: [{ type: 'text', text: JOURNAL_RULES, cache_control: { type: 'ephemeral' } }],
+      messages: [
+        {
+          role: 'user',
+          content: `${opts.overwrite ? 'Rewrite every journal entry and objective.' : 'Write the missing journal entries and objectives; keep the ones that are already written exactly as they are (leave them out of your answer).'}\n\n<quest>\n${JSON.stringify(ctx, null, 1)}\n</quest>`,
+        },
+      ],
+      betas: ['server-side-fallback-2026-07-01'],
+      fallbacks: 'default',
+    };
+    return this.run(params, JournalDraftSchema);
+  }
+
+  private async run<T>(params: BetaMessageStreamParams, schema: z.ZodType<T> = QuestPlanSchema as unknown as z.ZodType<T>, repair = true): Promise<T> {
     const reply = await this.send(params);
     if (reply.stop_reason === 'refusal') throw new WorkspaceError('Claude declined to plan this. Try rewording the text.');
     if (reply.stop_reason === 'max_tokens') throw new WorkspaceError('The plan got too long to finish. Try splitting the quest into smaller parts.');
@@ -167,9 +191,9 @@ export class QuestPlanner {
     try {
       json = normalize(JSON.parse(text));
     } catch {
-      throw new WorkspaceError("Claude's answer wasn't a plan. Try again.");
+      throw new WorkspaceError("Claude's answer wasn't in the expected format. Try again.");
     }
-    const parsed = QuestPlanSchema.safeParse(json);
+    const parsed = schema.safeParse(json);
     if (parsed.success) return parsed.data;
     const issues = parsed.error.issues.slice(0, 10).map((i) => `${i.path.join('.') || 'plan'}: ${i.message}`);
     // One chance to fix it, told exactly what was wrong.
@@ -179,11 +203,23 @@ export class QuestPlanner {
           ...params,
           messages: [...params.messages, { role: 'assistant', content: text }, { role: 'user', content: `That plan doesn't match the format:\n${issues.join('\n')}\nReturn the whole corrected plan.` }],
         },
+        schema,
         false,
       );
     throw new WorkspaceError(`Claude's plan was incomplete (${issues[0]}). Try again.`);
   }
 }
+
+const JournalDraftSchema = z.object({
+  stages: z.array(z.object({ index: z.number().int(), journal: z.string() })),
+  objectives: z.array(z.object({ index: z.number().int(), text: z.string(), shownAtStage: z.number().int(), completedAtStage: z.number().int().nullable() })),
+});
+
+const JOURNAL_RULES = `You write the quest journal and objectives for a Skyrim quest, in the style of the game's own quests.
+
+Journal entries: written by the player in the first person and the past tense, one to three short sentences, saying what happened and what they mean to do next ("Brynja asked me to find her mother's ring. She thinks it was lost somewhere in the tavern."). No game terms (stages, aliases, triggers), no "you". The final stage of a completed quest gets a short closing entry. The opening stage is usually left empty unless the quest starts with something the player should read.
+Objectives: short instructions in the imperative, at most about 50 characters, no full stop ("Find Brynja's ring", "Return the ring to Brynja"). Show each one at the stage where the task starts and complete it at the stage where it's done; use the stage number as the objective number unless the quest already has one there.
+Use the names given. Only use what the quest data says; don't invent new events.`;
 
 const ENUM_FIELDS = new Set(['sex', 'kind', 'startsWith']);
 

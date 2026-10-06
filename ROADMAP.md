@@ -24,6 +24,9 @@ Tested means unit tests (`npm test`) plus the Playwright run of the browser demo
 | Quests: stages, objectives, aliases, fragments | ✅ | Alias fill types beyond unique actor, specific reference and location must be set in the properties panel. |
 | Dialogue: topics, responses, conditions, begin/end scripts, voice names | ✅ | Scenes (SCEN) and packages (PACK) are only partly supported (raw fields). The voice-file truncation rule matches community documentation and should be confirmed. |
 | Quest map (stages connected by what advances them) | ✅ | Connections are stored as ordinary dialogue, alias scripts and stage fragments, so the CK and xEdit see normal data. Stage changes made by hand-written scripts are only shown when they're a literal `SetStage(N)`. |
+| Gestures in dialogue and at quest stages | 🟡 | The list of common gestures uses vanilla idle names (IdleWave, IdlePointClose, IdleApplaud2, …) that should be checked in game. A gesture uses PlayIdle when the IDLE form exists in the load order, and Debug.SendAnimationEvent otherwise. A gesture at a stage plays only if the character is loaded nearby. |
+| Dialogue check | ✅ | The thresholds (80 characters for player lines, 150 for responses) are guidelines, not engine limits. "Still chosen after it moved the quest on" only counts a GetStage == N condition. |
+| Journal & objective writer | ✅ | Template drafts use the first step out of each stage; when a stage has several ways forward, edit the draft or ask Claude. |
 | Visual triggers and templates | 🟡 | Generates Papyrus with a marker line so it can be read back; hand edits to a generated script are overwritten the next time its triggers are saved in the visual editor. Compiles cleanly with the built-in checker, but in-game behaviour of every action hasn't been tried. |
 | Dialogue graph and screenplay import | ✅ | Speakers are matched by NPC name or Editor ID. |
 | Quest from writing (Claude plans, you check, it's built) | 🟡 | The planner and builder are tested with the demo data and a mocked API; real plans from Claude depend on the writing and should always be checked on the review screen. New characters are copied from a same-sex, same-race character with a voice (their routine is removed so they stay put) and get a random face; their FaceGen must be exported from the CK. New places are empty interiors. Items the player must pick up or read have to start in a place; items held by a character move only through dialogue. The load-order summary sent to Claude lists up to 300 characters and interiors, your plugin's first. |
@@ -61,7 +64,8 @@ Tested means unit tests (`npm test`) plus the Playwright run of the browser demo
 5. **SEQ:** which quests must be listed in the SEQ file.
 6. **Generated trigger scripts:** each trigger action in game (especially `movePlayerTo`, `lock` and `arrive` via OnCellAttach).
 7. **MO2 launch:** the `moshortcut://` argument form and the profile switch.
-8. **Linked doors:** that arrival points land on the correct side for vanilla door meshes, and that the generated light forms (radius, flicker) look right in game.
+8. **Gestures:** that the listed vanilla idle names play as expected from dialogue and stage scripts.
+9. **Linked doors:** that arrival points land on the correct side for vanilla door meshes, and that the generated light forms (radius, flicker) look right in game.
 
 ## Next steps
 
