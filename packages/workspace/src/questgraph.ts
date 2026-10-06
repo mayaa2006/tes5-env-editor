@@ -86,7 +86,7 @@ export class QuestGraphService {
 
   // ---------------------------------------------------------------- reading
 
-  private async fragmentCode(quest: FormKey, stage: number): Promise<string> {
+  async fragmentCode(quest: FormKey, stage: number): Promise<string> {
     const vm = (this.ws.view(quest)?.data as any)?.scripts as Vmad | undefined;
     const f = vm?.fragments?.kind === 'QUST' ? vm.fragments : undefined;
     const frag = f?.fragments.find((x) => x.stage === stage && x.logEntry === 0);
@@ -236,7 +236,7 @@ export class QuestGraphService {
   }
 
   /** Reuse an alias already filled with this target, or make one. */
-  private aliasFor(quest: FormKey, target: FormKey): number {
+  aliasFor(quest: FormKey, target: FormKey): number {
     const v = this.ws.view(target);
     if (!v) throw new WorkspaceError(`${target} not found`);
     const existing = this.quests.quest(quest).aliases.find((a) => a.kind === 'ref' && this.aliasTarget(a) === target);
@@ -248,7 +248,7 @@ export class QuestGraphService {
   }
 
   /** "Player arrives in a cell" needs something in the cell to listen: a marker. */
-  private markerIn(quest: FormKey, cell: FormKey): FormKey {
+  markerIn(quest: FormKey, cell: FormKey): FormKey {
     const world = new WorldService(this.ws);
     const qid = (this.ws.view(quest)?.editorId ?? 'Quest').replace(/[^A-Za-z0-9_]/g, '');
     const cid = (this.ws.view(cell)?.editorId ?? 'Cell').replace(/[^A-Za-z0-9_]/g, '');
@@ -341,11 +341,18 @@ export class QuestGraphService {
     );
   }
 
+  /** Add lines to a stage's script (keeping what's there). */
+  async appendStageCode(quest: FormKey, stage: number, lines: string[]): Promise<void> {
+    if (!lines.length) return;
+    const code = await this.fragmentCode(quest, stage);
+    await this.quests.setStageFragment(quest, stage, [code.trimEnd(), ...lines].filter(Boolean).join('\n'));
+  }
+
   /** Which objectives a stage shows/completes (rewrites those lines of the stage script). */
   async setStageObjectives(quest: FormKey, stage: number, shows: number[], completes: number[]): Promise<void> {
     await this.ws.transactionAsync(`Stage ${stage} objectives`, async () => {
       const code = await this.fragmentCode(quest, stage);
-    const kept = code.split('\n').filter((l) => !OBJ.test(l));
+      const kept = code.split('\n').filter((l) => !OBJ.test(l));
       const lines = [...shows.map((i) => `SetObjectiveDisplayed(${i})`), ...completes.map((i) => `SetObjectiveCompleted(${i})`), ...kept];
       await this.quests.setStageFragment(quest, stage, lines.join('\n').trim());
     });

@@ -11,11 +11,13 @@
     "./node": "./src/node.ts"
   },
   "dependencies": {
-    "@tes5/esp": "*",
-    "@tes5/cleaner": "*",
-    "@tes5/papyrus": "*",
+    "@anthropic-ai/sdk": "^0.131.0",
     "@tes5/assets": "*",
+    "@tes5/cleaner": "*",
+    "@tes5/esp": "*",
     "@tes5/navmesh": "*",
-    "fflate": "^0.8.3"
+    "@tes5/papyrus": "*",
+    "fflate": "^0.8.3",
+    "zod": "^4.6.5"
   }
 }

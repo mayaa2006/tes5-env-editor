@@ -317,7 +317,7 @@ export function Select<T extends string | number>({ value, options, onChange, di
 
 // ------------------------------------------------------------------ modal / toasts
 
-export function Modal({ title, children, footer, onClose, width }: { title: ReactNode; children: ReactNode; footer?: ReactNode; onClose: () => void; width?: number }) {
+export function Modal({ title, children, footer, onClose, width, className }: { title: ReactNode; children: ReactNode; footer?: ReactNode; onClose: () => void; width?: number; className?: string }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
@@ -325,7 +325,7 @@ export function Modal({ title, children, footer, onClose, width }: { title: Reac
   }, [onClose]);
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={width ? { width } : undefined} role="dialog">
+      <div className={`modal ${className ?? ''}`} style={width ? { width } : undefined} role="dialog">
         <div className="modal-header">{title}</div>
         <div className="modal-body">{children}</div>
         {footer && <div className="modal-footer">{footer}</div>}
