@@ -15,17 +15,40 @@ import { journalContextFromPlan, lintJournal } from './journal';
 /** Short identifiers the plan uses to refer to its own characters, places and items. */
 const Key = z.string().describe('Short identifier used to refer to this entry elsewhere in the plan, e.g. "brynja" or "cellar"');
 
+export const PlanLookSchema = z.object({
+  weight: z.number().nullable().describe('Build from 0 (thin) to 100 (heavy/muscular); null to leave or pick at random'),
+  height: z.number().nullable().describe('Height multiplier, 0.9 (short) to 1.1 (tall); null to leave'),
+  hair: z.string().nullable().describe('Hair style in a few words, e.g. "long braids", "short", "bald"'),
+  hairColor: z.string().nullable().describe('e.g. "grey", "black", "red", "blonde"'),
+  facialHair: z.string().nullable().describe('e.g. "full beard", "none"; null for women or to leave'),
+  eyes: z.string().nullable().describe('Eye colour, e.g. "blue"'),
+  scar: z.string().nullable().describe('A scar or war paint, e.g. "scar across left eye"; null for none'),
+});
+
 export const PlanCharacterSchema = z.object({
   key: Key,
   name: z.string().describe('Name shown in game'),
-  existing: z.string().nullable().describe('Editor ID or name of an existing character from the load order to use instead of creating one; null to create a new character'),
+  existing: z.string().nullable().describe('Editor ID or name of an existing character from the load order to use (and change, if the text asks) instead of creating one; null to create a new character'),
+  basedOn: z.string().nullable().describe('For a new character: an existing character to copy (Editor ID or name) when the text says they are like someone; null to pick one automatically'),
   sex: z.enum(['male', 'female']).nullable(),
   race: z.string().nullable().describe('Race name or Editor ID from the load order, e.g. "Nord"'),
   role: z.string().describe('What they do in the story, e.g. "innkeeper who gives the quest"'),
   appearance: z.string().describe('Short appearance notes, e.g. "middle-aged, grey braids, scar on cheek"'),
+  look: PlanLookSchema.nullable().describe('The appearance as settings; for existing characters only set what the text asks to change, otherwise null'),
   voice: z.string().nullable().describe('Voice type Editor ID or description, e.g. "FemaleCommoner"'),
   locationKey: z.string().nullable().describe('Key of the location where they stand; null if they already exist in the world'),
-  essential: z.boolean().describe('Can\'t be killed while the quest needs them'),
+  essential: z.boolean().nullable().describe("True: can't be killed. For existing characters null leaves it as it is"),
+  className: z.string().nullable().describe('Class name or Editor ID (e.g. "Warrior", "Citizen"); null to leave or keep the copied one'),
+  level: z.number().int().nullable(),
+  outfit: z
+    .object({
+      items: z.array(z.string()).describe('What they wear: item keys from this plan (new clothing) or names/Editor IDs of existing clothing and armour'),
+      saveAs: z.string().nullable().describe('Editor ID to save this set as a reusable outfit (e.g. "MyInnkeeperOutfit"); null to name it automatically'),
+    })
+    .nullable()
+    .describe('Their worn clothing (their default outfit); null to leave it'),
+  factions: z.array(z.object({ faction: z.string().describe('Faction name or Editor ID'), rank: z.number().int() })).describe('Factions to add them to'),
+  inventory: z.array(z.object({ item: z.string().describe('Item key from this plan, or the name/Editor ID of an existing item'), count: z.number().int() })).describe('Extra things they carry (not quest items, which use items.startsWith)'),
 });
 
 export const PlanLocationSchema = z.object({
@@ -38,8 +61,9 @@ export const PlanLocationSchema = z.object({
 export const PlanItemSchema = z.object({
   key: Key,
   name: z.string(),
-  kind: z.enum(['misc', 'book', 'key', 'gold', 'other']),
+  kind: z.enum(['misc', 'book', 'key', 'gold', 'clothing', 'armor', 'weapon', 'potion', 'other']),
   existing: z.string().nullable().describe('Editor ID or name of an existing item to use; null to create a new one'),
+  basedOn: z.string().nullable().describe('For a new item: an existing item it is a variant of (e.g. "Fine Clothes", "Iron Sword"), copied for its model; null to pick one'),
   value: z.number().nullable(),
   startsWith: z.enum(['location', 'character', 'player', 'nowhere']).describe('Where the item is when the quest begins'),
   startsAtKey: z.string().nullable().describe('Location or character key for startsWith location/character'),
@@ -108,6 +132,7 @@ export type QuestPlan = z.infer<typeof QuestPlanSchema>;
 export type PlanCharacter = z.infer<typeof PlanCharacterSchema>;
 export type PlanLocation = z.infer<typeof PlanLocationSchema>;
 export type PlanItem = z.infer<typeof PlanItemSchema>;
+export type PlanLook = z.infer<typeof PlanLookSchema>;
 export type PlanStep = z.infer<typeof PlanStepSchema>;
 
 export interface PlanIssue {
@@ -161,7 +186,13 @@ export function validatePlan(plan: QuestPlan): PlanIssue[] {
   const isKind = (key: string | null, ...kinds: string[]) => key !== null && kinds.includes(keys.get(key) ?? '');
   const stages = new Set((plan.stages ?? []).map((s) => s.index));
   if (stages.size !== (plan.stages ?? []).length) err('Two stages have the same number');
-  if (!(plan.stages ?? []).some((s) => s.completesQuest)) warn('No stage completes the quest');
+  if ((plan.stages ?? []).length && !(plan.stages ?? []).some((s) => s.completesQuest)) warn('No stage completes the quest');
+  for (const c of plan.characters ?? []) {
+    if (c.existing && c.basedOn) warn(`${c.name} already exists, so “based on ${c.basedOn}” is ignored`);
+    for (const i of c.inventory ?? []) if (i.count < 1) err(`${c.name} carries ${i.count} × ${i.item}`);
+    if (c.outfit && !c.outfit.items.length) err(`${c.name}'s outfit has nothing in it`);
+    if (c.outfit?.saveAs && !/^[A-Za-z][A-Za-z0-9_]*$/.test(c.outfit.saveAs)) err(`The outfit name “${c.outfit.saveAs}” must be an Editor ID (letters, digits and _)`);
+  }
   for (const c of plan.characters ?? []) if (c.locationKey && !isKind(c.locationKey, 'location')) err(`${c.name} stands in "${c.locationKey}", which isn't a location in the plan`);
   for (const i of plan.items ?? []) {
     if (i.startsWith === 'location' && !isKind(i.startsAtKey, 'location')) err(`${i.name} starts in "${i.startsAtKey}", which isn't a location in the plan`);

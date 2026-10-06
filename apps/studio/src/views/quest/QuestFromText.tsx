@@ -15,7 +15,7 @@ const MODES: { id: PlannerMode; title: string; text: string; placeholder: string
   {
     id: 'document',
     title: 'A design document',
-    text: 'Describe the quest in your own words: who, where, what the player does, how it ends. Any length, any format.',
+    text: 'Describe the quest in your own words: who, where, what the player does, how it ends. Or just describe characters to create or change (what they wear, carry, belong to, look like).',
     placeholder: 'Brynja, the innkeeper, has lost her ring. The player asks her for work and she asks them to find it…',
   },
   {
@@ -199,7 +199,7 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt }: { review: Re
     <div className="col" style={{ gap: 12 }} data-testid="plan-review">
       <div className="row" style={{ gap: 12, alignItems: 'flex-start' }}>
         <div className="grow col" style={{ gap: 4 }}>
-          <Field label="Quest name">
+          <Field label={draft.stages.length ? 'Quest name' : 'Name'}>
             <TextInput value={draft.title} onCommit={(v) => void edit((p) => void (p.title = v))} />
           </Field>
           <Field label="Editor ID">
@@ -258,11 +258,16 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt }: { review: Re
                 {list.map((r) => (
                   <li key={r.key} className="list-item" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 2 }} title={kind === 'character' ? draft.characters.find((c) => c.key === r.key)?.role : undefined}>
                     <span>
-                      {r.name} <span className={`chip ${r.error ? 'err' : r.existing ? 'dim' : 'accent'}`}>{r.error ? 'not found' : r.existing ? 'existing' : 'new'}</span>
+                      {r.name} <span className={`chip ${r.error ? 'err' : r.existing ? 'dim' : 'accent'}`}>{r.error ? 'not found' : r.existing ? (r.changes?.length ? 'existing, changed' : 'existing') : 'new'}</span>
                     </span>
                     <span className="dim small" style={{ whiteSpace: 'normal' }}>
                       {r.text}
                     </span>
+                    {r.changes?.map((c) => (
+                      <span key={c} className="small" style={{ whiteSpace: 'normal' }} data-testid="character-change">
+                        • {c}
+                      </span>
+                    ))}
                   </li>
                 ))}
               </ul>
@@ -271,6 +276,10 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt }: { review: Re
         })}
       </div>
 
+      {draft.stages.length === 0 ? (
+        <div className="card dim small">No quest: only the characters, places and items above are created or changed.</div>
+      ) : (
+        <>
       <div className="card" data-testid="plan-stages">
         <div className="card-title row" style={{ gap: 6 }}>
           Stages and journal
@@ -348,6 +357,8 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt }: { review: Re
         </div>
       </div>
 
+        </>
+      )}
       {draft.conversations.map((c, i) => (
         <div key={i} className="card">
           <div className="card-title">
@@ -383,7 +394,7 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt }: { review: Re
         <span className="grow" />
         {errors > 0 && <span className="small err">Fix {errors} problem(s) first</span>}
         <button className="btn primary" disabled={errors > 0} onClick={() => void build()} data-testid="build-quest" title="Creates everything as one step you can undo">
-          <Icon name="check" size={13} /> Build the quest
+          <Icon name="check" size={13} /> {draft.stages.length ? 'Build the quest' : 'Make the changes'}
         </button>
       </div>
     </div>
@@ -407,8 +418,14 @@ const STEP_VERBS: Record<QuestPlan['steps'][number]['kind'], string> = {
 function Result({ report, onClose }: { report: QuestBuildReport; onClose: () => void }) {
   const open = () => {
     const s = useStore.getState();
-    s.setTab('quest');
-    s.setQuest(report.quest);
+    if (report.quest) {
+      s.setTab('quest');
+      s.setQuest(report.quest);
+    } else {
+      const npc = report.changed[0]?.formKey ?? report.created.find((c) => c.kind === 'character')?.formKey;
+      s.setTab('npc');
+      if (npc) s.setNpc(npc);
+    }
     onClose();
   };
   return (
@@ -416,7 +433,16 @@ function Result({ report, onClose }: { report: QuestBuildReport; onClose: () => 
       <div className="row" style={{ gap: 8 }}>
         <Icon name="check" />
         <span>
-          <b>{report.editorId}</b> is built: {report.created.length} new record(s), {report.dialogue.responses} line(s) of dialogue. Undo takes it all back in one step.
+          {report.quest ? (
+            <>
+              <b>{report.editorId}</b> is built: {report.created.length} new record(s), {report.dialogue.responses} line(s) of dialogue.
+            </>
+          ) : (
+            <>
+              Done: {report.created.length} new record(s), {report.changed.length} character(s) changed.
+            </>
+          )}{' '}
+          Undo takes it all back in one step.
         </span>
       </div>
       {report.problems.length > 0 && (
@@ -453,6 +479,14 @@ function Result({ report, onClose }: { report: QuestBuildReport; onClose: () => 
                 <span>{c.label}</span>
               </li>
             ))}
+            {report.changed.map((c) => (
+              <li key={c.formKey} data-testid="changed-character">
+                <Icon name="npc" size={12} />
+                <span>
+                  Changed {c.label}: {c.changes.join('; ')}
+                </span>
+              </li>
+            ))}
             {report.reused.map((c) => (
               <li key={c.formKey}>
                 <Icon name="link" size={12} />
@@ -486,7 +520,7 @@ function Result({ report, onClose }: { report: QuestBuildReport; onClose: () => 
         </button>
         <span className="grow" />
         <button className="btn primary" onClick={open} data-testid="open-built-quest">
-          Open the quest
+          {report.quest ? 'Open the quest' : 'Open in Characters'}
         </button>
       </div>
     </div>
