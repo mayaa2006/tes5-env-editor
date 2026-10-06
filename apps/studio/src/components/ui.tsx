@@ -329,7 +329,6 @@ export function useSummaries(keys: (FormKey | null | undefined)[]): Record<strin
 
 /** Shows a FormKey as "EditorID 'Name'"; click to open it in the inspector. */
 export function FormLink({ value, summary }: { value: FormKey | null | undefined; summary?: Summary | null }) {
-  const select = useStore((s) => s.select);
   const sums = useSummaries(summary ? [] : [value]);
   if (!value) return <span className="faint">None</span>;
   const s = summary ?? sums[value];
@@ -339,7 +338,7 @@ export function FormLink({ value, summary }: { value: FormKey | null | undefined
       title={value}
       onClick={(e) => {
         e.preventDefault();
-        select(value);
+        useStore.getState().showProperties(value);
       }}
       style={{ color: 'var(--accent)', textDecoration: 'none' }}
     >
@@ -372,7 +371,7 @@ export function FormPicker({ value, sigs, onChange, placeholder, allowNone = tru
           {value ? (cur?.editorId ?? cur?.name ?? value) : <span className="faint">{placeholder ?? 'None'}</span>}
         </button>
         {value && (
-          <button className="btn icon ghost" title="Show" onClick={() => useStore.getState().select(value)}>
+          <button className="btn icon ghost" title="Show its properties" onClick={() => useStore.getState().showProperties(value)}>
             <Icon name="link" size={13} />
           </button>
         )}
@@ -413,6 +412,47 @@ export function FormPicker({ value, sigs, onChange, placeholder, allowNone = tru
         </div>
       )}
     </div>
+  );
+}
+
+/** A toolbar button that opens a small menu (closes on outside click, Esc, or after picking). */
+export function Menu({ label, title, active, children, testId }: { label: ReactNode; title?: string; active?: boolean; children: (close: () => void) => ReactNode; testId?: string }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    window.addEventListener('mousedown', close);
+    window.addEventListener('keydown', esc);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', esc);
+    };
+  }, [open]);
+  return (
+    <div className="menu" ref={ref}>
+      <button className={`btn small ${active || open ? 'active' : 'ghost'}`} aria-haspopup="menu" aria-expanded={open} title={title} onClick={() => setOpen(!open)} data-testid={testId}>
+        {label}
+        <Icon name="chevronDown" size={11} />
+      </button>
+      {open && (
+        <div className="menu-pop" role="menu">
+          {children(() => setOpen(false))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One entry in a Menu; `checked` shows a tick for on/off options, `hint` a shortcut. */
+export function MenuItem({ children, onClick, checked, hint, disabled, title }: { children: ReactNode; onClick: () => void; checked?: boolean; hint?: string; disabled?: boolean; title?: string }) {
+  return (
+    <button className="menu-item" role={checked === undefined ? 'menuitem' : 'menuitemcheckbox'} aria-checked={checked} disabled={disabled} onClick={onClick} title={title}>
+      <span className="menu-check">{checked ? <Icon name="check" size={12} /> : null}</span>
+      <span className="grow">{children}</span>
+      {hint && <span className="kbd">{hint}</span>}
+    </button>
   );
 }
 

@@ -17,6 +17,7 @@ Tested means unit tests (`npm test`) plus the Playwright run of the browser demo
 | Rendering fidelity | 🟡 | Diffuse textures and alpha are supported. Normal/specular maps, LOD, water, sky and weather are not. |
 | Exterior terrain (LAND) | 🟡 | Heights and vertex colours are shown. Texture layers and terrain editing are not. |
 | Navmesh generation, door linking, exterior stitching | 🟡 | Works on the demo. The NVNM grid cell ordering and triangle winding rules are inferred from xEdit and need in-game confirmation, which is why the grid divisor defaults to 1. Cover data isn't generated. |
+| World tools (paint, paths, arrays, drop, kit snapping, lighting pass, moods, clutter, room builder, linked doors) | 🟡 | They use the cell's real geometry, so they work on any mesh. Some parts rely on guesses that need checking against vanilla content:<br>• clutter themes and the lighting pass find items by Editor ID keywords;<br>• kit pieces are assumed to have their long side on the X axis (there's a turn setting if not);<br>• a door's arrival point goes on the side with floor and open space.<br>The mood presets are hand-picked colours, not copied from vanilla lighting templates. |
 | Navmesh manual editing | ✅ | Tab enters edit mode, with Blender-style select / box / all. You can draw triangles (click 3 points, snapping to existing vertices, continuing as a strip), move vertices with G and X/Y/Z axis locks, delete triangles, and set the preferred / water / no-large-creatures flags. Edge links inside the mesh and the search grid are rebuilt after each edit. |
 | Character creator | 🟡 | Head parts, sliders, colours and tints are edited correctly. The preview uses the race-agnostic chargen morph names, so check them against real head TRIs. **FaceGen export (Ctrl+F4) is not implemented**: the editor detects missing FaceGen and tells you to export it from the CK. |
 | Quests: stages, objectives, aliases, fragments | ✅ | Alias fill types beyond unique actor, specific reference and location must be set in the properties panel. |
@@ -58,6 +59,7 @@ Tested means unit tests (`npm test`) plus the Playwright run of the browser demo
 5. **SEQ:** which quests must be listed in the SEQ file.
 6. **Generated trigger scripts:** each trigger action in game (especially `movePlayerTo`, `lock` and `arrive` via OnCellAttach).
 7. **MO2 launch:** the `moshortcut://` argument form and the profile switch.
+8. **Linked doors:** that arrival points land on the correct side for vanilla door meshes, and that the generated light forms (radius, flicker) look right in game.
 
 ## Next steps
 

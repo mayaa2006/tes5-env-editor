@@ -20,6 +20,11 @@
   --y: #7ec346;
   --z: #4f8ff0;
   --radius: 5px;
+  /* Side panel widths; narrower on small windows so the work area stays usable. */
+  --left-wide: 300px;
+  --left-narrow: 260px;
+  --right: 340px;
+  --dock: 270px;
   --font: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
   --mono: 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
   color-scheme: dark;
@@ -260,6 +265,7 @@ textarea {
 .btn.primary {
   background: var(--accent-2);
   border-color: var(--accent);
+  color: #fff;
 }
 .btn.primary:hover:not(:disabled) {
   background: #3a80d6;
@@ -981,4 +987,217 @@ table.grid tr.diff td {
 .block-label {
   min-width: 150px;
   font-size: 12px;
+}
+
+/* ---- world tools (in the right dock) */
+.env-tools {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 8px 10px;
+}
+.env-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-bottom: 8px;
+}
+.env-body {
+  overflow: auto;
+  min-height: 0;
+  padding-right: 2px;
+}
+.env-h {
+  margin: 6px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim, #aab);
+}
+.room-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+  width: 100%;
+  aspect-ratio: 1;
+}
+.room-tile {
+  position: relative;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 2px;
+  padding: 0;
+  cursor: pointer;
+}
+.room-tile.on {
+  background: color-mix(in srgb, var(--accent, #4f9cf7) 45%, transparent);
+}
+.room-door {
+  position: absolute;
+  background: #f0a040;
+}
+.room-door.n,
+.room-door.s {
+  left: 25%;
+  right: 25%;
+  height: 4px;
+}
+.room-door.n {
+  top: -1px;
+}
+.room-door.s {
+  bottom: -1px;
+}
+.room-door.e,
+.room-door.w {
+  top: 25%;
+  bottom: 25%;
+  width: 4px;
+}
+.room-door.e {
+  right: -1px;
+}
+.room-door.w {
+  left: -1px;
+}
+
+/* ---- small windows */
+.nowrap {
+  white-space: nowrap;
+}
+@media (max-width: 1440px) {
+  :root {
+    --left-wide: 240px;
+    --left-narrow: 220px;
+    --right: 300px;
+    --dock: 240px;
+  }
+  .brand-name,
+  .hide-narrow {
+    display: none;
+  }
+  .workspace-tab {
+    padding: 5px 9px;
+  }
+}
+@media (max-width: 1180px) {
+  .workspace-tab {
+    padding: 5px 7px;
+  }
+}
+
+/* ---- dropdown menus */
+.menu {
+  position: relative;
+}
+.menu-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 60;
+  min-width: 220px;
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+}
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: none;
+  background: none;
+  color: var(--text);
+  border-radius: 4px;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.menu-item:hover:not(:disabled) {
+  background: var(--panel-3);
+}
+.menu-item:disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
+.menu-check {
+  width: 14px;
+  display: inline-flex;
+}
+.menu-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 2px;
+}
+.menu-label {
+  font-size: 11px;
+  color: var(--text-faint);
+  padding: 4px 8px 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+/* ---- right dock in the World view (outliner / world tools) */
+.dock {
+  width: var(--dock);
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+}
+.dock-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.dock-tab {
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  padding: 6px 8px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  font: inherit;
+}
+.dock-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+.dock .panel {
+  flex: 1;
+  min-height: 0;
+}
+.viewport-loading {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--text-dim);
+  background: rgba(0, 0, 0, 0.45);
+  padding: 8px 14px;
+  border-radius: 6px;
+  pointer-events: none;
+}
+.viewport-hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.hint-more {
+  pointer-events: auto;
+  padding: 1px 6px;
+}
+.btn.warn {
+  background: rgba(232, 182, 71, 0.15);
+  border-color: var(--warn);
+  color: var(--warn);
 }

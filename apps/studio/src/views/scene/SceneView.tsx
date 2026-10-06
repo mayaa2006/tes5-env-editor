@@ -6,8 +6,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormKey, Navmesh } from '@tes5/esp';
 import { addTriangle, buildGrid, deleteTriangles, setTriangleFlags } from '@tes5/navmesh';
 import type { PlacedRef } from '@tes5/workspace';
-import { Checkbox, Field, Icon, Modal, Select, TextInput, useQuery, useUniqueEditorId } from '../../components/ui';
+import { Checkbox, Field, Icon, Menu, MenuItem, Modal, Select, useQuery } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
+import { EnvTools, type ToolHandlers } from './EnvTools';
+import { NewCellDialog } from './NewCellDialog';
 import { Viewport, type Tool } from './viewport';
 
 const NAV_FLAGS = { preferred: 0x0040, water: 0x0200, noLarge: 0x0010 } as const;
@@ -31,16 +33,22 @@ export default function SceneView() {
   const [dropping, setDropping] = useState(false);
   const [hiddenTick, setHiddenTick] = useState(0);
   const [newCell, setNewCell] = useState(false);
-  const [outliner, setOutliner] = useState(true);
   const [ortho, setOrtho] = useState(false);
+  const [dock, setDock] = useState<'outliner' | 'tools' | null>('outliner');
+  const [generate, setGenerate] = useState(false);
+  const [help, setHelp] = useState(false);
+  const toolHandlers = useRef<ToolHandlers>({});
   const framedCell = useRef<string | undefined>(undefined);
 
   const { data: cells } = useQuery(() => client?.call('cells', {}), [client]);
   const info = cells?.find((c) => c.formKey === cell);
-  const { data: refs } = useQuery(() => (cell ? client?.call('references', cell) : undefined), [cell]);
+  // Tagged with their cell: while a new cell loads, the previous cell's list must not be framed as the new one.
+  const { data: refsFor } = useQuery(() => (cell ? client?.call('references', cell).then((list) => ({ cell, list })) : undefined), [cell]);
+  const refs = refsFor && refsFor.cell === cell ? refsFor.list : undefined;
   const { data: lighting } = useQuery(() => (cell ? client?.call('cellLighting', cell) : undefined), [cell]);
   const { data: terrain } = useQuery(() => (cell && info && !info.interior ? client?.call('terrain', cell) : undefined), [cell, info?.interior]);
   const { data: navmeshes } = useQuery(() => (cell ? client?.call('navmeshes', cell) : undefined), [cell]);
+  const { data: navStatus } = useQuery(() => (cell && session.activePlugin ? client?.call('navmeshStatus', cell) : undefined), [cell, session.activePlugin]);
 
   // Latest values for viewport callbacks (created once).
   const live = useRef({ cell, navEdit, navmeshes, session });
@@ -79,6 +87,10 @@ export default function SceneView() {
         ),
       tab: () => toggleNavEdit(),
       navDrawChanged: setNavDrawing,
+      brushStroke: (pts, erase) => toolHandlers.current.brushStroke?.(pts, erase),
+      brushRadius: (r) => toolHandlers.current.brushRadius?.(r),
+      pathDone: (pts) => toolHandlers.current.pathDone?.(pts),
+      toolCancelled: () => toolHandlers.current.cancelled?.(),
     });
     vpRef.current = vp;
     (window as unknown as { __viewport?: Viewport }).__viewport = vp;
@@ -88,6 +100,15 @@ export default function SceneView() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (e.key === '?' && !(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable))) setHelp(true);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const toggleNavEdit = () => {
     const { navEdit: cur, navmeshes: navs, session: s } = live.current;
@@ -147,6 +168,7 @@ export default function SceneView() {
   useEffect(() => vpRef.current?.setSelection(sceneSelection), [sceneSelection, refs]);
   useEffect(() => vpRef.current?.setTool(tool), [tool]);
   useEffect(() => vpRef.current?.setSnapping(snap), [snap]);
+  useEffect(() => vpRef.current?.setKitSnap(settings.kitSnap), [settings.kitSnap]);
   useEffect(() => vpRef.current?.setNavVisible(showNav), [showNav]);
   useEffect(() => {
     vpRef.current?.setOptions({
@@ -189,15 +211,18 @@ export default function SceneView() {
   if (!cell) return <NoCell onNew={() => setNewCell(true)} newCell={newCell} closeNew={() => setNewCell(false)} />;
 
   const toolBtn = (t: Tool, icon: string, label: string, key: string) => (
-    <button className={`btn small ${tool === t ? 'active' : 'ghost'}`} title={`${label} tool — or press ${key} for a quick ${label.toLowerCase()}`} onClick={() => setTool(t)} aria-pressed={tool === t}>
-      <Icon name={icon} size={13} /> {label}
+    <button className={`btn small ${tool === t ? 'active' : 'ghost'}`} title={`${label} tool: drag the handles in the view. Or press ${key} for a quick ${label.toLowerCase()} without switching tools.`} onClick={() => setTool(t)} aria-pressed={tool === t}>
+      <Icon name={icon} size={13} />
+      <span className="hide-narrow">{label}</span>
     </button>
   );
+  const openDock = (d: 'outliner' | 'tools') => setDock(dock === d ? null : d);
+  const loadingCell = !refs;
 
   return (
     <div className="col" style={{ flex: 1, minHeight: 0 }}>
       <div className="viewport-toolbar">
-        <strong className="ellipsis" style={{ maxWidth: 220 }} title={cell}>
+        <strong className="ellipsis" style={{ maxWidth: 180 }} title={`${info?.editorId ?? cell}${info?.name ? ` “${info.name}”` : ''} · ${cell}`}>
           {info?.editorId ?? cell}
         </strong>
         {info && !info.interior && info.grid && <span className="chip">{`${info.grid.x}, ${info.grid.y}`}</span>}
@@ -206,46 +231,85 @@ export default function SceneView() {
         {toolBtn('move', 'route', 'Move', 'G')}
         {toolBtn('rotate', 'redo', 'Rotate', 'R')}
         {toolBtn('scale', 'frame', 'Scale', 'S')}
-        <button className={`btn small ${snap ? 'active' : 'ghost'}`} title={`Snap (${settings.snapMove} units, ${settings.snapRotateDeg}°). Hold Ctrl while transforming to toggle.`} onClick={() => setSnap(!snap)}>
-          <Icon name="magnet" size={13} />
+        <span className="sep" />
+        <button className={`btn small ${snap ? 'active' : 'ghost'}`} aria-pressed={snap} title={`Grid snapping is ${snap ? 'on' : 'off'}: moves in steps of ${settings.snapMove} units, turns in ${settings.snapRotateDeg}° steps. Hold Ctrl while transforming to flip it. Step sizes are under Automations.`} onClick={() => setSnap(!snap)}>
+          <Icon name="magnet" size={13} /> Grid
+        </button>
+        <button
+          className={`btn small ${settings.kitSnap ? 'active' : 'ghost'}`}
+          title={`Kit snapping is ${settings.kitSnap ? 'on' : 'off'}: while moving (G), edges snap flush to nearby pieces such as walls and floors. Hold Alt while moving to skip it once.`}
+          aria-pressed={settings.kitSnap}
+          onClick={() => useStore.getState().updateSettings({ kitSnap: !settings.kitSnap })}
+          data-testid="kit-snap"
+        >
+          <Icon name="grid" size={13} /> Kit
         </button>
         <span className="sep" />
-        <button className="btn small ghost" title="Top view (Numpad 7)" onClick={() => (vpRef.current?.view('top'), setOrtho(true))}>
-          Top
-        </button>
-        <button className="btn small ghost" title="Front view (Numpad 1)" onClick={() => (vpRef.current?.view('front'), setOrtho(true))}>
-          Front
-        </button>
-        <button className="btn small ghost" title="Right view (Numpad 3)" onClick={() => (vpRef.current?.view('right'), setOrtho(true))}>
-          Right
-        </button>
-        <button className="btn small ghost" title="Perspective / orthographic (Numpad 5)" onClick={() => setOrtho(vpRef.current?.toggleOrtho() ?? false)}>
-          {ortho ? 'Ortho' : 'Persp'}
-        </button>
-        <button className="btn small ghost" title="Frame all (Home) — F frames the selection" onClick={() => vpRef.current?.frame()}>
-          <Icon name="frame" size={13} />
-        </button>
-        <span className="sep" />
-        <button className={`btn small ${settings.showMarkers ? 'active' : 'ghost'}`} title="Show editor markers" onClick={() => useStore.getState().updateSettings({ showMarkers: !settings.showMarkers })}>
-          Markers
-        </button>
-        <button className={`btn small ${cellLighting ? 'active' : 'ghost'}`} title="Preview the cell's own lighting and light sources" onClick={() => setCellLighting(!cellLighting)}>
-          <Icon name="light" size={13} /> Lighting
-        </button>
-        <span className="sep" />
-        <button className={`btn small ${showNav ? 'active' : 'ghost'}`} title="Show navmesh" onClick={() => setShowNav(!showNav)}>
-          <Icon name="navmesh" size={13} /> Navmesh
-        </button>
-        <GenerateNavmesh cell={cell} interior={info?.interior ?? true} />
-        <button className={`btn small ${navEdit ? 'active' : 'ghost'}`} title="Edit navmesh triangles (Tab)" onClick={toggleNavEdit}>
-          Edit
-        </button>
+        <Menu label={<><Icon name="eye" size={13} /> View</>} title="Camera angles and what's shown" testId="view-menu">
+          {(close) => (
+            <>
+              <div className="menu-label">Camera</div>
+              <MenuItem hint="Num 7" onClick={() => (vpRef.current?.view('top'), setOrtho(true), close())}>
+                Top
+              </MenuItem>
+              <MenuItem hint="Num 1" onClick={() => (vpRef.current?.view('front'), setOrtho(true), close())}>
+                Front
+              </MenuItem>
+              <MenuItem hint="Num 3" onClick={() => (vpRef.current?.view('right'), setOrtho(true), close())}>
+                Right
+              </MenuItem>
+              <MenuItem hint="Num 5" checked={ortho} onClick={() => (setOrtho(vpRef.current?.toggleOrtho() ?? false), close())}>
+                Orthographic (no perspective)
+              </MenuItem>
+              <MenuItem hint="Home" onClick={() => (vpRef.current?.frame(), close())}>
+                Frame everything
+              </MenuItem>
+              <MenuItem hint="F" disabled={!sceneSelection.length} onClick={() => (vpRef.current?.frame(sceneSelection), close())}>
+                Frame the selection
+              </MenuItem>
+              <div className="menu-sep" />
+              <div className="menu-label">Show</div>
+              <MenuItem checked={settings.showMarkers} onClick={() => useStore.getState().updateSettings({ showMarkers: !settings.showMarkers })}>
+                Editor markers
+              </MenuItem>
+              <MenuItem checked={cellLighting} onClick={() => setCellLighting(!cellLighting)} title="Preview the cell's own ambient light and light sources">
+                Cell lighting preview
+              </MenuItem>
+              <MenuItem checked={showNav} onClick={() => setShowNav(!showNav)}>
+                Navmesh
+              </MenuItem>
+              <div className="menu-sep" />
+              <MenuItem hint="?" onClick={() => (setHelp(true), close())}>
+                Keyboard and mouse shortcuts
+              </MenuItem>
+            </>
+          )}
+        </Menu>
+        <Menu label={<><Icon name="navmesh" size={13} /> Navmesh</>} title="Generate or edit this cell's navmesh" active={!!navEdit} testId="navmesh-menu">
+          {(close) => (
+            <>
+              <MenuItem onClick={() => (setGenerate(true), close())}>Generate navmesh…</MenuItem>
+              <MenuItem hint="Tab" checked={!!navEdit} onClick={() => (toggleNavEdit(), close())}>
+                Edit triangles by hand
+              </MenuItem>
+              <MenuItem checked={showNav} onClick={() => setShowNav(!showNav)}>
+                Show navmesh
+              </MenuItem>
+            </>
+          )}
+        </Menu>
+        {navStatus === 'stale' && (
+          <button className="btn small warn" title="Objects that shape the navmesh moved, appeared or disappeared since it was generated. Click to generate it again." onClick={() => setGenerate(true)} data-testid="nav-stale">
+            <Icon name="warn" size={12} /> Navmesh out of date
+          </button>
+        )}
         <span className="spacer" />
-        <button className="btn small ghost" title="Create a new interior cell" onClick={() => setNewCell(true)}>
-          <Icon name="plus" size={13} /> Cell
+        <button className={`btn small ${dock === 'tools' ? 'active' : 'ghost'}`} title="World tools: paint plants and clutter, lay paths, light candles, dress rooms, build rooms, link doors" onClick={() => openDock('tools')} aria-pressed={dock === 'tools'} data-testid="env-tools-toggle">
+          <Icon name="wand" size={13} /> Tools
         </button>
-        <button className={`btn small ${outliner ? 'active' : 'ghost'}`} title="Outliner" onClick={() => setOutliner(!outliner)}>
+        <button className={`btn small ${dock === 'outliner' ? 'active' : 'ghost'}`} title="Outliner: everything placed in this cell" onClick={() => openDock('outliner')} aria-pressed={dock === 'outliner'} data-testid="outliner-toggle">
           <Icon name="records" size={13} />
+          <span className="hide-narrow">Outliner</span>
         </button>
       </div>
       <div className="row" style={{ flex: 1, minHeight: 0, alignItems: 'stretch', gap: 0 }}>
@@ -269,25 +333,50 @@ export default function SceneView() {
             </div>
             {status && <div className="modal-info">{status}</div>}
           </div>
+          {loadingCell && <div className="viewport-loading">Loading {info?.editorId ?? 'cell'}…</div>}
           <div className="viewport-overlay viewport-hint">
             {navEdit ? (
               <>
-                Click/drag select triangles · <span className="kbd">G</span> move · <span className="kbd">D</span> draw · <span className="kbd">X</span> delete · <span className="kbd">A</span> all · <span className="kbd">Tab</span> done
+                Click/drag to select triangles · <span className="kbd">G</span> move · <span className="kbd">D</span> draw · <span className="kbd">X</span> delete · <span className="kbd">Tab</span> done
               </>
             ) : (
               <>
-                <span className="kbd">G</span> move <span className="kbd">R</span> rotate <span className="kbd">S</span> scale (then <span className="kbd">X</span>
-                <span className="kbd">Y</span>
-                <span className="kbd">Z</span>, type a value) · <span className="kbd">Shift+D</span> duplicate · <span className="kbd">X</span> delete · <span className="kbd">MMB</span>/<span className="kbd">Alt+LMB</span> orbit ·{' '}
-                <span className="kbd">Shift</span>+ pan · <span className="kbd">RMB</span>+<span className="kbd">WASD</span> fly · <span className="kbd">F</span> frame
+                <span className="kbd">G</span> move · <span className="kbd">R</span> rotate · <span className="kbd">S</span> scale · <span className="kbd">MMB</span> orbit · <span className="kbd">Shift</span>+<span className="kbd">MMB</span> pan · <span className="kbd">F</span> frame
               </>
             )}
+            <button className="btn small ghost hint-more" onClick={() => setHelp(true)} title="All keyboard and mouse shortcuts (?)">
+              All shortcuts
+            </button>
           </div>
           {dropping && <div className="drop-hint">Drop to place it here</div>}
           {navEdit && <NavEditPanel count={navmeshes?.find((n) => n.formKey === navEdit)?.geometry.triangles.length ?? 0} selected={navSel} drawing={navDrawing} onDraw={() => vpRef.current?.setNavDraw(!vpRef.current.isNavDrawing)} onFlag={(flag, on) => void editNav((nav, sel) => setTriangleFlags(nav, sel, flag, on), 'Set navmesh flags')} onDelete={() => void editNav((nav, sel) => deleteTriangles(nav, sel), 'Delete navmesh triangles')} onDone={toggleNavEdit} />}
         </div>
-        {outliner && <Outliner refs={refs ?? []} hiddenTick={hiddenTick} viewport={vpRef} />}
+        {dock && (
+          <div className="dock" data-testid="dock">
+            <div className="dock-tabs" role="tablist">
+              <button role="tab" aria-selected={dock === 'outliner'} className={`dock-tab ${dock === 'outliner' ? 'active' : ''}`} onClick={() => setDock('outliner')}>
+                Outliner
+              </button>
+              <button role="tab" aria-selected={dock === 'tools'} className={`dock-tab ${dock === 'tools' ? 'active' : ''}`} onClick={() => setDock('tools')}>
+                World tools
+              </button>
+              <span className="spacer" />
+              <button className="btn icon ghost" title="Hide this panel" onClick={() => setDock(null)}>
+                <Icon name="close" size={12} />
+              </button>
+            </div>
+            {dock === 'outliner' ? (
+              <Outliner refs={refs ?? []} hiddenTick={hiddenTick} viewport={vpRef} />
+            ) : navEdit ? (
+              <div className="empty">Leave navmesh edit mode (Tab) to use the world tools.</div>
+            ) : (
+              <EnvTools cell={cell} interior={info?.interior ?? true} viewport={vpRef} handlers={toolHandlers} refs={refs ?? []} />
+            )}
+          </div>
+        )}
       </div>
+      {generate && <GenerateNavmeshDialog cell={cell} interior={info?.interior ?? true} onClose={() => setGenerate(false)} />}
+      {help && <ShortcutsHelp onClose={() => setHelp(false)} />}
       {newCell && <NewCellDialog onClose={() => setNewCell(false)} />}
     </div>
   );
@@ -306,49 +395,10 @@ function NoCell({ onNew, newCell, closeNew }: { onNew: () => void; newCell: bool
   );
 }
 
-function NewCellDialog({ onClose }: { onClose: () => void }) {
-  const [edid, setEdid] = useUniqueEditorId('MyNewInterior');
-  const [name, setName] = useState('');
-  return (
-    <Modal
-      title="New interior cell"
-      onClose={onClose}
-      footer={
-        <>
-          <button className="btn" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            className="btn primary"
-            onClick={async () => {
-              const key = await engine((c) => c.call('createInteriorCell', edid, name || undefined), { success: `Created ${edid}` });
-              if (key) {
-                useStore.getState().setCell(key);
-                onClose();
-              }
-            }}
-          >
-            Create
-          </button>
-        </>
-      }
-    >
-      <Field label="Editor ID">
-        <TextInput value={edid} onCommit={setEdid} autoFocus mono />
-      </Field>
-      <Field label="Name">
-        <TextInput value={name} onCommit={setName} placeholder="Shown in game when entering" />
-      </Field>
-      <p className="dim small">Lighting, ownership and the rest can be edited in the properties panel once it's created. Drag objects from the Objects or Assets tab to build it.</p>
-    </Modal>
-  );
-}
-
-function GenerateNavmesh({ cell, interior }: { cell: FormKey; interior: boolean }) {
-  const [open, setOpen] = useState(false);
+function GenerateNavmeshDialog({ cell, interior, onClose }: { cell: FormKey; interior: boolean; onClose: () => void }) {
   const [preset, setPreset] = useState<'auto' | 'interior' | 'exterior' | 'detailed'>('auto');
   const run = async () => {
-    setOpen(false);
+    onClose();
     const res = await engine((c) => c.call('generateNavmesh', cell, { preset: preset === 'auto' ? undefined : preset }), { busy: 'Generating navmesh…' });
     if (!res) return;
     const s = useStore.getState();
@@ -356,33 +406,76 @@ function GenerateNavmesh({ cell, interior }: { cell: FormKey; interior: boolean 
     for (const i of res.issues.slice(0, 4)) s.toast(i.severity === 'error' ? 'error' : 'warning', i.message);
   };
   return (
-    <div style={{ position: 'relative' }}>
-      <button className="btn small primary" title="Build a navmesh from the cell's geometry, link doors and neighbours" onClick={() => setOpen(!open)}>
-        <Icon name="wand" size={13} /> Generate
-      </button>
-      {open && (
-        <div className="card" style={{ position: 'absolute', top: 30, left: 0, zIndex: 40, width: 260 }}>
-          <Field label="Preset">
-            <Select
-              value={preset}
-              options={[
-                { value: 'auto', label: interior ? 'Automatic (interior)' : 'Automatic (exterior)' },
-                { value: 'interior', label: 'Interior' },
-                { value: 'exterior', label: 'Exterior' },
-                { value: 'detailed', label: 'Detailed (slower)' },
-              ]}
-              onChange={setPreset}
-            />
-          </Field>
-          <p className="dim small" style={{ margin: '6px 0' }}>
-            Replaces this plugin's navmesh in the cell. Doors are linked automatically.
-          </p>
-          <button className="btn primary small" onClick={run} data-testid="generate-navmesh">
-            Generate navmesh
+    <Modal
+      title="Generate navmesh"
+      onClose={onClose}
+      width={420}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>
+            Cancel
           </button>
-        </div>
-      )}
-    </div>
+          <button className="btn primary" onClick={run} data-testid="generate-navmesh">
+            <Icon name="wand" size={12} /> Generate
+          </button>
+        </>
+      }
+    >
+      <Field label="Preset">
+        <Select
+          value={preset}
+          options={[
+            { value: 'auto', label: interior ? 'Automatic (interior)' : 'Automatic (exterior)' },
+            { value: 'interior', label: 'Interior' },
+            { value: 'exterior', label: 'Exterior' },
+            { value: 'detailed', label: 'Detailed (slower)' },
+          ]}
+          onChange={setPreset}
+        />
+      </Field>
+      <p className="dim small">Builds the walkable area from everything placed in the cell (and the terrain outdoors), links doors and neighbouring cells, and replaces this plugin's navmesh here. Undo puts the old one back.</p>
+    </Modal>
+  );
+}
+
+const SHORTCUTS: [string, string][] = [
+  ['Click / Shift+click', 'Select / add to selection'],
+  ['B, or drag on empty space', 'Box select'],
+  ['A / Alt+A', 'Select all / none'],
+  ['G, R, S', 'Move, rotate, scale (then X/Y/Z to lock an axis, type a number, Enter to confirm, Esc or right-click to cancel)'],
+  ['Ctrl (while transforming)', 'Flip grid snapping'],
+  ['Alt (while moving)', 'Skip kit snapping'],
+  ['Shift+D', 'Duplicate and move'],
+  ['X / Delete', 'Delete (master objects are disabled instead, which is safe)'],
+  ['H / Shift+H / Alt+H', 'Hide selected / hide others / show all (view only)'],
+  ['F / Home', 'Frame selection / everything'],
+  ['Middle mouse, or Alt+left mouse', 'Orbit'],
+  ['Shift+middle mouse', 'Pan'],
+  ['Wheel', 'Zoom'],
+  ['Right mouse + W A S D Q E', 'Fly (wheel changes speed)'],
+  ['Numpad 1 / 3 / 7 / 5', 'Front / right / top view, perspective on/off (Ctrl for the opposite side)'],
+  ['Tab', 'Navmesh edit mode'],
+  ['Ctrl+Z / Ctrl+Shift+Z', 'Undo / redo'],
+  ['Ctrl+S', 'Save'],
+];
+
+function ShortcutsHelp({ onClose }: { onClose: () => void }) {
+  return (
+    <Modal title="3D view shortcuts" onClose={onClose} width={620} footer={<button className="btn primary" onClick={onClose}>Close</button>}>
+      <table className="grid">
+        <tbody>
+          {SHORTCUTS.map(([k, v]) => (
+            <tr key={k}>
+              <td className="nowrap">
+                <span className="kbd">{k}</span>
+              </td>
+              <td>{v}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="dim small">The controls follow Blender, so Blender habits work here.</p>
+    </Modal>
   );
 }
 
@@ -450,9 +543,9 @@ function Outliner({ refs, hiddenTick, viewport }: { refs: PlacedRef[]; hiddenTic
   const hidden = viewport.current?.hidden;
   void hiddenTick;
   return (
-    <div className="panel" style={{ width: 250, flex: 'none', borderLeft: '1px solid var(--border)', background: 'var(--panel)' }} data-testid="outliner">
+    <div className="panel" data-testid="outliner">
       <div className="panel-header">
-        <span className="grow">Outliner</span>
+        <span className="grow">In this cell</span>
         <span className="faint small">{list.length}</span>
       </div>
       <div className="searchbox col" style={{ gap: 4 }}>
@@ -471,7 +564,7 @@ function Outliner({ refs, hiddenTick, viewport }: { refs: PlacedRef[]; hiddenTic
               title={`${r.formKey}${r.base ? ` → ${r.base}` : ''} · from ${r.source}${r.disabled ? ' · initially disabled' : ''}`}
             >
               <span className="sig">{r.baseSig ?? r.sig}</span>
-              <span className="name">{r.editorId ?? r.baseEditorId ?? r.formKey}</span>
+              <span className="name grow">{r.editorId ?? r.baseEditorId ?? r.formKey}</span>
               {r.source === activePlugin && <span className="chip accent">mine</span>}
               <button
                 className="btn icon ghost"

@@ -86,7 +86,7 @@ export default function ScriptEditor() {
             <ul className="list scroll" style={{ flex: 1 }}>
               {(symbols ?? []).flatMap((s) => [s, ...(s.children ?? [])]).filter((s) => s.kind !== 'script').map((s, i) => (
                 <li key={i} className="list-item" onClick={() => setReveal(s.range.start.line + 1)} title={s.detail}>
-                  <span className="sig">{s.kind.slice(0, 4)}</span>
+                  <span className="sig" style={{ width: 'auto', minWidth: 40 }}>{s.kind === 'property' ? 'prop' : s.kind === 'function' ? 'func' : s.kind}</span>
                   <span className="name">{s.name}</span>
                 </li>
               ))}

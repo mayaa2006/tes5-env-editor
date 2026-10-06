@@ -13,3 +13,4 @@ export * from './triggers';
 export * from './questgraph';
 export * from './dialogue';
 export * from './testlaunch';
+export * from './environment';

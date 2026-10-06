@@ -17,6 +17,7 @@ import {
   ReactFlow,
   ReactFlowProvider,
   getBezierPath,
+  useNodesInitialized,
   useReactFlow,
   type Connection,
   type Edge,
@@ -154,6 +155,22 @@ function QuestMapInner({ quest, onOpenDialogue, onOpenStages }: { quest: FormKey
   const [showProblems, setShowProblems] = useState(false);
   const { onChanges, withSize } = useMeasured();
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const wrap = useRef<HTMLDivElement>(null);
+  const shownFor = useRef<FormKey | null>(null);
+  // When the whole quest doesn't fit at a readable zoom, start at its left end (where it begins) instead of the middle.
+  const measured = useNodesInitialized();
+  useEffect(() => {
+    if (!g || !measured || shownFor.current === quest) return;
+    shownFor.current = quest;
+    void (async () => {
+      await flow.fitView({ padding: 0.25, maxZoom: 1.1, minZoom: 0.55 });
+      const nodes = flow.getNodes();
+      if (!nodes.length || !wrap.current) return;
+      const b = flow.getNodesBounds(nodes);
+      const v = flow.getViewport();
+      if (b.width * v.zoom + 48 > wrap.current.clientWidth) await flow.setViewport({ x: 24 - b.x * v.zoom, y: v.y, zoom: v.zoom });
+    })();
+  }, [g, quest, flow, measured]);
 
   useEffect(() => {
     if (!g) return;
@@ -240,7 +257,7 @@ function QuestMapInner({ quest, onOpenDialogue, onOpenStages }: { quest: FormKey
             const next = autoLayout(g);
             setPositions(next);
             persist(next);
-            setTimeout(() => flow.fitView({ padding: 0.2 }), 50);
+            setTimeout(() => flow.fitView({ padding: 0.2, minZoom: 0.55 }), 50);
           }}
         >
           Tidy up
@@ -254,15 +271,13 @@ function QuestMapInner({ quest, onOpenDialogue, onOpenStages }: { quest: FormKey
         </button>
       </div>
       <div className="row" style={{ flex: 1, minHeight: 0, alignItems: 'stretch', gap: 0 }}>
-        <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
+        <div ref={wrap} style={{ flex: 1, minWidth: 0, position: 'relative' }}>
           <ReactFlow
             nodes={nodes}
             edges={edges}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
             colorMode="dark"
-            fitView
-            fitViewOptions={{ padding: 0.25, maxZoom: 1.1 }}
             minZoom={0.2}
             onConnect={onConnect}
             onConnectEnd={onConnectEnd}
@@ -287,7 +302,7 @@ function QuestMapInner({ quest, onOpenDialogue, onOpenStages }: { quest: FormKey
             proOptions={{ hideAttribution: true }}
           >
             <Background gap={24} />
-            <MiniMap pannable zoomable style={{ width: 160, height: 100, background: 'var(--panel)' }} maskColor="rgba(0,0,0,0.45)" nodeColor="#4f9cf7" />
+            {g.nodes.length > 6 && <MiniMap pannable zoomable style={{ width: 160, height: 100, background: 'var(--panel)' }} maskColor="rgba(0,0,0,0.45)" nodeColor="#4f9cf7" />}
             <Controls showInteractive={false} />
           </ReactFlow>
           {showProblems && (

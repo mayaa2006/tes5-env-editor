@@ -286,7 +286,7 @@ function HeadTab({ a, parts, commit }: { a: NpcAppearance; parts: HeadPartInfo[]
               <h3 className="grow" style={{ margin: 0 }}>
                 {label}
               </h3>
-              <span className="faint small">{options.length} options</span>
+              <span className="faint small">{options.length === 1 ? '1 option' : `${options.length} options`}</span>
             </div>
             <div className="chips" style={{ flexWrap: 'wrap' }}>
               {optional && type !== 'Face' && (
@@ -310,13 +310,15 @@ function HeadTab({ a, parts, commit }: { a: NpcAppearance; parts: HeadPartInfo[]
           </div>
         );
       })}
-      <Field label="Face presets" title="Nose / eyes / mouth preset indices (NAMA)">
-        <div className="row" style={{ gap: 3 }}>
-          {(['nose', 'eyes', 'mouth'] as const).map((k) => (
-            <DragNumber key={k} value={a.faceParts[k]} step={1} precision={0} min={-1} max={40} onCommit={(v) => commit({ faceParts: { ...a.faceParts, [k]: Math.round(v) } })} />
-          ))}
-        </div>
-      </Field>
+      <h4 style={{ margin: '10px 0 4px' }}>Feature presets</h4>
+      <p className="dim small" style={{ margin: '0 0 6px' }}>
+        Which of the race's preset nose, eye and mouth shapes to start from (−1 = none). The sliders on the Face tab adjust from there.
+      </p>
+      {(['nose', 'eyes', 'mouth'] as const).map((k) => (
+        <Field key={k} label={k === 'nose' ? 'Nose shape' : k === 'eyes' ? 'Eye shape' : 'Mouth shape'}>
+          <DragNumber value={a.faceParts[k]} step={1} precision={0} min={-1} max={40} onCommit={(v) => commit({ faceParts: { ...a.faceParts, [k]: Math.round(v) } })} />
+        </Field>
+      ))}
     </div>
   );
 }

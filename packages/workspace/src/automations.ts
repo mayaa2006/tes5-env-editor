@@ -178,7 +178,8 @@ export interface NavmeshGenerationResult {
   usedRecast: boolean;
 }
 
-function rotationMatrix(r: { x: number; y: number; z: number }): number[] {
+/** Row-major 3×3 matrix taking a reference's local axes to world axes. */
+export function rotationMatrix(r: { x: number; y: number; z: number }): number[] {
   // Skyrim applies rotations in Z-Y-X order (extrinsic X, then Y, then Z), angles in radians.
   const cx = Math.cos(r.x);
   const sx = Math.sin(r.x);
@@ -198,10 +199,12 @@ function rotationMatrix(r: { x: number; y: number; z: number }): number[] {
   return mul(mul(Rz, Ry), Rx);
 }
 
-/** World-space triangles of everything placed in a cell (render geometry). */
-export async function cellGeometry(ws: Workspace, refs: PlacedRef[]): Promise<TriangleMesh> {
+/**
+ * World-space triangles of everything placed in a cell (render geometry).
+ * `owners`, if given, receives the reference each triangle belongs to.
+ */
+export async function cellGeometry(ws: Workspace, refs: PlacedRef[], owners?: (FormKey | null)[], cache = new Map<string, ReturnType<typeof flattenMeshes>>()): Promise<TriangleMesh> {
   const out: TriangleMesh = { vertices: [], triangles: [] };
-  const cache = new Map<string, ReturnType<typeof flattenMeshes>>();
   for (const ref of refs) {
     if (!ref.model || ref.disabled || ref.deleted || ref.marker) continue;
     if (ref.baseSig && !['STAT', 'MSTT', 'FURN', 'CONT', 'ACTI', 'DOOR', 'TREE', 'SCOL'].includes(ref.baseSig)) continue;
@@ -234,6 +237,7 @@ export async function cellGeometry(ws: Workspace, refs: PlacedRef[]): Promise<Tr
         );
       }
       for (let i = 0; i < mesh.indices.length; i++) out.triangles.push(base + mesh.indices[i]!);
+      if (owners) for (let i = 0; i < mesh.indices.length; i += 3) owners.push(ref.formKey);
     }
   }
   return out;

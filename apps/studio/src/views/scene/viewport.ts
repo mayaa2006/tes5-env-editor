@@ -41,6 +41,13 @@ export interface ViewportCallbacks {
   navDrawChanged?(on: boolean): void;
   /** Tab: toggle navmesh edit mode (Blender's edit-mode key). */
   tab?(): void;
+  /** Paint brush: a finished stroke (all dab centres); `erase` when Ctrl was held. */
+  brushStroke?(points: { x: number; y: number; z: number }[], erase: boolean): void;
+  brushRadius?(radius: number): void;
+  /** Path drawing finished (Enter, double-click or right-click). */
+  pathDone?(points: { x: number; y: number; z: number }[]): void;
+  /** A brush, path or point-pick mode was left with Esc. */
+  toolCancelled?(): void;
 }
 
 export interface TerrainData {
@@ -139,6 +146,15 @@ export class Viewport {
   private navDraw?: { points: THREE.Vector3[] };
   private navMove?: { verts: number[]; start: THREE.Vector3[]; pivot: THREE.Vector3; mouse0: THREE.Vector2; axis: Axis | null; plane: boolean; typed: string };
   private navMeshes: { key: FormKey; nav: Navmesh; mine: boolean }[] = [];
+  /** Snap moved objects' bounding boxes to their neighbours' (kit pieces). */
+  private kitSnap = false;
+  /** Alt held during a move: skip kit snapping this time. */
+  private altHeld = false;
+  private kitTargets?: { key: FormKey; box: THREE.Box3 }[];
+  private kitStart?: THREE.Box3;
+  private brush?: { radius: number; ring: THREE.Line; painting: boolean; erase: boolean; points: THREE.Vector3[] };
+  private pathDraw?: { points: THREE.Vector3[] };
+  private pointPick?: (p: { x: number; y: number; z: number } | null) => void;
 
   constructor(
     private readonly container: HTMLElement,
@@ -419,6 +435,167 @@ export class Viewport {
   }
 
   /** Toggle the navmesh draw tool (click three points to add a triangle; Esc stops). */
+  // ---------------------------------------------------------------- environment tools
+
+  setKitSnap(on: boolean): void {
+    this.kitSnap = on;
+  }
+
+  /** Paint mode: a circle follows the cursor; drag to paint, Ctrl+drag to erase, [ and ] resize. */
+  setBrush(opts: { radius: number } | null): void {
+    if (this.brush) this.helpers.remove(this.brush.ring);
+    this.clearToolHelpers('brushDab');
+    this.brush = undefined;
+    if (opts) {
+      const pts: THREE.Vector3[] = [];
+      for (let i = 0; i <= 64; i++) pts.push(new THREE.Vector3(Math.cos((i / 64) * Math.PI * 2), Math.sin((i / 64) * Math.PI * 2), 0));
+      const ring = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0x6ee7a8, depthTest: false }));
+      ring.renderOrder = 13;
+      ring.scale.setScalar(opts.radius);
+      ring.visible = false;
+      this.helpers.add(ring);
+      this.brush = { radius: opts.radius, ring, painting: false, erase: false, points: [] };
+      this.cb.status('Paint: drag to paint · Ctrl+drag to erase · [ ] brush size · Esc to stop');
+    } else this.cb.status(null);
+    this.invalidate();
+  }
+
+  setBrushRadius(r: number): void {
+    if (!this.brush) return;
+    this.brush.radius = r;
+    this.brush.ring.scale.setScalar(r);
+    this.invalidate();
+  }
+
+  get isPainting(): boolean {
+    return !!this.brush;
+  }
+
+  /** Path mode: click points; Enter, double-click or right-click to finish; Backspace undoes a point. */
+  setPathDraw(on: boolean): void {
+    this.pathDraw = on ? { points: [] } : undefined;
+    this.drawToolPoints();
+    this.cb.status(on ? 'Path: click points along the way · Enter / right-click to finish · Backspace removes the last point · Esc cancels' : null);
+  }
+
+  get isDrawingPath(): boolean {
+    return !!this.pathDraw;
+  }
+
+  /** The next click in the view returns a point (Esc returns null). */
+  pickPointOnce(message: string): Promise<{ x: number; y: number; z: number } | null> {
+    this.pointPick?.(null);
+    this.cb.status(`${message} · Esc to cancel`);
+    return new Promise((resolve) => {
+      this.pointPick = (p) => {
+        this.pointPick = undefined;
+        this.cb.status(null);
+        resolve(p);
+      };
+    });
+  }
+
+  private clearToolHelpers(tag: string): void {
+    for (const c of [...this.helpers.children]) if (c.userData[tag]) this.helpers.remove(c);
+  }
+
+  private drawToolPoints(): void {
+    this.clearToolHelpers('pathDraw');
+    const pts = this.pathDraw?.points ?? [];
+    for (const p of pts) {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(Math.max(4, this.dist / 250), 10, 8), new THREE.MeshBasicMaterial({ color: 0x6ee7a8, depthTest: false }));
+      m.position.copy(p);
+      m.renderOrder = 12;
+      m.userData.pathDraw = true;
+      this.helpers.add(m);
+    }
+    if (pts.length >= 2) {
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts.map((p) => p.clone().setZ(p.z + 4))), new THREE.LineBasicMaterial({ color: 0x6ee7a8, depthTest: false }));
+      line.userData.pathDraw = true;
+      line.renderOrder = 12;
+      this.helpers.add(line);
+    }
+    this.invalidate();
+  }
+
+  private brushDab(p: THREE.Vector3): void {
+    const b = this.brush!;
+    b.points.push(p.clone());
+    const dot = new THREE.Mesh(new THREE.CircleGeometry(b.radius, 32), new THREE.MeshBasicMaterial({ color: b.erase ? 0xff6b6b : 0x6ee7a8, transparent: true, opacity: 0.18, depthTest: false }));
+    dot.position.copy(p).setZ(p.z + 2);
+    dot.renderOrder = 11;
+    dot.userData.brushDab = true;
+    this.helpers.add(dot);
+    this.invalidate();
+  }
+
+  private endBrushStroke(): void {
+    const b = this.brush;
+    if (!b?.painting) return;
+    b.painting = false;
+    const pts = b.points.map((p) => ({ x: p.x, y: p.y, z: p.z }));
+    b.points = [];
+    this.clearToolHelpers('brushDab');
+    this.invalidate();
+    if (pts.length) this.cb.brushStroke?.(pts, b.erase);
+  }
+
+  private finishPath(): void {
+    const pts = this.pathDraw?.points.map((p) => ({ x: p.x, y: p.y, z: p.z })) ?? [];
+    this.setPathDraw(false);
+    if (pts.length >= 2) this.cb.pathDone?.(pts);
+    else this.cb.toolCancelled?.();
+  }
+
+  /** Bounding boxes of other objects near the selection, for kit snapping during a move. */
+  private prepareKitSnap(keys: FormKey[]): void {
+    this.kitTargets = undefined;
+    this.kitStart = undefined;
+    if (!this.kitSnap) return;
+    const start = new THREE.Box3();
+    for (const k of keys) start.expandByObject(this.entries.get(k)!.obj);
+    if (start.isEmpty()) return;
+    const center = start.getCenter(new THREE.Vector3());
+    const moving = new Set(keys);
+    const targets: { key: FormKey; box: THREE.Box3 }[] = [];
+    for (const e of this.entries.values()) {
+      if (moving.has(e.ref.formKey) || !e.obj.visible || e.ref.marker) continue;
+      if (e.obj.position.distanceTo(center) > 4000) continue;
+      const box = new THREE.Box3().setFromObject(e.obj);
+      if (!box.isEmpty()) targets.push({ key: e.ref.formKey, box });
+    }
+    this.kitStart = start;
+    this.kitTargets = targets;
+  }
+
+  /** Nudge a move so the moved box's faces line up with a neighbour's (touching or flush). */
+  private kitSnapDelta(delta: THREE.Vector3, axis: Axis | null, plane: boolean): { delta: THREE.Vector3; to?: FormKey } {
+    if (!this.kitStart || !this.kitTargets?.length) return { delta };
+    const moved = this.kitStart.clone().translate(delta);
+    const threshold = Math.max(4, this.dist * 0.012);
+    const axes: Axis[] = axis && !plane ? [axis] : (['x', 'y', 'z'] as Axis[]).filter((a) => !(axis && plane && a === axis));
+    const out = delta.clone();
+    let to: FormKey | undefined;
+    for (const a of axes) {
+      let best = threshold;
+      let adj = 0;
+      const others = (['x', 'y', 'z'] as Axis[]).filter((o) => o !== a);
+      for (const t of this.kitTargets) {
+        // Only neighbours that overlap (or nearly touch) on the other two axes.
+        if (others.some((o) => t.box.min[o] > moved.max[o] + threshold || t.box.max[o] < moved.min[o] - threshold)) continue;
+        for (const d of [t.box.min[a] - moved.max[a], t.box.max[a] - moved.min[a], t.box.min[a] - moved.min[a], t.box.max[a] - moved.max[a]]) {
+          if (Math.abs(d) < best) {
+            best = Math.abs(d);
+            adj = d;
+            to = t.key;
+          }
+        }
+      }
+      out[a] += adj;
+    }
+    return { delta: out, to };
+  }
+
   setNavDraw(on: boolean): void {
     this.navDraw = on && this.navEdit ? { points: [] } : undefined;
     this.drawNavPoints();
@@ -773,6 +950,30 @@ export class Viewport {
       e.preventDefault();
       return;
     }
+    if (this.pointPick && !e.altKey && e.button === 0) {
+      e.preventDefault();
+      const p = this.pickPoint(e.clientX, e.clientY);
+      this.pointPick({ x: p.x, y: p.y, z: p.z });
+      return;
+    }
+    if (this.pathDraw && !e.altKey && (e.button === 0 || e.button === 2)) {
+      e.preventDefault();
+      if (e.button === 2) return this.finishPath();
+      if (e.detail >= 2 && this.pathDraw.points.length >= 2) return this.finishPath();
+      this.pathDraw.points.push(this.pickPoint(e.clientX, e.clientY));
+      this.drawToolPoints();
+      return;
+    }
+    if (this.brush && !e.altKey && e.button === 0) {
+      e.preventDefault();
+      const b = this.brush;
+      b.painting = true;
+      b.erase = e.ctrlKey || e.metaKey;
+      b.points = [];
+      this.brushDab(this.pickPoint(e.clientX, e.clientY));
+      this.renderer.domElement.setPointerCapture(e.pointerId);
+      return;
+    }
     if (this.navDraw && !e.altKey && (e.button === 0 || e.button === 2)) {
       e.preventDefault();
       if (e.button === 2) return this.setNavDraw(false);
@@ -801,6 +1002,7 @@ export class Viewport {
     this.mouse.set(e.clientX, e.clientY);
     if (this.modal && !this.modal.gizmo) {
       this.ctrlHeld = e.ctrlKey;
+      this.altHeld = e.altKey;
       this.updateModal();
       return;
     }
@@ -808,6 +1010,19 @@ export class Viewport {
       this.ctrlHeld = e.ctrlKey;
       this.updateNavMove();
       return;
+    }
+    if (this.brush) {
+      const b = this.brush;
+      const p = this.pickPoint(e.clientX, e.clientY);
+      b.ring.position.copy(p).setZ(p.z + 3);
+      b.ring.visible = true;
+      (b.ring.material as THREE.LineBasicMaterial).color.set(e.ctrlKey || e.metaKey || b.erase ? 0xff6b6b : 0x6ee7a8);
+      if (b.painting) {
+        const last = b.points[b.points.length - 1];
+        if (!last || last.distanceTo(p) > b.radius * 0.6) this.brushDab(p);
+      }
+      this.invalidate();
+      if (!this.drag) return;
     }
     const d = this.drag;
     if (!d) return;
@@ -859,6 +1074,10 @@ export class Viewport {
   };
 
   private onPointerUp = (e: PointerEvent): void => {
+    if (this.brush?.painting && e.button === 0) {
+      this.endBrushStroke();
+      return;
+    }
     const d = this.drag;
     this.drag = undefined;
     if (!d) return;
@@ -940,6 +1159,10 @@ export class Viewport {
       this.updateGizmoSnap();
       if (this.modal) this.updateModal();
     }
+    if (e.key === 'Alt') {
+      this.altHeld = false;
+      if (this.modal) this.updateModal();
+    }
   };
 
   private onKeyDown = (e: KeyboardEvent): void => {
@@ -986,6 +1209,48 @@ export class Viewport {
       this.setNavDraw(false);
       e.preventDefault();
       return;
+    }
+    if (this.pointPick && e.key === 'Escape') {
+      e.preventDefault();
+      this.pointPick(null);
+      this.cb.toolCancelled?.();
+      return;
+    }
+    if (this.pathDraw) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        this.setPathDraw(false);
+        this.cb.toolCancelled?.();
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        this.finishPath();
+        return;
+      }
+      if (e.key === 'Backspace') {
+        e.preventDefault();
+        this.pathDraw.points.pop();
+        this.drawToolPoints();
+        return;
+      }
+    }
+    if (this.brush) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        this.setBrush(null);
+        this.cb.toolCancelled?.();
+        return;
+      }
+      if (e.key === '[' || e.key === ']') {
+        e.preventDefault();
+        const b = this.brush;
+        b.radius = THREE.MathUtils.clamp(Math.round(b.radius * (e.key === ']' ? 1.25 : 0.8)), 16, 8192);
+        b.ring.scale.setScalar(b.radius);
+        this.cb.brushRadius?.(b.radius);
+        this.invalidate();
+        return;
+      }
     }
     const k = e.key.toLowerCase();
     const ctrl = e.ctrlKey || e.metaKey;
@@ -1150,6 +1415,7 @@ export class Viewport {
       start.set(k, { pos: o.position.clone(), quat: o.quaternion.clone(), scale: o.scale.x });
     }
     this.modal = { kind, keys: list, start, pivot: this.pivotOf(list), mouse0: this.mouse.clone(), axis: null, plane: false, typed: '' };
+    if (kind === 'move') this.prepareKitSnap(list);
     this.updateModal();
   }
 
@@ -1166,6 +1432,10 @@ export class Viewport {
     if (k === 'enter' || e.code === 'NumpadEnter') return this.confirmModal();
     if (e.key === 'Control') {
       this.ctrlHeld = true;
+      return this.updateModal();
+    }
+    if (e.key === 'Alt') {
+      this.altHeld = true;
       return this.updateModal();
     }
     if (k === 'x' || k === 'y' || k === 'z') {
@@ -1218,13 +1488,16 @@ export class Viewport {
     let text = '';
     const axisName = m.axis ? `${m.plane ? 'plane ⟂ ' : 'along '}${m.axis.toUpperCase()}` : '';
     if (m.kind === 'move') {
-      const delta = this.moveDelta(m.pivot, m.mouse0, m.axis, m.plane, typed);
+      let delta = this.moveDelta(m.pivot, m.mouse0, m.axis, m.plane, typed);
+      let snappedTo: FormKey | undefined;
+      if (this.kitSnap && !this.altHeld && typed === undefined) ({ delta, to: snappedTo } = this.kitSnapDelta(delta, m.axis, m.plane));
       for (const [k, s] of m.start) {
         const o = this.entries.get(k)!.obj;
         o.position.copy(s.pos).add(delta);
         o.updateMatrixWorld(true);
       }
       text = `Move  X ${delta.x.toFixed(1)}  Y ${delta.y.toFixed(1)}  Z ${delta.z.toFixed(1)}`;
+      if (snappedTo) text += `   snapped to ${this.entries.get(snappedTo)?.ref.editorId ?? this.entries.get(snappedTo)?.ref.baseEditorId ?? 'neighbour'}`;
     } else if (m.kind === 'rotate') {
       const towardViewer = viewDir.clone().negate();
       const axis = m.axis ? AXES[m.axis].clone() : towardViewer;
@@ -1265,7 +1538,8 @@ export class Viewport {
       text = `Scale ${f.toFixed(3)}${m.axis ? ' (Skyrim scale is always uniform)' : ''}`;
     }
     if (m.typed) text += `   [${m.typed}]`;
-    this.cb.status(`${text}${axisName ? `   ${axisName}` : ''}${this.snapping ? '   snap' : ''}`);
+    const kitHint = m.kind === 'move' && this.kitSnap ? (this.altHeld ? '   kit snap off (Alt)' : text.includes('snapped to') ? '' : '   kit snap on (hold Alt to skip)') : '';
+    this.cb.status(`${text}${axisName ? `   ${axisName}` : ''}${this.snapping ? '   snap' : ''}${kitHint}`);
     this.drawAxisGuide(m);
     this.invalidate(true);
   }

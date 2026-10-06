@@ -186,6 +186,7 @@ function Viewport() {
         <Field label="Scale snap">
           <DragNumber value={settings.snapScale} step={0.01} precision={2} min={0.01} max={1} onCommit={(snapScale) => update({ snapScale })} />
         </Field>
+        <Checkbox checked={settings.kitSnap} onChange={(kitSnap) => update({ kitSnap })} label="Kit snapping: moved pieces snap flush to their neighbours (hold Alt to skip)" />
       </Section>
     </div>
   );

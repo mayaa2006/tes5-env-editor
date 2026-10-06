@@ -81,7 +81,8 @@ test('world editing: open a cell, select, move with G, drag & drop, navmesh', as
   await expect.poll(async () => (await viewportStats(page))?.objects ?? 0).toBe(before + 1);
 
   // Generate the navmesh.
-  await page.getByRole('button', { name: /Generate/ }).click();
+  await page.getByTestId('navmesh-menu').click();
+  await page.getByRole('menuitem', { name: 'Generate navmesh…' }).click();
   await page.getByTestId('generate-navmesh').click();
   await expect(page.locator('.toast').filter({ hasText: /Navmesh: \d+ triangles/ })).toBeVisible();
   await page.waitForTimeout(800);
