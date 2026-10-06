@@ -43,6 +43,10 @@ export function App() {
       const s = useStore.getState();
       if (e.type === 'changed' || e.type === 'saved' || e.type === 'activeChanged' || e.type === 'loaded') s.bump();
       if (e.type === 'warning') s.toast('warning', e.message);
+      if (e.type === 'engineRestarted') {
+        s.setSession({ open: false, dirty: false, canUndo: false, canRedo: false, loadOrder: [] });
+        s.toast('error', `The editing engine crashed and was restarted (${e.message}). Changes since your last save were lost; please reopen your game folder.`);
+      }
       if (e.type === 'changed') s.addLog('info', e.label);
     });
   }, [client]);

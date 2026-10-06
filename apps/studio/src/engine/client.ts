@@ -6,11 +6,14 @@
 import type { WorkspaceEvent } from '@tes5/workspace';
 import type { EngineHost, EngineMethod } from './host';
 
+/** Workspace events, plus the desktop host telling us the engine was restarted after a crash. */
+export type EngineEvent = WorkspaceEvent | { type: 'engineRestarted'; message: string };
+
 type Fn<M extends EngineMethod> = EngineHost[M] extends (...args: infer A) => infer R ? { args: A; result: Awaited<R> } : never;
 
 export interface HostBridge {
   invoke(method: string, args: unknown[]): Promise<{ ok: true; value: unknown } | { ok: false; error: string }>;
-  onEvent(cb: (e: WorkspaceEvent) => void): () => void;
+  onEvent(cb: (e: EngineEvent) => void): () => void;
   openFolder?(title: string): Promise<string | null>;
   openFile?(title: string, filters?: { name: string; extensions: string[] }[]): Promise<string | null>;
   showItemInFolder?(path: string): void;
@@ -41,7 +44,7 @@ export class EngineClient {
     return res.value as Fn<M>['result'];
   }
 
-  onEvent(cb: (e: WorkspaceEvent) => void): () => void {
+  onEvent(cb: (e: EngineEvent) => void): () => void {
     return this.bridge.onEvent(cb);
   }
 

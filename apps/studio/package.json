@@ -13,7 +13,8 @@
     "dev": "node scripts/build-electron.mjs && concurrently -k \"vite\" \"wait-on http://localhost:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
     "start": "electron .",
     "dist": "npm run build && electron-builder --win nsis portable",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:stress": "tsx test/stress/engine-stress.ts && tsx test/stress/papyrus-fuzz.ts && node --max-old-space-size=1024 --import tsx test/stress/file-fuzz.ts"
   },
   "devDependencies": {
     "@playwright/test": "1.56",

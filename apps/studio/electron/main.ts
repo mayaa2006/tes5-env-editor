@@ -26,10 +26,17 @@ function startWorker(): Worker {
       done({ ok: !!m.ok, value: m.value, error: m.error });
     }
   });
-  w.on('error', (e) => {
-    for (const [, done] of pending) done({ ok: false, error: `Engine crashed: ${e.message}` });
+  const crashed = (why: string) => {
+    if (worker !== w) return; // already replaced
+    for (const [, done] of pending) done({ ok: false, error: `Engine crashed: ${why}` });
     pending.clear();
     worker = startWorker();
+    // The new engine starts empty: tell the UI so it returns to the start screen.
+    win?.webContents.send('engine:event', { type: 'engineRestarted', message: why });
+  };
+  w.on('error', (e) => crashed(e.message));
+  w.on('exit', (code) => {
+    if (code !== 0) crashed(`the engine process exited unexpectedly (code ${code}), possibly out of memory`);
   });
   return w;
 }

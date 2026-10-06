@@ -18,7 +18,8 @@
     "build": "npm run build -w @tes5/studio",
     "check": "npm run typecheck && npm run test",
     "test:e2e": "npm run test:e2e -w @tes5/studio",
-    "bench": "node --expose-gc --import tsx packages/workspace/bench/large-load-order.ts"
+    "bench": "node --expose-gc --import tsx packages/workspace/bench/large-load-order.ts",
+    "test:stress": "npm run test:stress -w @tes5/studio"
   },
   "engines": {
     "node": ">=22"
