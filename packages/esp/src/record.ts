@@ -135,6 +135,8 @@ export class PluginRecord {
    */
   peek(sig: string): Uint8Array | undefined {
     if (this.subs || !this.stored) return this.get(sig)?.data;
+    // Navmeshes and landscape never have an Editor ID; they're most of a master's compressed data.
+    if (sig === 'EDID' && this.isCompressedStored && NO_EDITOR_ID.has(this.sig)) return undefined;
     if (this.isCompressedStored) return findSubrecord(decompressPayload(this.stored, this.storedFlags, this), sig);
     return findSubrecord(this.stored, sig);
   }
@@ -274,6 +276,8 @@ export class RecordParseError extends Error {
     super(record ? `${record.toString()}: ${message}` : message);
   }
 }
+
+const NO_EDITOR_ID = new Set(['NAVM', 'LAND']);
 
 export function decompressPayload(stored: Uint8Array, flags: number, rec?: PluginRecord): Uint8Array {
   if ((flags & RecordFlags.Compressed) === 0) return stored;

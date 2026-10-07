@@ -185,3 +185,41 @@ export const ATTACKS = rarray(
 );
 
 export { conditions, u16 };
+
+const SKILL_NAMES = ['OneHanded', 'TwoHanded', 'Marksman', 'Block', 'Smithing', 'HeavyArmor', 'LightArmor', 'Pickpocket', 'Lockpicking', 'Sneak', 'Alchemy', 'Speechcraft', 'Alteration', 'Conjuration', 'Destruction', 'Illusion', 'Restoration', 'Enchanting'];
+
+/** Actor value index → name (as the game's scripts call them). -1 is "none". */
+export const ACTOR_VALUES: Record<number, string> = (() => {
+  const names: string[] = [
+    'Aggression', 'Confidence', 'Energy', 'Morality', 'Mood', 'Assistance',
+    ...SKILL_NAMES,
+    'Health', 'Magicka', 'Stamina', 'HealRate', 'MagickaRate', 'StaminaRate', 'SpeedMult', 'InventoryWeight', 'CarryWeight',
+    'CritChance', 'MeleeDamage', 'UnarmedDamage', 'Mass', 'VoicePoints', 'VoiceRate', 'DamageResist', 'PoisonResist',
+    'FireResist', 'ElectricResist', 'FrostResist', 'MagicResist', 'DiseaseResist',
+    'Unknown46', 'Unknown47', 'Unknown48', 'Unknown49', 'Unknown50', 'Unknown51', 'Unknown52',
+    'Paralysis', 'Invisibility', 'NightEye', 'DetectLifeRange', 'WaterBreathing', 'WaterWalking', 'Unknown59', 'Fame', 'Infamy',
+    'JumpingBonus', 'WardPower', 'RightItemCharge', 'ArmorPerks', 'ShieldPerks', 'WardDeflection',
+    'Variable01', 'Variable02', 'Variable03', 'Variable04', 'Variable05', 'Variable06', 'Variable07', 'Variable08', 'Variable09', 'Variable10',
+    'BowSpeedBonus', 'FavorActive', 'FavorsPerDay', 'FavorsPerDayTimer', 'LeftItemCharge', 'AbsorbChance', 'Blindness',
+    'WeaponSpeedMult', 'ShoutRecoveryMult', 'BowStaggerBonus', 'Telekinesis', 'FavorPointsBonus', 'LastBribedIntimidated',
+    'LastFlattered', 'MovementNoiseMult', 'BypassVendorStolenCheck', 'BypassVendorKeywordCheck', 'WaitingForPlayer',
+    ...SKILL_NAMES.map((s) => `${s}Mod`),
+    ...SKILL_NAMES.map((s) => `${s}SkillAdvance`),
+    'LeftWeaponSpeedMult', 'DragonSouls', 'CombatHealthRegenMult',
+    ...SKILL_NAMES.map((s) => `${s}PowerMod`),
+    'DragonRend', 'AttackDamageMult', 'HealRateMult', 'MagickaRateMult', 'StaminaRateMult', 'WerewolfPerks', 'VampirePerks',
+    'GrabActorOffset', 'Grabbed', 'Unknown162', 'ReflectDamage',
+  ];
+  const out: Record<number, string> = { [-1]: 'None' };
+  names.forEach((n, i) => (out[i] = n));
+  return out;
+})();
+
+/** An actor value field (stored as a signed 32-bit index). */
+export const actorValue = (help?: string) => s32Enum(ACTOR_VALUES, help);
+function s32Enum(e: Record<number, string>, help?: string) {
+  return { t: 'int' as const, size: 's32' as const, enum: e, ...(help ? { help } : {}) };
+}
+
+export const CASTING_TYPES = { 0: 'Constant Effect', 1: 'Fire and Forget', 2: 'Concentration', 3: 'Scroll' };
+export const DELIVERY_TYPES = { 0: 'Self', 1: 'Touch', 2: 'Aimed', 3: 'Target Actor', 4: 'Target Location' };

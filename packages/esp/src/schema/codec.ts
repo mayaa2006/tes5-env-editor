@@ -457,7 +457,7 @@ function decodeMember(m: MemberDef, cur: Cursor, ctx: CodecContext, record: Reco
     }
     case 'rstruct': {
       const obj: Record<string, unknown> = {};
-      decodeMembers(m.members, cur, ctx, obj, record, true);
+      decodeMembers(m.members, cur, { ...ctx, group: obj }, obj, record, true);
       return obj;
     }
   }
@@ -482,6 +482,10 @@ function decodeCounted(m: CountedMember, cur: Cursor, ctx: CodecContext, record:
   if (declared !== undefined && items.length === 0) {
     // keep "count present but empty" for lossless round trips
     (items as unknown[] & { keepCount?: boolean }).keepCount = true;
+  }
+  if (declared === undefined && items.length > 0) {
+    // Some vanilla records list items without the count subrecord (e.g. quest alias inventories).
+    (items as unknown[] & { noCount?: boolean }).noCount = true;
   }
   return items;
 }
@@ -566,8 +570,12 @@ function encodeMember(m: MemberDef, v: unknown, out: Subrecord[], ctx: CodecCont
       return;
     }
     case 'counted': {
-      const items = (Array.isArray(v) ? v : []) as unknown[] & { keepCount?: boolean };
+      const items = (Array.isArray(v) ? v : []) as unknown[] & { keepCount?: boolean; noCount?: boolean };
       if (items.length === 0 && !items.keepCount) return;
+      if (items.noCount) {
+        encodeMember(m.inner, items, out, ctx, record);
+        return;
+      }
       const w = new BinaryWriter(4);
       if (m.countSize === 'u8') w.u8(items.length);
       else if (m.countSize === 'u16') w.u16(items.length);
@@ -584,7 +592,8 @@ function encodeMember(m: MemberDef, v: unknown, out: Subrecord[], ctx: CodecCont
     }
     case 'rstruct': {
       const obj = v as Record<string, unknown>;
-      for (const sub of m.members) encodeMember(sub, obj[sub.key], out, ctx, record);
+      const gctx = { ...ctx, group: obj };
+      for (const sub of m.members) encodeMember(sub, obj[sub.key], out, gctx, record);
       return;
     }
   }

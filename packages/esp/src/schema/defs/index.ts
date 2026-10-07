@@ -1,12 +1,14 @@
 import type { RecordDef } from '../types';
 import { CLAS, CLFM, FACT, HDPT, LVLN, NPC_, OTFT, RACE, VTYP } from './actors';
-import { ALCH, AMMO, ARMA, ARMO, BOOK, INGR, KEYM, MISC, SLGM, WEAP } from './items';
+import { ALCH, AMMO, APPA, ARMA, ARMO, BOOK, COBJ, INGR, KEYM, LVLI, MISC, SLGM, WEAP } from './items';
+import { ENCH, LVSP, MGEF, PERK, SCRL, SHOU, SPEL, WOOP } from './magic';
 import { DIAL, DLBR, DLVW, FLST, GLOB, GMST, IDLE, INFO, KYWD, LCTN, MESG, PACK, QUST, SCEN } from './quests';
 import { ACHR, ACTI, CELL, CONT, DOOR, FLOR, FURN, LAND, LIGH, MSTT, NAVM, REFR, SCOL, STAT, TREE, TXST, WRLD } from './world';
 
 export * from './actors';
 export * from './common';
 export * from './items';
+export * from './magic';
 export * from './quests';
 export * from './world';
 
@@ -14,7 +16,8 @@ const ALL: RecordDef[] = [
   NPC_, HDPT, VTYP, CLFM, OTFT, CLAS, FACT, LVLN, RACE,
   QUST, DIAL, INFO, DLBR, DLVW, MESG, GLOB, KYWD, FLST, GMST, PACK, SCEN, LCTN, IDLE,
   CELL, WRLD, REFR, ACHR, NAVM, LAND, STAT, MSTT, ACTI, DOOR, CONT, LIGH, FURN, FLOR, TREE, TXST, SCOL,
-  ARMO, WEAP, BOOK, MISC, KEYM, AMMO, ALCH, INGR, SLGM, ARMA,
+  ARMO, WEAP, BOOK, MISC, KEYM, AMMO, ALCH, INGR, SLGM, ARMA, APPA, LVLI, COBJ,
+  MGEF, SPEL, ENCH, SCRL, SHOU, WOOP, LVSP, PERK,
 ];
 
 const REGISTRY = new Map<string, RecordDef>(ALL.map((d) => [d.sig, d]));

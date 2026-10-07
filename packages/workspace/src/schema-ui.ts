@@ -19,7 +19,7 @@ export type UiValue =
 
 export type UiMember =
   | { kind: 'sub'; key: string; label: string; sig: string; value: UiValue; required?: boolean; help?: string }
-  | { kind: 'list'; key: string; label: string; of: UiMember; counted?: boolean; help?: string }
+  | { kind: 'list'; key: string; label: string; of: UiMember; counted?: boolean; help?: string; prominent?: boolean }
   | { kind: 'group'; key: string; label: string; members: UiMember[]; help?: string }
   | { kind: 'choice'; key: string; label: string; options: UiMember[] };
 
@@ -66,13 +66,13 @@ function uiMember(m: MemberDef): UiMember {
     case 'sub':
       return { kind: 'sub', key: m.key, label: m.label, sig: m.sig, value: uiValue(m.def), required: m.required, help: m.help };
     case 'rarray':
-      return { kind: 'list', key: m.key, label: m.label, of: uiMember(m.of), help: m.help };
+      return { kind: 'list', key: m.key, label: m.label, of: uiMember(m.of), help: m.help, prominent: m.prominent };
     case 'counted': {
       const inner = m.inner.m === 'rarray' ? uiMember(m.inner.of) : uiMember(m.inner);
       if (m.inner.m === 'sub' && m.inner.def.t === 'array') {
-        return { kind: 'list', key: m.key, label: m.label, of: { kind: 'sub', key: m.inner.key, label: m.inner.label, sig: m.inner.sig, value: uiValue(m.inner.def.of) }, counted: true, help: m.help };
+        return { kind: 'list', key: m.key, label: m.label, of: { kind: 'sub', key: m.inner.key, label: m.inner.label, sig: m.inner.sig, value: uiValue(m.inner.def.of) }, counted: true, help: m.help, prominent: m.prominent };
       }
-      return { kind: 'list', key: m.key, label: m.label, of: inner, counted: true, help: m.help };
+      return { kind: 'list', key: m.key, label: m.label, of: inner, counted: true, help: m.help, prominent: m.prominent };
     }
     case 'rstruct':
       return { kind: 'group', key: m.key, label: m.label, members: m.members.map(uiMember), help: m.help };

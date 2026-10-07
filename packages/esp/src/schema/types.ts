@@ -152,6 +152,8 @@ interface MemberBase {
   label: string;
   required?: boolean;
   help?: string;
+  /** Always shown in forms, even when empty (the record's main list, such as a spell's effects). */
+  prominent?: boolean;
 }
 
 /** Exactly one subrecord. */
@@ -234,6 +236,8 @@ export interface CodecContext {
   storeString?: (subSig: string, text: string, previousId: number | undefined) => number;
   /** Signature of the subrecord currently being processed. */
   subSig?: string;
+  /** The enclosing subrecord group (rstruct) decoded so far, for unions that depend on a sibling subrecord. */
+  group?: Record<string, unknown>;
 }
 
 export interface UnknownSub {

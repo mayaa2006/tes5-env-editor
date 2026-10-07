@@ -59,6 +59,9 @@ import {
   ScriptService,
   WorldService,
   Workspace,
+  CREATABLE_TYPES,
+  createBlankRecord,
+  isCreatable,
   allUiSchemas,
   compactFormIds,
   computeBounds,
@@ -306,7 +309,11 @@ export class EngineHost {
     const ws = this.requireWs();
     const counts = new Map<string, number>();
     for (const { record } of ws.winners()) counts.set(record.sig, (counts.get(record.sig) ?? 0) + 1);
-    return [...counts.entries()].map(([sig, count]) => ({ sig, name: recordTypeName(sig), count, editable: !!uiSchema(sig), category: uiSchema(sig)?.category ?? 'Other' })).sort((a, b) => a.name.localeCompare(b.name));
+    // Types you can create are listed even when the load order has none yet.
+    for (const sig of CREATABLE_TYPES) if (!counts.has(sig)) counts.set(sig, 0);
+    return [...counts.entries()]
+      .map(([sig, count]) => ({ sig, name: recordTypeName(sig), count, editable: !!uiSchema(sig), creatable: isCreatable(sig), category: uiSchema(sig)?.category ?? 'Other' }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   view(key: FormKey, plugin?: string) {
@@ -351,6 +358,11 @@ export class EngineHost {
 
   createRecord(sig: string, data: Record<string, unknown>, where: { cell?: FormKey; topic?: FormKey; worldspace?: FormKey; persistent?: boolean } = {}) {
     return this.requireWs().createRecord(sig, data, where);
+  }
+
+  /** A new record of the given type with sensible defaults (spell, perk, leveled list, recipe…). */
+  createBlankRecord(sig: string, editorId?: string) {
+    return createBlankRecord(this.requireWs(), sig, editorId);
   }
 
   duplicateRecord(key: FormKey, editorId?: string) {
