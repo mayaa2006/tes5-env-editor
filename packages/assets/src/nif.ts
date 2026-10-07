@@ -268,7 +268,7 @@ interface ParsedBlock {
   // skinning
   skin?: { dataRef: number; partitionRef: number; bones: number[] };
   partitionData?: Uint8Array;
-  skinData?: { bones: { rotation: number[]; translation: [number, number, number]; scale: number }[] };
+  skinData?: { bones: { rotation: number[]; translation: [number, number, number]; scale: number; vertices: number }[] };
   mesh?: Omit<NifMesh, 'material' | 'name' | 'blockIndex'>;
   // shader/texture/alpha
   material?: Partial<NifMaterial> & { textureSetRef?: number };
@@ -697,7 +697,7 @@ export function parseNif(bytes: Uint8Array): NifFile {
         r.pos += 52; // overall skin transform
         const n = r.count(r.u32(), 52);
         const hasWeights = r.u8() !== 0;
-        const bones: { rotation: number[]; translation: [number, number, number]; scale: number }[] = [];
+        const bones: { rotation: number[]; translation: [number, number, number]; scale: number; vertices: number }[] = [];
         for (let k = 0; k < n; k++) {
           const rotation = [r.f32(), r.f32(), r.f32(), r.f32(), r.f32(), r.f32(), r.f32(), r.f32(), r.f32()];
           const translation = r.vec3();
@@ -705,7 +705,7 @@ export function parseNif(bytes: Uint8Array): NifFile {
           r.pos += 16; // bounding sphere
           const nv = r.u16();
           if (hasWeights) r.pos += nv * 6;
-          bones.push({ rotation, translation, scale });
+          bones.push({ rotation, translation, scale, vertices: hasWeights ? nv : 0 });
         }
         blocks.push({ type, skinData: { bones } });
       } else if (type === 'NiAlphaProperty') {
@@ -816,16 +816,26 @@ export function parseNif(bytes: Uint8Array): NifFile {
     for (const c of b.children ?? []) if (c >= 0) walkWorld(c, m, seen);
   };
   for (const ri of roots) walkWorld(ri, identity, new Set());
+  /**
+   * Where a skinned shape sits in its rest pose: a bone's world transform times its skin offset. In a proper
+   * bind pose every bone gives the same answer, but FaceGen heads store some bones (NPC Spine2) in another
+   * pose, so the bone that moves the most vertices wins, then the head bone, then the first.
+   */
   const bindMatrixOf = (b: ParsedBlock): Mat4 | undefined => {
     const skin = b.skinRef !== undefined && b.skinRef >= 0 ? blocks[b.skinRef]?.skin : undefined;
     const data = skin ? blocks[skin.dataRef]?.skinData : undefined;
     if (!skin || !data) return undefined;
+    let best: { k: number; score: number } | undefined;
     for (let k = 0; k < skin.bones.length; k++) {
-      const bw = world.get(skin.bones[k]!);
-      const bd = data.bones[k];
-      if (bw && bd) return multiply(bw, nodeMatrix({ rotation: bd.rotation as NifNode['rotation'], translation: bd.translation, scale: bd.scale }));
+      if (!world.get(skin.bones[k]!) || !data.bones[k]) continue;
+      const head = /\[head\]/i.test(blocks[skin.bones[k]!]?.av?.name ?? '') ? 0.5 : 0;
+      const score = data.bones[k]!.vertices + head;
+      if (!best || score > best.score) best = { k, score };
     }
-    return undefined;
+    if (!best) return undefined;
+    const bw = world.get(skin.bones[best.k]!)!;
+    const bd = data.bones[best.k]!;
+    return multiply(bw, nodeMatrix({ rotation: bd.rotation as NifNode['rotation'], translation: bd.translation, scale: bd.scale }));
   };
 
   const rootNodes: NifNode[] = [];
