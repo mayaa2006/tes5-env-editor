@@ -139,31 +139,38 @@ export function applyMorphs(base: Float32Array, morphs: readonly { deltas: Float
 }
 
 /**
- * Chargen sliders (NPC_ NAM9 order) and the TRI morph names they drive.
- * Negative values use the first morph, positive the second. Names are matched
- * case-insensitively; unmatched sliders are simply ignored in the preview.
+ * Chargen sliders (NPC_ NAM9 order) and the TRI morph names they drive:
+ * negative values use the first morph, positive the second, at |value|.
+ * Names and directions were recovered by fitting the Creation Kit's own
+ * FaceGen for vanilla characters against vanilla chargen TRIs (exact to
+ * float precision), e.g. a negative "nose long/short" applies NoseShort.
  */
 export const CHARGEN_SLIDER_MORPHS: readonly (readonly [string, string])[] = [
-  ['NoseLong', 'NoseShort'],
+  ['NoseShort', 'NoseLong'],
   ['NoseDown', 'NoseUp'],
-  ['JawDown', 'JawUp'],
+  ['JawUp', 'JawDown'],
   ['JawNarrow', 'JawWide'],
   ['JawBack', 'JawForward'],
   ['CheeksDown', 'CheeksUp'],
-  ['CheeksBack', 'CheeksForward'],
-  ['EyesDown', 'EyesUp'],
-  ['EyesIn', 'EyesOut'],
+  ['CheeksIn', 'CheeksOut'],
+  ['EyesMoveDown', 'EyesMoveUp'],
+  ['EyesMoveIn', 'EyesMoveOut'],
   ['BrowDown', 'BrowUp'],
   ['BrowIn', 'BrowOut'],
   ['BrowBack', 'BrowForward'],
   ['LipMoveDown', 'LipMoveUp'],
   ['LipMoveIn', 'LipMoveOut'],
   ['ChinThin', 'ChinWide'],
-  ['ChinMoveDown', 'ChinMoveUp'],
-  ['UnderBite', 'OverBite'],
+  ['ChinMoveUp', 'ChinMoveDown'],
+  ['Overbite', 'Underbite'],
   ['EyesBack', 'EyesForward'],
   ['', 'VampireMorph'],
 ];
+
+/** Morphs the CK applies besides the sliders: the race's own head (named after the race), weight, and presets. */
+export const SKINNY_MORPH = 'SkinnyMorph';
+export const presetMorph = (kind: 'nose' | 'eyes' | 'mouth' | 'brows', n: number) => (n >= 0 ? `${{ nose: 'NoseType', eyes: 'EyesType', mouth: 'LipType', brows: 'BrowType' }[kind]}${n}` : '');
+export const isPresetMorph = (name: string) => /^(Nose|Eyes|Lip|Brow)Type\d+$/i.test(name);
 
 /** Resolve slider values to weighted morphs available in a chargen TRI. */
 export function chargenMorphWeights(tri: TriFile, sliders: readonly number[]): { deltas: Float32Array; weight: number }[] {

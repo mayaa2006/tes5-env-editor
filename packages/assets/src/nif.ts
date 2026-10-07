@@ -38,6 +38,12 @@ export interface NifMesh {
   indices: Uint16Array | Uint32Array;
   material: NifMaterial;
   skinned: boolean;
+  /**
+   * Skinned shapes only: skin space → file space in the bind pose (a bone's
+   * world transform times its skin transform — the same for every bone).
+   * Skinned vertices ignore the shape's own transform; use this instead.
+   */
+  bindMatrix?: Mat4;
 }
 
 export interface NifNode {
@@ -240,6 +246,10 @@ interface ParsedBlock {
   alphaRef?: number;
   dataRef?: number;
   skinRef?: number;
+  // skinning
+  skin?: { dataRef: number; partitionRef: number; bones: number[] };
+  partitionData?: Uint8Array;
+  skinData?: { bones: { rotation: number[]; translation: [number, number, number]; scale: number }[] };
   mesh?: Omit<NifMesh, 'material' | 'name' | 'blockIndex'>;
   // shader/texture/alpha
   material?: Partial<NifMaterial> & { textureSetRef?: number };
@@ -524,6 +534,88 @@ export function splitNif(bytes: Uint8Array): { version: number; userVersion: num
   return { version: h.version, userVersion: h.userVersion, bsVersion: h.bsVersion, strings: h.strings, blocks, roots };
 }
 
+/**
+ * Triangles (as indices into the shape's vertices) from a NiSkinPartition:
+ * skinned SE shapes keep them there instead of on the shape. On SE they index
+ * the shared vertex buffer directly; on LE each partition's own vertex list,
+ * mapped back through its vertex map (checked on vanilla SE heads).
+ */
+export function skinPartitionTriangles(data: Uint8Array, bsVersion: number): Uint16Array {
+  return readSkinPartition(data, bsVersion).triangles;
+}
+
+/**
+ * A NiSkinPartition's triangles and, on SE, its shared vertex buffer (UVs,
+ * normals, positions) — skinned SE head parts keep their UVs only here.
+ */
+export function readSkinPartition(data: Uint8Array, bsVersion: number): { triangles: Uint16Array; uvs?: Float32Array; normals?: Float32Array; positions?: Float32Array } {
+  const r = new Reader(data);
+  const out: number[] = [];
+  const numPartitions = r.count(r.u32(), 10);
+  let uvs: Float32Array | undefined;
+  let normals: Float32Array | undefined;
+  let positions: Float32Array | undefined;
+  if (bsVersion === 100) {
+    const dataSize = r.u32();
+    const vertexSize = r.u32();
+    const desc = r.u64();
+    if (dataSize > 0 && vertexSize > 0) {
+      const n = Math.floor(dataSize / vertexSize);
+      const attrs = Number((desc >> 44n) & 0xfffn);
+      const uvOff = Number((desc >> 8n) & 0xfn) * 4;
+      const nOff = Number((desc >> 16n) & 0xfn) * 4;
+      const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+      const base = r.pos;
+      if (attrs & 0x1) positions = new Float32Array(n * 3);
+      if (attrs & 0x2) uvs = new Float32Array(n * 2);
+      if (attrs & 0x8) normals = new Float32Array(n * 3);
+      for (let v = 0; v < n; v++) {
+        const o = base + v * vertexSize;
+        if (positions) for (let k = 0; k < 3; k++) positions[v * 3 + k] = dv.getFloat32(o + k * 4, true);
+        if (uvs) {
+          uvs[v * 2] = halfToFloat(dv.getUint16(o + uvOff, true));
+          uvs[v * 2 + 1] = halfToFloat(dv.getUint16(o + uvOff + 2, true));
+        }
+        if (normals) for (let k = 0; k < 3; k++) normals[v * 3 + k] = (data[o + nOff + k]! / 255) * 2 - 1;
+      }
+    }
+    r.pos += dataSize;
+  }
+  for (let p = 0; p < numPartitions; p++) {
+    const numVertices = r.u16();
+    const numTriangles = r.u16();
+    const numBones = r.u16();
+    const numStrips = r.u16();
+    const numWeights = r.u16();
+    r.pos += numBones * 2;
+    const vertexMap: number[] = [];
+    if (r.u8()) for (let i = 0; i < numVertices; i++) vertexMap.push(r.u16());
+    if (r.u8()) r.pos += numVertices * numWeights * 4;
+    const stripLengths: number[] = [];
+    for (let i = 0; i < numStrips; i++) stripLengths.push(r.u16());
+    // SE (global vertex buffer): triangles already index the shape's vertices; LE: the partition's, via its map.
+    const map = (i: number) => (bsVersion === 100 ? i : (vertexMap[i] ?? i));
+    if (r.u8()) {
+      if (numStrips) {
+        for (const len of stripLengths) {
+          const pts: number[] = [];
+          for (let i = 0; i < len; i++) pts.push(r.u16());
+          for (let i = 2; i < pts.length; i++) {
+            const [a, b, c] = [pts[i - 2]!, pts[i - 1]!, pts[i]!];
+            if (a === b || b === c || a === c) continue;
+            if (i % 2 === 0) out.push(map(a), map(b), map(c));
+            else out.push(map(a), map(c), map(b));
+          }
+        }
+      } else for (let i = 0; i < numTriangles * 3; i++) out.push(map(r.u16()));
+    }
+    if (r.u8()) r.pos += numVertices * numWeights;
+    if (bsVersion >= 83) r.pos += 2; // LOD level, global VB
+    if (bsVersion === 100) r.pos += 8 + numTriangles * 6; // vertex desc, triangles copy
+  }
+  return { triangles: new Uint16Array(out), uvs, normals, positions };
+}
+
 /** @internal Geometry of one shape or shape-data block (positions are the stored, local ones). */
 export function readGeometryBlock(type: string, data: Uint8Array, bsVersion: number, strings: string[]): Omit<NifMesh, 'material' | 'name' | 'blockIndex'> | undefined {
   const r = new Reader(data);
@@ -569,6 +661,31 @@ export function parseNif(bytes: Uint8Array): NifFile {
         const textures: string[] = [];
         for (let k = 0; k < n; k++) textures.push(r.sized());
         blocks.push({ type, textures });
+      } else if (type === 'NiSkinInstance' || type === 'BSDismemberSkinInstance') {
+        const dataRef = r.i32();
+        const partitionRef = r.i32();
+        r.i32(); // skeleton root
+        const n = r.count(r.u32(), 4);
+        const bones: number[] = [];
+        for (let k = 0; k < n; k++) bones.push(r.i32());
+        blocks.push({ type, skin: { dataRef, partitionRef, bones } });
+      } else if (type === 'NiSkinPartition') {
+        blocks.push({ type, partitionData: bytes.subarray(pos, pos + size) });
+      } else if (type === 'NiSkinData') {
+        r.pos += 52; // overall skin transform
+        const n = r.count(r.u32(), 52);
+        const hasWeights = r.u8() !== 0;
+        const bones: { rotation: number[]; translation: [number, number, number]; scale: number }[] = [];
+        for (let k = 0; k < n; k++) {
+          const rotation = [r.f32(), r.f32(), r.f32(), r.f32(), r.f32(), r.f32(), r.f32(), r.f32(), r.f32()];
+          const translation = r.vec3();
+          const scale = r.f32();
+          r.pos += 16; // bounding sphere
+          const nv = r.u16();
+          if (hasWeights) r.pos += nv * 6;
+          bones.push({ rotation, translation, scale });
+        }
+        blocks.push({ type, skinData: { bones } });
       } else if (type === 'NiAlphaProperty') {
         readObjectNET(r, h, false);
         const flags = r.u16();
@@ -633,9 +750,56 @@ export function parseNif(bytes: Uint8Array): NifFile {
     let geom = b.mesh;
     if (!geom && b.dataRef !== undefined && b.dataRef >= 0) geom = blocks[b.dataRef]?.mesh;
     if (geom) {
-      node.mesh = { ...geom, name: b.av.name, blockIndex: index, material: materialFor(b), skinned: geom.skinned || (b.skinRef ?? -1) >= 0 };
+      const skinned = geom.skinned || (b.skinRef ?? -1) >= 0;
+      // SE skinned shapes keep their triangles in the skin partition.
+      if (!geom.indices.length && skinned) {
+        const skin = blocks[b.skinRef ?? -1]?.skin;
+        const part = skin ? blocks[skin.partitionRef]?.partitionData : undefined;
+        if (part) {
+          try {
+            const sp = readSkinPartition(part, h.bsVersion);
+            const n = geom.positions.length / 3;
+            const fits = (a: Float32Array | undefined, w: number) => (a && a.length === n * w ? a : undefined);
+            geom = {
+              ...geom,
+              indices: sp.triangles,
+              // The partition's buffer is the real one; the shape's own may be a zero-filled stub.
+              uvs: fits(sp.uvs, 2) ?? geom.uvs,
+              normals: fits(sp.normals, 3) ?? geom.normals,
+              positions: n ? geom.positions : (sp.positions ?? geom.positions),
+            };
+          } catch (e) {
+            warnings.push(`Block ${index}: skin partition triangles: ${(e as Error).message}`);
+          }
+        }
+      }
+      node.mesh = { ...geom, name: b.av.name, blockIndex: index, material: materialFor(b), skinned, bindMatrix: skinned ? bindMatrixOf(b) : undefined };
     }
     return node;
+  };
+
+  // World transforms of every node, for placing skinned shapes in their bind pose.
+  const world = new Map<number, Mat4>();
+  const identity = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+  const walkWorld = (i: number, parent: Mat4, seen: Set<number>) => {
+    const b = blocks[i];
+    if (!b?.av || seen.has(i)) return;
+    seen.add(i);
+    const m = multiply(parent, nodeMatrix(b.av));
+    world.set(i, m);
+    for (const c of b.children ?? []) if (c >= 0) walkWorld(c, m, seen);
+  };
+  for (const ri of roots) walkWorld(ri, identity, new Set());
+  const bindMatrixOf = (b: ParsedBlock): Mat4 | undefined => {
+    const skin = b.skinRef !== undefined && b.skinRef >= 0 ? blocks[b.skinRef]?.skin : undefined;
+    const data = skin ? blocks[skin.dataRef]?.skinData : undefined;
+    if (!skin || !data) return undefined;
+    for (let k = 0; k < skin.bones.length; k++) {
+      const bw = world.get(skin.bones[k]!);
+      const bd = data.bones[k];
+      if (bw && bd) return multiply(bw, nodeMatrix({ rotation: bd.rotation as NifNode['rotation'], translation: bd.translation, scale: bd.scale }));
+    }
+    return undefined;
   };
 
   const rootNodes: NifNode[] = [];
@@ -675,7 +839,7 @@ export function flattenMeshes(nif: NifFile): { mesh: NifMesh; matrix: Mat4 }[] {
   const walk = (n: NifNode, parent: Mat4) => {
     if (n.flags & 1) return; // hidden
     const m = multiply(parent, nodeMatrix(n));
-    if (n.mesh) out.push({ mesh: n.mesh, matrix: m });
+    if (n.mesh) out.push({ mesh: n.mesh, matrix: n.mesh.bindMatrix ?? m });
     for (const c of n.children) walk(c, m);
   };
   const identity = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);

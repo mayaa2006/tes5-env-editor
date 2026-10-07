@@ -140,12 +140,12 @@ function headMesh(female: boolean): { mesh: MeshData; tri: Uint8Array } {
     JawBack: (_x, y, z) => [0, z < -6 && y > 0 ? -2 : 0, 0],
     CheeksUp: (x, y, z) => [0, 0, 1.5 * near(Math.abs(x), y, z, 7, 8, -1, 5)],
     CheeksDown: (x, y, z) => [0, 0, -1.5 * near(Math.abs(x), y, z, 7, 8, -1, 5)],
-    CheeksForward: (x, y, z) => [0, 1.5 * near(Math.abs(x), y, z, 7, 8, -1, 5), 0],
-    CheeksBack: (x, y, z) => [0, -1.5 * near(Math.abs(x), y, z, 7, 8, -1, 5), 0],
-    EyesUp: (x, y, z) => [0, 0, 1.2 * near(Math.abs(x), y, z, 4, 10, 3, 4)],
-    EyesDown: (x, y, z) => [0, 0, -1.2 * near(Math.abs(x), y, z, 4, 10, 3, 4)],
-    EyesIn: (x, y, z) => [-Math.sign(x) * near(Math.abs(x), y, z, 4, 10, 3, 4), 0, 0],
-    EyesOut: (x, y, z) => [Math.sign(x) * near(Math.abs(x), y, z, 4, 10, 3, 4), 0, 0],
+    CheeksOut: (x, y, z) => [0, 1.5 * near(Math.abs(x), y, z, 7, 8, -1, 5), 0],
+    CheeksIn: (x, y, z) => [0, -1.5 * near(Math.abs(x), y, z, 7, 8, -1, 5), 0],
+    EyesMoveUp: (x, y, z) => [0, 0, 1.2 * near(Math.abs(x), y, z, 4, 10, 3, 4)],
+    EyesMoveDown: (x, y, z) => [0, 0, -1.2 * near(Math.abs(x), y, z, 4, 10, 3, 4)],
+    EyesMoveIn: (x, y, z) => [-Math.sign(x) * near(Math.abs(x), y, z, 4, 10, 3, 4), 0, 0],
+    EyesMoveOut: (x, y, z) => [Math.sign(x) * near(Math.abs(x), y, z, 4, 10, 3, 4), 0, 0],
     EyesForward: (x, y, z) => [0, near(Math.abs(x), y, z, 4, 10, 3, 4), 0],
     EyesBack: (x, y, z) => [0, -near(Math.abs(x), y, z, 4, 10, 3, 4), 0],
     BrowUp: (x, y, z) => [0, 0, 1.5 * near(Math.abs(x), y, z, 4, 10, 6, 4)],
@@ -162,8 +162,8 @@ function headMesh(female: boolean): { mesh: MeshData; tri: Uint8Array } {
     ChinWide: (x, y, z) => [Math.sign(x) * 1.5 * near(x, y, z, 0, 9, -11, 5), 0, 0],
     ChinMoveUp: (x, y, z) => [0, 0, near(x, y, z, 0, 9, -11, 5)],
     ChinMoveDown: (x, y, z) => [0, 0, -1.5 * near(x, y, z, 0, 9, -11, 5)],
-    OverBite: (x, y, z) => [0, front(y) * near(x, y, z, 0, 11, -7, 4), 0],
-    UnderBite: (x, y, z) => [0, front(y) * near(x, y, z, 0, 10, -9, 4), 0],
+    Overbite: (x, y, z) => [0, front(y) * near(x, y, z, 0, 11, -7, 4), 0],
+    Underbite: (x, y, z) => [0, front(y) * near(x, y, z, 0, 10, -9, 4), 0],
     VampireMorph: (x, y, z) => [0, 0, -0.5 * near(x, y, z, 0, 0, 0, 12)],
     // Extra morphs, like the ones RaceMenu morph packs add (shown as "More shapes").
     NoseHooked: (x, y, z) => [0, 1.2 * near(x, y, z, 0, 12, 2, 3), -0.8 * near(x, y, z, 0, 12, -1, 3)],
@@ -320,6 +320,9 @@ function buildDemoMaster(): Plugin {
     const z = (t: string) => new TextEncoder().encode(`${t}\0`);
     for (const sex of ['MNAM', 'FNAM']) {
       r.subrecords.push({ sig: 'NAM0', data: new Uint8Array(0) }, { sig: sex, data: new Uint8Array(0) });
+      // Default head and eyes, like vanilla races: characters only list what differs.
+      const u32 = (v: number) => new Uint8Array(new Uint32Array([v]).buffer);
+      [sex === 'MNAM' ? headM : headF, eyes].forEach((part, i) => r.subrecords.push({ sig: 'INDX', data: u32(i) }, { sig: 'HEAD', data: u32(part) }));
       for (const m of DEMO_TINT_MASKS) r.subrecords.push({ sig: 'TINI', data: u16(m.index) }, { sig: 'TINT', data: z(`demo\\tintmasks\\${m.file}.dds`) }, { sig: 'TINP', data: u16(m.type) });
     }
     r.markModified();
@@ -356,7 +359,8 @@ function buildDemoMaster(): Plugin {
     });
   const smith = npc('DemoBlacksmith', 'Halvar the Smith', false, [headM, hairShort, eyes, brows, beard], hairBrown, { noseLongShort: -0.3, jawNarrowWide: 0.6, chinUnderbiteOverbite: 0.2 }, [0.85, 0.7, 0.6]);
   const keeper = npc('DemoInnkeeper', 'Brynja', true, [headF, hairLong, eyes, brows], hairBlack, { noseUpDown: 0.3, cheeksUpDown: 0.4, lipsInOut: 0.2 }, [0.9, 0.78, 0.7]);
-  npc('DemoGuard', 'Town Guard', false, [headM, hairShort, eyes, brows], hairBrown, {}, [0.8, 0.65, 0.55]);
+  // Like vanilla characters: no head or eyes listed (the race's defaults are used), and the CK's FLT_MAX "unset" vampire slider.
+  npc('DemoGuard', 'Town Guard', false, [hairShort, brows], hairBrown, { vampireMorph: 3.4028234663852886e38 }, [0.8, 0.65, 0.55]);
 
   const stat = (edid: string, file: string, b: [number, number, number], flags = 0) => rec(p, 'STAT', id(), { editorId: edid, bounds: bounds(...b), model: model(file), directionalMaterial: dirMat }, {}, flags);
   const floor = stat('DemoFloorWood', 'demo\\floor.nif', [128, 128, 0]);

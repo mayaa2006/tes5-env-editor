@@ -17,10 +17,10 @@
  * shaping) are kept in the editor's sidecar `TES5EnvEditor/<plugin>.faces.json`
  * and change with undo like everything else.
  */
-import { CHARGEN_SLIDER_MORPHS, applyTransform, decodeToRgba, invertTransform, mergeShapes, nifShapes, parseDds, parseTri, readNifDoc, setShapePositions, setShapeTexture, setShapeTint, shapeShaderType, writeNifDoc, writeRgbaDds, type NifDoc, type TriFile } from '@tes5/assets';
+import { CHARGEN_SLIDER_MORPHS, SKINNY_MORPH, applyTransform, decodeToRgba, invertTransform, mergeShapes, nifShapes, parseDds, parseTri, readNifDoc, setShapePositions, setShapeTexture, setShapeTint, shapeShaderType, writeNifDoc, writeRgbaDds, type NifDoc, type TriFile } from '@tes5/assets';
 import { parseFormKey, type FormKey } from '@tes5/esp';
 import { WorkspaceError, type Workspace } from './engine';
-import { FaceShaper, emptySculpt, sculptIsEmpty, slidersWithExtended, type FaceSculpt } from './faceshape';
+import { FaceShaper, emptySculpt, faceLookFor, sculptIsEmpty, type FaceSculpt, type ShaperTri } from './faceshape';
 import type { HeadPartInfo, NpcAppearance, NpcService } from './npc';
 import { joinPath } from './fs';
 
@@ -47,7 +47,7 @@ interface LoadedPart {
   doc: NifDoc;
   /** Main shape (the one the TRIs belong to) and every shape with its transform. */
   shapes: ReturnType<typeof nifShapes>;
-  tris: TriFile[];
+  tris: ShaperTri[];
 }
 
 const SIDECAR_VERSION = 1;
@@ -162,21 +162,9 @@ export class FaceGenService {
 
   // ---------------------------------------------------------------- inputs
 
-  /** Head parts the face is made of: the NPC's own, each with its extra parts (eyes sockets, mouth, teeth…). */
+  /** Head parts the face is made of: the race defaults, replaced by the NPC's own, with extra parts. */
   headPartsOf(npc: FormKey): HeadPartInfo[] {
-    const a = this.npcs.appearance(npc);
-    const out: HeadPartInfo[] = [];
-    const seen = new Set<string>();
-    const add = (k: FormKey) => {
-      if (seen.has(k)) return;
-      seen.add(k);
-      const info = this.npcs.headPart(k);
-      if (!info) return;
-      out.push(info);
-      for (const e of info.extraParts) add(e);
-    };
-    for (const k of a.headParts) add(k);
-    return out;
+    return this.npcs.faceParts(npc);
   }
 
   /** The race's tint masks for one sex (from the RACE head data). */
@@ -229,17 +217,20 @@ export class FaceGenService {
       warnings.push(`${info.editorId ?? info.formKey}: ${path} has no shapes`);
       return undefined;
     }
-    const tris: TriFile[] = [];
-    // Race morphs (0) and chargen morphs (2); expressions (1) stay live in game.
+    const tris: ShaperTri[] = [];
+    // Race morphs (0) and chargen morphs (2). Of the expression TRI (1) only SkinnyMorph is
+    // baked (body weight, as the CK does); expressions stay live in game.
     for (const t of info.tris) {
-      if (t.type === 1 || !t.file) continue;
+      if (!t.file) continue;
       const tp = meshPath(t.file);
       if (!this.ws.vfs.has(tp)) {
-        warnings.push(`${info.editorId ?? info.formKey}: ${tp} not found, its sliders won't apply`);
+        if (t.type !== 1) warnings.push(`${info.editorId ?? info.formKey}: ${tp} not found, its sliders won't apply`);
         continue;
       }
       try {
-        tris.push(parseTri(await this.ws.vfs.read(tp)));
+        const tri = parseTri(await this.ws.vfs.read(tp));
+        if (t.type === 1) tris.push({ ...tri, morphs: tri.morphs.filter((m) => m.name === SKINNY_MORPH), kind: 'expression' });
+        else tris.push({ ...tri, kind: t.type === 0 ? 'race' : 'chargen' });
       } catch (e) {
         warnings.push(`${tp}: ${(e as Error).message}`);
       }
@@ -251,15 +242,6 @@ export class FaceGenService {
   private morphShape(p: LoadedPart) {
     const n = p.tris[0]?.vertices.length;
     return (n !== undefined ? p.shapes.find((s) => s.positions.length === n) : undefined) ?? p.shapes[0]!;
-  }
-
-  /** A race morph whose name matches the race (e.g. "NordRace" or "Nord"), if any TRI has one. */
-  private raceMorphName(race: FormKey | null, parts: LoadedPart[]): string | undefined {
-    const edid = race ? this.ws.summary(race)?.editorId : undefined;
-    if (!edid) return undefined;
-    const want = [edid, edid.replace(/Race(Vampire)?$/i, ''), edid.replace(/Vampire$/i, '')].map((s) => s.toLowerCase());
-    for (const p of parts) for (const t of p.tris) for (const m of t.morphs) if (want.includes(m.name.toLowerCase()) && !CHARGEN_SLIDER_MORPHS.flat().includes(m.name)) return m.name;
-    return undefined;
   }
 
   // ---------------------------------------------------------------- baking
@@ -282,35 +264,59 @@ export class FaceGenService {
     const shaper = new FaceShaper(
       parts.map((p) => {
         const s = this.morphShape(p);
-        return { key: p.info.formKey, type: p.info.type, positions: applyTransform(s.transform, s.positions), tris: p.tris.filter((t) => t.vertices.length === s.positions.length) };
+        return { key: p.info.formKey, type: p.info.type, positions: applyTransform(s.placement, s.positions), tris: p.tris.filter((t) => t.vertices.length === s.positions.length) };
       }),
     );
-    const shaped = shaper.shape({ sliders: slidersWithExtended(a.morphs, sculpt), sculpt, raceMorph: this.raceMorphName(a.race, parts) });
+    const race = this.npcs.raceHeadData(a.race, a.female);
+    const shaped = shaper.shape(faceLookFor(a, race, sculpt));
     for (const p of parts) {
       const s = this.morphShape(p);
       const model = shaped.get(p.info.formKey);
-      if (model) setShapePositions(p.doc, s.block, applyTransform(invertTransform(s.transform), model));
+      if (model) setShapePositions(p.doc, s.block, applyTransform(invertTransform(s.placement), model));
     }
 
+    // The CK's order: the race's parts in reverse, then the character's own in reverse, each part's extra parts just before it.
+    const order = this.ckOrder(npc, parts);
+    const paths = this.npcs.faceGenPaths(npc);
+    const fileName = (paths.mesh.split('\\').pop() ?? '').toUpperCase();
     const merged = mergeShapes(
-      parts.map((p) => ({ doc: p.doc, shapes: p.shapes.map((s, i) => ({ block: s.block, transform: s.transform, name: i === 0 ? (p.info.editorId ?? s.name) : undefined })) })),
-      { rootName: 'BSFaceGenNiNodeSkinned', bsVersion: game, userVersion: parts[0]!.doc.userVersion },
+      order.map((p) => ({ doc: p.doc, shapes: p.shapes.map((s, i) => ({ block: s.block, transform: s.transform, name: i === 0 ? (p.info.editorId ?? s.name) : undefined })) })),
+      { rootName: fileName, bsVersion: game, userVersion: parts[0]!.doc.userVersion, layout: 'facegen' },
     );
 
-    // Colours and textures.
-    const paths = this.npcs.faceGenPaths(npc);
-    const hair = a.hairColor ? (this.ws.view(a.hairColor)?.data as any)?.color : undefined;
-    const faceTex = a.headTexture ? this.textureSet(a.headTexture) : undefined;
+    // Colours and textures, as the CK writes them (texture set paths as stored, without "textures\").
+    // No hair colour of their own: the race's default for their sex.
+    const hairKey = a.hairColor ?? race.hairColor;
+    const hair = hairKey ? (this.ws.view(hairKey)?.data as any)?.color : undefined;
+    // The head's textures in layers: the race's default face, then the head part's own set, then the character's.
+    const faceLayers = [race.faceTexture, parts.find((p) => p.info.type === 'Face')?.info.textureSet ?? null, a.headTexture].filter((k): k is FormKey => !!k);
+    const shapeBlocks = this.mergedShapeBlocks(merged);
     let k = 0;
-    for (const p of parts) {
+    for (const p of order) {
+      const layered = (keys: FormKey[]) => {
+        const sets = keys.map((x) => this.textureSet(x)).filter((x): x is string[] => !!x);
+        return sets.length ? sets.reduce((acc, t) => acc.map((v, i) => t[i] || v)) : undefined;
+      };
+      const partTex = p.info.type === 'Face' ? layered(faceLayers) : p.info.textureSet ? this.textureSet(p.info.textureSet) : undefined;
       for (let i = 0; i < p.shapes.length; i++, k++) {
-        const block = this.mergedShapeBlock(merged, k);
+        const block = shapeBlocks[k];
         if (block === undefined) continue;
-        if (hair && ['Hair', 'Facial Hair', 'Eyebrows'].includes(p.info.type) && shapeShaderType(merged, block) === 6) setShapeTint(merged, block, [(hair.r ?? 0) / 255, (hair.g ?? 0) / 255, (hair.b ?? 0) / 255]);
-        if (p.info.type === 'Face' && i === 0) {
-          if (faceTex) faceTex.forEach((t, slot) => t && setShapeTexture(merged, block, slot, t));
-          setShapeTexture(merged, block, 6, paths.tint);
+        const type = shapeShaderType(merged, block);
+        // Hair tint shaders get the hair colour at twice its value; skin tint ones (scars) the skin tone.
+        if (type === 6 && hair) setShapeTint(merged, block, [(hair.r ?? 0) / 127.5, (hair.g ?? 0) / 127.5, (hair.b ?? 0) / 127.5]);
+        if (type === 5) setShapeTint(merged, block, [a.skinTone.r, a.skinTone.g, a.skinTone.b]);
+        if (i === 0 && partTex) {
+          // The head takes its colour, normal, skin and detail maps from the face texture set; other parts
+          // only the maps that differ from the mesh's own (the CK's rules, checked against its FaceGen).
+          partTex.forEach((t, slot) => {
+            if (!t) return;
+            // Which slots the CK copies depends on the shader: the head (face tint) colour, normal, skin and
+            // detail; skin-tinted parts (scars) colour and normal; everything else just its colour.
+            const slots = type === 4 ? 3 : type === 5 ? 1 : 0;
+            if (slot <= slots) setShapeTexture(merged, block, slot, t);
+          });
         }
+        if (p.info.type === 'Face' && i === 0) setShapeTexture(merged, block, 6, `data\\${paths.tint}`);
       }
     }
 
@@ -318,23 +324,42 @@ export class FaceGenService {
     return { nif: writeNifDoc(merged), dds, warnings };
   }
 
-  /** The k-th shape in the merged file (shapes come first among the root's children, in part order). */
-  private mergedShapeBlock(doc: NifDoc, k: number): number | undefined {
-    const root = doc.blocks[0]!.data;
-    const dv = new DataView(root.buffer, root.byteOffset, root.byteLength);
+  /** The shapes of a merged FaceGen file, in order (the children of its BSFaceGenNiNodeSkinned node). */
+  private mergedShapeBlocks(doc: NifDoc): number[] {
+    const i = doc.blocks.length - 1;
+    const data = doc.blocks[i]!.data;
+    const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
     const n = dv.getUint32(72, true);
-    if (k >= n) return undefined;
-    const b = dv.getInt32(76 + k * 4, true);
-    return doc.blocks[b]?.type === 'NiNode' ? undefined : b;
+    return Array.from({ length: n }, (_, k) => dv.getInt32(76 + k * 4, true));
   }
 
-  /** A face TXST as NIF texture slots: diffuse, normal, subsurface, detail, …, specular (slots 4–6 left alone). */
+  /** Parts in the order the CK writes them. */
+  private ckOrder(npc: FormKey, parts: LoadedPart[]): LoadedPart[] {
+    const byKey = new Map(parts.map((p) => [p.info.formKey, p]));
+    const own = this.npcs.appearance(npc).headParts;
+    const out: LoadedPart[] = [];
+    const seen = new Set<string>();
+    const add = (k: FormKey) => {
+      const p = byKey.get(k);
+      if (!p || seen.has(k)) return;
+      seen.add(k);
+      for (const e of p.info.extraParts) add(e);
+      out.push(p);
+    };
+    const defaults = parts.filter((p) => !own.includes(p.info.formKey) && !parts.some((q) => q.info.extraParts.includes(p.info.formKey)));
+    for (const p of [...defaults].reverse()) add(p.info.formKey);
+    for (const k of [...own].reverse()) add(k);
+    for (const p of parts) add(p.info.formKey);
+    return out;
+  }
+
+  /** A TXST's textures in NIF slot order: TX00, TX01, TX03 (skin/glow), TX04 (detail/height), TX05 (environment), TX02 (environment mask), TX06, TX07. */
   private textureSet(key: FormKey): string[] | undefined {
     const d = this.ws.view(key)?.data as Record<string, any> | undefined;
     if (!d) return undefined;
     const t = d.textures ?? d;
-    const names = ['diffuse', 'normal', 'envMask', 'glow', '', '', '', 'backlight'];
-    const out = names.map((n) => (n && typeof t[n] === 'string' && t[n] ? texturePath(t[n]) : ''));
+    const names = ['diffuse', 'normal', 'glow', 'height', 'environment', 'envMask', 'multilayer', 'backlight'];
+    const out = names.map((n) => (typeof t[n] === 'string' && t[n] ? String(t[n]) : ''));
     return out.some(Boolean) ? out : undefined;
   }
 

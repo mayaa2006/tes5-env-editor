@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { blockLayout, mergeShapes, nifShapes, parseNif, readNifDoc, setShapePositions, setShapeTexture, setShapeTint, writeNif, writeNifDoc, IDENTITY_TRANSFORM, type NifDoc } from '../src';
+import { blockLayout, mergeShapes, readSkinPartition, nifShapes, parseNif, readNifDoc, setShapePositions, setShapeTexture, setShapeTint, writeNif, writeNifDoc, IDENTITY_TRANSFORM, type NifDoc } from '../src';
 
 /** A little pyramid with normals, so turning normals can be checked. */
 function shape(name: string, dz = 0) {
@@ -126,5 +126,40 @@ describe('NIF block editing', () => {
   it('only tints hair and skin-tint shaders', () => {
     const doc = readNifDoc(writeNif([shape('Hair')], { game: 'SkyrimSE' }));
     expect(setShapeTint(doc, nifShapes(doc)[0]!.block, [1, 0, 0])).toBe(false);
+  });
+
+  it('reads triangles and UVs from an SE skin partition (where skinned SE shapes keep them)', () => {
+    // One shared vertex buffer of 3 vertices (position, UV, normal) and one partition whose triangle
+    // indexes that buffer directly — even though its vertex map would remap it (SE ignores the map).
+    const vsize = 24;
+    const desc = BigInt(vsize / 4) | (4n << 8n) | (5n << 16n) | (BigInt(0x1 | 0x2 | 0x8) << 44n);
+    const verts = new Uint8Array(3 * vsize);
+    const vdv = new DataView(verts.buffer);
+    [[0, 0, 0], [1, 0, 0], [0, 1, 0]].forEach((p, i) => p.forEach((c, k) => vdv.setFloat32(i * vsize + k * 4, c, true)));
+    vdv.setUint16(1 * vsize + 16, 0x3c00, true); // u = 1 (half)
+    vdv.setUint16(2 * vsize + 18, 0x3c00, true); // v = 1
+    const part: number[] = [];
+    const u16 = (v: number) => part.push(v & 0xff, v >> 8);
+    u16(3); u16(1); u16(0); u16(0); u16(4); // vertices, triangles, bones, strips, weights per vertex
+    part.push(1); u16(2); u16(1); u16(0); // vertex map (reversed)
+    part.push(0); // no weights
+    part.push(1); u16(0); u16(1); u16(2); // triangle
+    part.push(0); // no bone indices
+    part.push(0, 1); // LOD level, global VB
+    for (let i = 0; i < 8; i++) part.push(Number((desc >> BigInt(i * 8)) & 0xffn));
+    u16(0); u16(1); u16(2); // triangles copy
+    const head = new Uint8Array(20);
+    const hdv = new DataView(head.buffer);
+    hdv.setUint32(0, 1, true);
+    hdv.setUint32(4, verts.byteLength, true);
+    hdv.setUint32(8, vsize, true);
+    hdv.setBigUint64(12, desc, true);
+    const bytes = new Uint8Array([...head, ...verts, ...part]);
+    const r = readSkinPartition(bytes, 100);
+    expect(Array.from(r.triangles)).toEqual([0, 1, 2]);
+    expect(Array.from(r.uvs!)).toEqual([0, 0, 1, 0, 0, 1]);
+    expect(Array.from(r.positions!.slice(3, 6))).toEqual([1, 0, 0]);
+    // LE partitions index their own vertices, mapped back through the vertex map.
+    expect(Array.from(readSkinPartition(new Uint8Array([1, 0, 0, 0, ...part.slice(0, part.length - 14), 0, 1]), 83).triangles)).toEqual([2, 1, 0]);
   });
 });

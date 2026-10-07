@@ -9,6 +9,8 @@
  *   tes5 bsa extract <archive> <outDir>
  *   tes5 bsa pack <folder> <out.bsa> [--le] [--no-compress]
  *   tes5 nif <file.nif>
+ *   tes5 face-compare <plugin> --data <dir> [--data <mod dir>…] [--npc <EditorID>…] [--limit N]
+ *   tes5 face-kit <plugin> --data <dir> [--data <mod dir>…] [--npc <EditorID>…] [--limit N] [--out kit.zip]
  */
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { readdirSync, statSync } from 'node:fs';
@@ -16,6 +18,8 @@ import { BsaArchive, flattenMeshes, nifBounds, parseNif, writeBsa } from '@tes5/
 import { MapMasterSource, cleanPlugin, crc32, summarizeReport, type CleanReport } from '@tes5/cleaner';
 import { parsePlugin, recordTypeName, type Plugin } from '@tes5/esp';
 import { NodeFileSystem } from '@tes5/workspace/node';
+import { FaceGenService, NpcService, Workspace, buildFaceKit, compareFaceGen, formatComparisons, kitSummary } from '@tes5/workspace';
+import { zipSync } from 'fflate';
 
 const fs = new NodeFileSystem();
 
@@ -28,8 +32,44 @@ function usage(msg?: string): never {
   tes5 bsa list <archive>
   tes5 bsa extract <archive> <outDir>
   tes5 bsa pack <folder> <out.bsa> [--le] [--no-compress]
-  tes5 nif <file.nif>`);
+  tes5 nif <file.nif>
+  tes5 face-compare <plugin> --data <Data dir> [--data <mod dir>...] [--npc <EditorID>...] [--limit N]
+      Bake each character's face and compare with the face files the Creation Kit made.
+  tes5 face-kit <plugin> --data <Data dir> [--data <mod dir>...] [--npc <EditorID>...] [--limit N] [--out face-kit.zip]
+      Zip just what comparing those faces needs (a few MB), to share instead of the whole game.`);
   process.exit(msg ? 2 : 0);
+}
+
+/** Every value of a repeatable option. */
+function options(args: string[], name: string): string[] {
+  const out: string[] = [];
+  for (let v = option(args, name); v !== undefined; v = option(args, name)) out.push(v);
+  return out;
+}
+
+/** Open a workspace over the game's Data folder (and mod folders) with a plugin and its masters active. */
+async function openFaceWorkspace(args: string[]) {
+  const file = args[0] ?? usage('missing plugin name');
+  const roots = options(args, '--data').map((d) => resolve(d));
+  if (!roots.length) roots.push(dirname(resolve(file)));
+  const name = basename(file);
+  const order: string[] = [];
+  const add = async (n: string) => {
+    if (order.some((o) => o.toLowerCase() === n.toLowerCase())) return;
+    const root = [...roots].reverse().find((r) => readdirSync(r).some((f) => f.toLowerCase() === n.toLowerCase()));
+    if (!root) throw new Error(`${n} not found in ${roots.join(', ')}`);
+    const real = readdirSync(root).find((f) => f.toLowerCase() === n.toLowerCase())!;
+    for (const m of (await loadPlugin(join(root, real))).masters) await add(m);
+    order.push(real);
+  };
+  await add(name);
+  const ws = new Workspace(fs, { game: 'SkyrimSE', roots, outputDir: join(roots[roots.length - 1]!, 'tes5-face-check'), loadOrder: order.map((n) => ({ name: n, active: true })) });
+  ws.on((e) => e.type === 'warning' && console.error(`warning: ${e.message}`));
+  console.error(`Loading ${order.join(', ')}…`);
+  await ws.scan();
+  await ws.load();
+  const npcs = new NpcService(ws);
+  return { ws, npcs, faces: new FaceGenService(ws, npcs), plugin: order[order.length - 1]! };
 }
 
 function flag(args: string[], name: string): boolean {
@@ -194,6 +234,30 @@ async function main(argv: string[]): Promise<void> {
       const b = nifBounds(nif);
       if (b) console.log(`  bounds: [${b.min.map((v) => v.toFixed(1)).join(', ')}] - [${b.max.map((v) => v.toFixed(1)).join(', ')}]`);
       for (const w of nif.warnings) console.log(`  warning: ${w}`);
+      return;
+    }
+    case 'face-compare': {
+      const npcList = options(args, '--npc');
+      const limit = Number(option(args, '--limit') ?? 5);
+      const { ws, npcs, faces, plugin } = await openFaceWorkspace(args);
+      const kit = await buildFaceKit(ws, npcs, faces, plugin, { npcs: npcList.length ? npcList : undefined, limit });
+      const results = [];
+      for (const npc of kit.npcs) results.push(await compareFaceGen(ws, npcs, faces, npc));
+      console.log(formatComparisons(results));
+      return;
+    }
+    case 'face-kit': {
+      const npcList = options(args, '--npc');
+      const limit = Number(option(args, '--limit') ?? 5);
+      const out = resolve(option(args, '--out') ?? 'face-kit.zip');
+      const { ws, npcs, faces, plugin } = await openFaceWorkspace(args);
+      const kit = await buildFaceKit(ws, npcs, faces, plugin, { npcs: npcList.length ? npcList : undefined, limit });
+      const zip: Record<string, Uint8Array> = {};
+      for (const [p, b] of kit.files) zip[p.replace(/\\/g, '/')] = b;
+      zip['face-kit.txt'] = new TextEncoder().encode(`${kitSummary(kit)}\n${kit.notes.join('\n')}\n`);
+      await fs.writeFile(out, zipSync(zip, { level: 6 }));
+      console.log(`${kitSummary(kit)}\nWrote ${out}`);
+      for (const n of kit.notes) console.log(`  ${n}`);
       return;
     }
     default:

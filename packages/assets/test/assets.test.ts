@@ -179,8 +179,10 @@ describe('TRI', () => {
     expect(tri.morphs.map((m) => m.name)).toEqual(['NoseShort', 'NoseLong']);
     expect(tri.morphs[0]!.deltas[2]).toBeCloseTo(2, 3);
     const sliders = new Array(19).fill(0);
-    sliders[0] = 0.5; // positive → NoseShort
+    sliders[0] = 0.5; // positive → NoseLong (as the CK does)
     const moved = applyMorphs(tri.vertices, chargenMorphWeights(tri, sliders));
-    expect(moved[2]).toBeCloseTo(1, 3);
+    expect(moved[2]).toBeCloseTo(-1, 3);
+    sliders[0] = -0.5; // negative → NoseShort
+    expect(applyMorphs(tri.vertices, chargenMorphWeights(tri, sliders))[2]).toBeCloseTo(1, 3);
   });
 });

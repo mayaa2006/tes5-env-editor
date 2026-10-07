@@ -554,6 +554,16 @@ export class EngineHost {
     return this.npcs!.faceGenProblems();
   }
 
+  /** The race's head data for one sex (default parts, face texture, hair colour, morph race, vampire). */
+  raceHeadData(race: FormKey | null, female: boolean) {
+    return this.npcs!.raceHeadData(race, female);
+  }
+
+  /** Every head part the face is made of (race defaults included), for the preview. */
+  npcFaceParts(npc: FormKey) {
+    return this.faces!.headPartsOf(npc);
+  }
+
   /** The look the record can't hold: extended sliders, extra morphs, region shaping. */
   faceSculpt(npc: FormKey) {
     return this.faces!.sculpt(npc);
@@ -596,6 +606,37 @@ export class EngineHost {
     const rgba = new Uint8Array(size * size * 4);
     for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) rgba.set(full.subarray(((y * step) * dds.width + x * step) * 4, ((y * step) * dds.width + x * step) * 4 + 4), (y * size + x) * 4);
     return { width: size, height: size, rgba };
+  }
+
+  /**
+   * The head's colour texture as the game shows it: the head part's diffuse
+   * times the face tint, doubled (the face shader brightens the deliberately
+   * dark head texture with the tint). For the 3D preview; 512² RGBA.
+   */
+  async previewFaceTexture(npc: FormKey, a: NpcAppearance) {
+    const head = this.faces!.headPartsOf(npc).find((p) => p.type === 'Face' && p.model);
+    if (!head?.model) return null;
+    const nif = parseNif(await this.requireWs().vfs.read(`meshes\\${head.model.replace(/^meshes[\\/]/i, '')}`));
+    const diffusePath = flattenMeshes(nif)[0]?.mesh.material.textures[0];
+    const path = diffusePath ? (/^textures\\/i.test(diffusePath) ? diffusePath : `textures\\${diffusePath}`) : undefined;
+    if (!path || !this.ws!.vfs.has(path)) return null;
+    const d = parseDds(await this.ws!.vfs.read(path));
+    const level = d.mipmaps.find((m) => m.width <= 512) ?? d.mipmaps[0]!;
+    const diffuse = decodeToRgba(level, d.format);
+    if (!diffuse) return null;
+    const t = parseDds(await this.faces!.composeTint(a));
+    const tint = decodeToRgba(t.mipmaps[0]!, t.format)!;
+    const w = level.width;
+    const h = level.height;
+    const rgba = new Uint8Array(w * h * 4);
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        const o = (y * w + x) * 4;
+        const to = (Math.floor((y * t.height) / h) * t.width + Math.floor((x * t.width) / w)) * 4;
+        for (let c = 0; c < 3; c++) rgba[o + c] = Math.min(255, Math.round((2 * diffuse[o + c]! * tint[to + c]!) / 255));
+        rgba[o + 3] = 255;
+      }
+    return { width: w, height: h, rgba };
   }
 
   // ---------------------------------------------------------------- quests

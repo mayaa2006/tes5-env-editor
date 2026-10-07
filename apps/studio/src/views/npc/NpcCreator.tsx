@@ -4,7 +4,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FACE_MORPHS, type FormKey } from '@tes5/esp';
-import { CONTROL_HELP, REGION_CONTROLS_FOR, REGION_LABELS, emptySculpt, slidersWithExtended, type FaceRegion, type FaceSculpt, type HeadPartInfo, type NpcAppearance, type RegionControl } from '@tes5/workspace';
+import { CONTROL_HELP, REGION_CONTROLS_FOR, REGION_LABELS, emptySculpt, faceLookFor, type FaceRegion, type FaceSculpt, type HeadPartInfo, type NpcAppearance, type RegionControl } from '@tes5/workspace';
 import { Checkbox, Field, FormPicker, Help, Icon, Modal, Select, Slider, Tabs, TextInput, useDebounced, useQuery, DragNumber, useUniqueEditorId } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 import { HeadPreview, type PreviewPart } from './headPreview';
@@ -157,21 +157,13 @@ function Creator({ npc }: { npc: FormKey }) {
     await engine((c) => c.call('setNpcLook', npc, p, next));
   };
 
-  const partsByKey = useMemo(() => new Map((allParts ?? []).map((p) => [p.formKey, p])), [allParts]);
-  const previewParts = useMemo(() => {
-    if (!a) return [];
-    const out: PreviewPart[] = [];
-    const seen = new Set<string>();
-    const add = (k: FormKey) => {
-      const p = partsByKey.get(k);
-      if (!p || seen.has(k)) return;
-      seen.add(k);
-      out.push({ key: k, type: p.type, model: p.model, tris: p.tris.filter((t) => t.type !== 1 && t.file).map((t) => t.file) });
-      for (const x of p.extraParts) add(x);
-    };
-    for (const k of a.headParts) add(k);
-    return out;
-  }, [a?.headParts.join(','), partsByKey]);
+  // The race's default head, eyes and mouth are part of the face too (vanilla characters list only what differs).
+  const { data: race } = useQuery(() => client?.call('raceHeadData', a?.race ?? null, a?.female ?? false), [a?.race, a?.female]);
+  const { data: faceParts } = useQuery(() => client?.call('npcFaceParts', npc), [npc, a?.headParts.join(','), a?.race, a?.female]);
+  const previewParts = useMemo<PreviewPart[]>(
+    () => (faceParts ?? []).map((p) => ({ key: p.formKey, type: p.type, model: p.model, tris: p.tris.filter((t) => t.file) })),
+    [faceParts],
+  );
 
   useEffect(() => {
     if (!previewEl.current || !client) return;
@@ -191,10 +183,15 @@ function Creator({ npc }: { npc: FormKey }) {
       p.frame();
     });
   }, [previewParts]);
-  const lookKey = a ? JSON.stringify([a.morphs, sculpt]) : '';
+  const lookKey = a ? JSON.stringify([a.morphs, a.weight, a.faceParts, sculpt, race]) : '';
   useEffect(() => {
-    if (a) preview.current?.setLook({ sliders: slidersWithExtended(a.morphs, sculpt), sculpt });
+    // The same look the face files are baked from: race shape, weight, presets, vampire morph, sliders and sculpt.
+    if (a && race) preview.current?.setLook(faceLookFor(a, race, sculpt));
   }, [lookKey, shapeInfo]);
+  // The head as the game colours it: its texture times the baked face tint (skin tone and paint).
+  const faceTexKey = a ? JSON.stringify([a.tints, a.skinTone, a.race, a.female, faceParts?.map((p) => p.formKey)]) : '';
+  const { data: faceTex } = useQuery(() => (a && faceParts ? client?.call('previewFaceTexture', npc, a) : undefined), [faceTexKey], { revision: false });
+  useEffect(() => preview.current?.setFaceTexture(faceTex ?? null), [faceTex, previewParts]);
   const hair = colors?.find((c) => c.formKey === a?.hairColor)?.color ?? null;
   useEffect(() => preview.current?.setColors(hair, a?.skinTone ?? null), [hair?.r, hair?.g, hair?.b, a?.skinTone.r, a?.skinTone.g, a?.skinTone.b, previewParts]);
 
@@ -205,7 +202,7 @@ function Creator({ npc }: { npc: FormKey }) {
       for (const w of r[0].warnings) useStore.getState().toast('warning', w);
     }
   };
-  const hasFace = a?.headParts.some((k) => partsByKey.get(k)?.type === 'Face');
+  const hasFace = !faceParts || faceParts.some((p) => p.type === 'Face' && !!p.model);
 
   return (
     <>
@@ -232,7 +229,7 @@ function Creator({ npc }: { npc: FormKey }) {
             </span>
           )}
           {!!missing.length && <div className="small faint">Preview: {missing.slice(0, 3).join(' · ')}</div>}
-          {a && !hasFace && <div className="small faint">This character uses the race's default head shape (not shown in the preview).</div>}
+          {a && !hasFace && <div className="small warn">Neither this character nor their race has a head mesh, so there's no face to show or generate.</div>}
         </div>
       </div>
       <div className="panel" style={{ width: 340, flex: 'none', borderLeft: '1px solid var(--border)', background: 'var(--panel)' }}>
@@ -298,8 +295,12 @@ function BodyTab({ a, races, commit }: { a: NpcAppearance; races: { formKey: For
 }
 
 function HeadTab({ a, parts, commit }: { a: NpcAppearance; parts: HeadPartInfo[]; commit: (p: Partial<NpcAppearance>) => void }) {
+  const client = useStore((s) => s.client);
   const byKey = new Map(parts.map((p) => [p.formKey, p]));
-  const fits = (p: HeadPartInfo) => p.playable && (a.female ? p.female : p.male);
+  // Only parts the race allows (its "valid races" list), for this sex — what the game's own creator offers.
+  const { data: fitting } = useQuery(() => client?.call('headParts', { race: a.race, female: a.female }), [a.race, a.female]);
+  const allowed = new Set((fitting ?? []).map((p) => p.formKey));
+  const fits = (p: HeadPartInfo) => allowed.has(p.formKey);
   const choose = (type: HeadPartInfo['type'], key: FormKey | null) => {
     const kept = a.headParts.filter((k) => byKey.get(k)?.type !== type || type === 'Scar');
     const next = type === 'Scar' ? (key ? (kept.includes(key) ? kept.filter((k) => k !== key) : [...kept, key]) : kept.filter((k) => byKey.get(k)?.type !== 'Scar')) : key ? [...kept, key] : kept;

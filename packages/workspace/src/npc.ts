@@ -37,6 +37,8 @@ export interface NpcAppearance {
   morphs: Record<FaceMorphKey, number>;
   faceParts: { nose: number; unknown: number; eyes: number; mouth: number };
   tints: TintLayer[];
+  /** Sliders the CK left unset (FLT_MAX in the record), shown as 0. */
+  unsetSliders?: FaceMorphKey[];
 }
 
 export interface HeadPartInfo {
@@ -52,9 +54,14 @@ export interface HeadPartInfo {
   extraParts: FormKey[];
   /** TRI files: race morph, expression tri, chargen morph. */
   tris: { type: number; file: string }[];
+  /** Texture set (TNAM) that replaces the mesh's textures, e.g. an eye colour. */
+  textureSet?: FormKey | null;
 }
 
 export const FEMALE_FLAG = 0x1;
+
+/** A real slider value (not NaN, and not the CK's FLT_MAX "unset" marker). */
+export const isSliderValue = (v: number) => Number.isFinite(v) && Math.abs(v) <= 10;
 
 export function emptyMorphs(): Record<FaceMorphKey, number> {
   return Object.fromEntries(FACE_MORPHS.map(([k]) => [k, 0])) as Record<FaceMorphKey, number>;
@@ -68,7 +75,14 @@ export class NpcService {
     if (!v || v.sig !== 'NPC_') throw new WorkspaceError(`${npc} is not an NPC`);
     const d = v.data as Record<string, any>;
     const morphs = emptyMorphs();
-    for (const [k] of FACE_MORPHS) if (typeof d.faceMorph?.[k] === 'number') morphs[k] = d.faceMorph[k];
+    // The CK stores FLT_MAX for sliders it never set (always the vampire morph on vanilla NPCs): read those as 0.
+    const unsetSliders: FaceMorphKey[] = [];
+    for (const [k] of FACE_MORPHS) {
+      const v = d.faceMorph?.[k];
+      // No slider data at all counts as unset too.
+      if (typeof v === 'number' && isSliderValue(v)) morphs[k] = v;
+      else unsetSliders.push(k);
+    }
     return {
       race: d.race ?? null,
       female: ((d.config?.flags ?? 0) & FEMALE_FLAG) !== 0,
@@ -79,6 +93,7 @@ export class NpcService {
       headTexture: d.headTexture ?? null,
       skinTone: d.textureLighting ? { r: d.textureLighting.r, g: d.textureLighting.g, b: d.textureLighting.b } : { r: 0, g: 0, b: 0 },
       morphs,
+      unsetSliders,
       faceParts: d.faceParts ? { nose: d.faceParts.nose, unknown: d.faceParts.unknown, eyes: d.faceParts.eyes, mouth: d.faceParts.mouth } : { nose: 0, unknown: 0, eyes: 0, mouth: 0 },
       tints: (d.tintLayers ?? []).map((t: any) => ({ index: t.index, color: { ...(t.color ?? { r: 0, g: 0, b: 0, a: 0 }) }, value: t.value ?? 100, preset: t.preset ?? 0 })),
     };
@@ -107,7 +122,13 @@ export class NpcService {
           else delete d.headTexture;
         }
         if (a.skinTone) d.textureLighting = { ...a.skinTone };
-        if (a.morphs) d.faceMorph = { ...emptyMorphs(), ...(d.faceMorph ?? {}), ...a.morphs };
+        if (a.morphs) {
+          const prev: Record<string, number> = d.faceMorph ?? {};
+          const next: Record<string, number> = { ...emptyMorphs(), ...prev, ...a.morphs };
+          // Leave the CK's "unset" marker alone unless the slider was actually moved.
+          for (const [k, v] of Object.entries(a.morphs)) if (v === 0 && typeof prev[k] === 'number' && !isSliderValue(prev[k])) next[k] = prev[k];
+          d.faceMorph = next;
+        }
         if (a.faceParts) d.faceParts = { ...a.faceParts };
         if (a.tints) d.tintLayers = a.tints.map((t) => ({ index: t.index, color: { ...t.color }, value: Math.round(t.value), preset: t.preset }));
       },
@@ -150,7 +171,75 @@ export class NpcService {
       validRaces: d.validRaces ?? null,
       extraParts: d.extraParts ?? [],
       tris: (d.parts ?? []).map((p: any) => ({ type: p.type ?? 0, file: p.file })),
+      textureSet: d.textureSet ?? null,
     };
+  }
+
+  /**
+   * The race's default head parts and face texture for one sex (RACE head
+   * data: INDX/HEAD pairs and DFTM/DFTF after the MNAM or FNAM marker).
+   * Vanilla characters only list what differs from these — usually not even
+   * the head itself.
+   */
+  raceHeadData(race: FormKey | null, female: boolean): { parts: FormKey[]; faceTexture: FormKey | null; hairColor: FormKey | null; vampire: boolean; editorId?: string; morphRace?: string } {
+    const out = { parts: [] as FormKey[], faceTexture: null as FormKey | null, hairColor: null as FormKey | null, vampire: false, editorId: undefined as string | undefined, morphRace: undefined as string | undefined };
+    if (!race) return out;
+    const versions = this.ws.versions(race);
+    const v = versions[versions.length - 1];
+    if (!v) return out;
+    out.editorId = this.ws.summary(race)?.editorId;
+    // A race can borrow another's head shape ("morph race", NAM8): vampire and special races do.
+    const nam8 = v.record.subrecords.find((s) => s.sig === 'NAM8' && s.data.byteLength >= 4);
+    const morphRace = nam8 ? this.ws.keyOf(v.slot, new DataView(nam8.data.buffer, nam8.data.byteOffset).getUint32(0, true)) : undefined;
+    out.morphRace = morphRace ? this.ws.summary(morphRace)?.editorId : undefined;
+    const kw = ((this.ws.view(race)?.data as any)?.keywords ?? []) as FormKey[];
+    out.vampire = /vampire/i.test(out.editorId ?? '') || kw.some((k) => this.ws.summary(k)?.editorId === 'Vampire');
+    let inHead = false;
+    let sex: 'm' | 'f' | undefined;
+    for (const s of v.record.subrecords) {
+      // Default hair colours (male, female), outside the head data.
+      if (s.sig === 'HCLF' && !inHead && s.data.byteLength >= 8) {
+        const id = new DataView(s.data.buffer, s.data.byteOffset, s.data.byteLength).getUint32(female ? 4 : 0, true);
+        out.hairColor = id ? (this.ws.keyOf(v.slot, id) ?? null) : null;
+      }
+      if (s.sig === 'NAM0') inHead = true;
+      else if (inHead && s.sig === 'MNAM') sex = 'm';
+      else if (inHead && s.sig === 'FNAM') sex = 'f';
+      if (!inHead || sex !== (female ? 'f' : 'm') || s.data.byteLength < 4) continue;
+      const id = new DataView(s.data.buffer, s.data.byteOffset, s.data.byteLength).getUint32(0, true);
+      if (s.sig === 'HEAD' && id) {
+        const k = this.ws.keyOf(v.slot, id);
+        if (k) out.parts.push(k);
+      } else if ((s.sig === 'DFTM' || s.sig === 'DFTF') && id) out.faceTexture = this.ws.keyOf(v.slot, id) ?? null;
+    }
+    return out;
+  }
+
+  /**
+   * Every head part that makes up a character's face: the race's defaults,
+   * replaced type by type by the character's own, each with its extra parts.
+   */
+  faceParts(npc: FormKey): HeadPartInfo[] {
+    const a = this.appearance(npc);
+    const own = a.headParts.map((k) => this.headPart(k)).filter((p): p is HeadPartInfo => !!p);
+    // Misc and Scar parts stack; every other type replaces the race's part of that type.
+    const ownTypes = new Set<string>(own.map((p) => p.type).filter((t) => t !== 'Misc' && t !== 'Scar'));
+    const defaults = this.raceHeadData(a.race, a.female)
+      .parts.map((k) => this.headPart(k))
+      .filter((p): p is HeadPartInfo => !!p && !ownTypes.has(p.type));
+    const out: HeadPartInfo[] = [];
+    const seen = new Set<string>();
+    const add = (p: HeadPartInfo) => {
+      if (seen.has(p.formKey)) return;
+      seen.add(p.formKey);
+      out.push(p);
+      for (const e of p.extraParts) {
+        const x = this.headPart(e);
+        if (x) add(x);
+      }
+    };
+    for (const p of [...defaults, ...own]) add(p);
+    return out;
   }
 
   /** Head parts usable by a race/sex (via the part's "valid races" form list). */

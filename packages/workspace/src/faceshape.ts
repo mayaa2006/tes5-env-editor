@@ -17,7 +17,7 @@
  * you see is what gets written.
  */
 import { FACE_MORPHS } from '@tes5/esp';
-import { CHARGEN_SLIDER_MORPHS, type TriFile } from '@tes5/assets';
+import { CHARGEN_SLIDER_MORPHS, SKINNY_MORPH, isPresetMorph, presetMorph, type TriFile } from '@tes5/assets';
 
 export const FACE_REGIONS = ['head', 'nose', 'eyes', 'brows', 'cheeks', 'mouth', 'jaw', 'chin', 'ears'] as const;
 export type FaceRegion = (typeof FACE_REGIONS)[number];
@@ -103,16 +103,23 @@ export interface ShaperPart {
   /** Head part type ('Face' for the head itself). */
   type: string;
   positions: Float32Array;
-  tris: TriFile[];
+  tris: ShaperTri[];
 }
 
 export interface FaceLook {
   /** The 19 vanilla slider values (NAM9 order), with any extended values already merged in. */
   sliders: number[];
   sculpt?: FaceSculpt;
-  /** A race morph to apply in full (the race's own head shape), if the TRIs have one. */
-  raceMorph?: string;
+  /** The race's own head shape: a race-TRI morph named after the race (the first of these names a part has). */
+  raceMorph?: string | string[];
+  /** Body weight 0–100: the CK applies SkinnyMorph at 1 − weight/100 to every part that has it. */
+  weight?: number;
+  /** The race's preset nose, eyes, mouth and brows (NAMA; −1 = none): NoseType{n} etc. at full weight. */
+  presets?: { nose: number; eyes: number; mouth: number; brows: number };
 }
+
+/** A TRI as the shaper sees it: which file kind it came from decides whether its morphs are offered as extra shapes. */
+export type ShaperTri = TriFile & { kind?: 'race' | 'chargen' | 'expression' };
 
 interface Region {
   /** Centre of each side (or of the whole, twice, for unpaired regions). */
@@ -139,7 +146,16 @@ export class FaceShaper {
   private morphIndex = new Map<string, Map<string, Float32Array>[]>();
 
   constructor(readonly parts: ShaperPart[]) {
-    for (const p of parts) this.morphIndex.set(p.key, p.tris.map((t) => new Map(t.morphs.map((m) => [m.name.toLowerCase(), m.deltas]))));
+    // The first morph of a name wins, as in the CK (vanilla FemaleHeadCharGen.tri has two "NoseType9").
+    for (const p of parts)
+      this.morphIndex.set(
+        p.key,
+        p.tris.map((t) => {
+          const m = new Map<string, Float32Array>();
+          for (const x of t.morphs) if (!m.has(x.name.toLowerCase())) m.set(x.name.toLowerCase(), x.deltas);
+          return m;
+        }),
+      );
     const head = parts.find((p) => p.type === 'Face') ?? parts[0];
     if (!head) return;
     const hp = head.positions;
@@ -244,7 +260,12 @@ export class FaceShaper {
   /** Every TRI morph on these parts that the vanilla sliders don't already drive. */
   extraMorphs(): string[] {
     const names = new Map<string, string>();
-    for (const p of this.parts) for (const t of p.tris) for (const m of t.morphs) if (!VANILLA_MORPH_NAMES.has(m.name.toLowerCase())) names.set(m.name.toLowerCase(), m.name);
+    for (const p of this.parts)
+      for (const t of p.tris) {
+        // Race shapes, expressions and the presets are set elsewhere (race, weight, Head page).
+        if (t.kind === 'race' || t.kind === 'expression') continue;
+        for (const m of t.morphs) if (!VANILLA_MORPH_NAMES.has(m.name.toLowerCase()) && !isPresetMorph(m.name) && m.name !== SKINNY_MORPH && !/vampiremorph$/i.test(m.name)) names.set(m.name.toLowerCase(), m.name);
+      }
     return [...names.values()].sort((a, b) => a.localeCompare(b));
   }
 
@@ -265,16 +286,19 @@ export class FaceShaper {
   private shapePart(p: ShaperPart, look: FaceLook): Float32Array {
     const pos = p.positions.slice();
     const tris = this.morphIndex.get(p.key) ?? [];
-    const add = (name: string, w: number) => {
-      if (!w || !name) return;
+    const add = (name: string, w: number): boolean => {
+      if (!w || !name) return false;
       for (const t of tris) {
         const d = t.get(name.toLowerCase());
         if (!d || d.length !== pos.length) continue;
         for (let i = 0; i < pos.length; i++) pos[i] += d[i]! * w;
-        return;
+        return true;
       }
+      return false;
     };
-    if (look.raceMorph) add(look.raceMorph, 1);
+    for (const name of typeof look.raceMorph === 'string' ? [look.raceMorph] : (look.raceMorph ?? [])) if (add(name, 1)) break;
+    if (look.weight !== undefined) add(SKINNY_MORPH, 1 - Math.max(0, Math.min(100, look.weight)) / 100);
+    if (look.presets) for (const k of ['nose', 'eyes', 'mouth', 'brows'] as const) add(presetMorph(k, look.presets[k]), 1);
     look.sliders.forEach((v, i) => {
       const pair = CHARGEN_SLIDER_MORPHS[i];
       if (pair && v) add(v < 0 ? pair[0] : pair[1], Math.abs(v));
@@ -330,6 +354,31 @@ export class FaceShaper {
     for (let i = 0; i < pos.length; i++) pos[i] += disp[i]!;
     return pos;
   }
+}
+
+/**
+ * Everything the CK bakes for a character, as a look: sliders (vampire
+ * races get the full vampire morph, as the CK does), the race's
+ * own head shape, body weight and the nose/eyes/mouth/brow presets.
+ */
+export function faceLookFor(
+  a: { morphs: Record<string, number>; weight: number; faceParts: { nose: number; unknown: number; eyes: number; mouth: number }; unsetSliders?: string[] },
+  race: { editorId?: string; morphRace?: string; vampire?: boolean },
+  sculpt?: FaceSculpt,
+): FaceLook {
+  const sliders = slidersWithExtended(a.morphs, sculpt);
+  const vi = FACE_MORPHS.findIndex(([k]) => k === 'vampireMorph');
+  // Vampire races get the full vampire morph unless the character sets one (vanilla vampires store 0 or nothing).
+  if (race.vampire && !sliders[vi] && sculpt?.extended.vampireMorph === undefined) sliders[vi] = 1;
+  const id = race.editorId ?? '';
+  const names = [race.morphRace ?? '', id, id.replace(/Vampire$/i, ''), id.replace(/Child(Vampire)?$/i, ''), id.replace(/Race(Child)?(Vampire)?$/i, 'Race')].filter((n, i, all) => n && all.indexOf(n) === i);
+  return {
+    sliders,
+    sculpt,
+    raceMorph: names,
+    weight: a.weight,
+    presets: { nose: a.faceParts.nose, eyes: a.faceParts.eyes, mouth: a.faceParts.mouth, brows: a.faceParts.unknown },
+  };
 }
 
 /** The 19 slider values with the sculpt's extended values taking over where set. */

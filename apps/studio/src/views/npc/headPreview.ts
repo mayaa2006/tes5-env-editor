@@ -5,7 +5,7 @@
  */
 import * as THREE from 'three';
 import type { TriFile } from '@tes5/assets';
-import { FaceShaper, type FaceLook } from '@tes5/workspace';
+import { FaceShaper, type FaceLook, type ShaperTri } from '@tes5/workspace';
 import type { EngineClient } from '../../engine/client';
 import { AssetCache } from '../scene/assets3d';
 
@@ -15,15 +15,15 @@ export interface PreviewPart {
   key: string;
   type: string;
   model?: string;
-  /** Race and chargen morph TRIs (not expressions). */
-  tris: string[];
+  /** TRI files with their kind (0 race, 1 expression — only its SkinnyMorph is used — 2 chargen). */
+  tris: { type: number; file: string }[];
 }
 
 interface Loaded {
   part: PreviewPart;
   group: THREE.Group;
   /** Mesh the TRIs apply to, with its unmorphed positions. */
-  morphTarget?: { mesh: THREE.Mesh; base: Float32Array; tris: TriFile[] };
+  morphTarget?: { mesh: THREE.Mesh; base: Float32Array; tris: TriFile[]; model: Float32Array };
 }
 
 export class HeadPreview {
@@ -59,14 +59,16 @@ export class HeadPreview {
     this.renderer.setClearColor(0x1f2023);
     container.appendChild(this.renderer.domElement);
     this.assets = new AssetCache(client, this.renderer);
-    this.assets.onLoad = () => (this.dirty = true);
-    const key = new THREE.DirectionalLight(0xfff4e8, 2.2);
-    key.position.set(-0.6, -1, 0.6);
-    const fill = new THREE.DirectionalLight(0xcfe0ff, 0.9);
-    fill.position.set(0.8, -0.6, 0.1);
+    // Textures arrive after the meshes: re-apply colours (and the face texture) when they do.
+    this.assets.onLoad = () => this.applyColours();
+    const key = new THREE.DirectionalLight(0xfff4e8, 3.2);
+    // Faces look down +Y: key and fill light them from the front, the rim from behind.
+    key.position.set(-0.6, 1, 0.6);
+    const fill = new THREE.DirectionalLight(0xcfe0ff, 1.4);
+    fill.position.set(0.8, 0.6, 0.1);
     const rim = new THREE.DirectionalLight(0xffffff, 0.8);
-    rim.position.set(0, 1, 0.5);
-    this.scene.add(key, fill, rim, new THREE.HemisphereLight(0xffffff, 0x404040, 0.6));
+    rim.position.set(0, -1, 0.5);
+    this.scene.add(key, fill, rim, new THREE.HemisphereLight(0xffffff, 0x404040, 1.3));
     const el = this.renderer.domElement;
     el.addEventListener('pointerdown', (e) => {
       this.drag = { x: e.clientX, y: e.clientY, pan: e.button === 1 || e.button === 2 || e.shiftKey };
@@ -149,18 +151,26 @@ export class HeadPreview {
         const m = o as THREE.Mesh;
         if (m.isMesh) {
           m.geometry = m.geometry.clone();
-          m.material = (m.material as THREE.Material).clone();
+          // Materials stay shared with this preview's own asset cache, so textures that finish loading later
+          // still show. Head meshes' vertex colours are black (the game doesn't use them for skin): drop them.
+          m.geometry.deleteAttribute('color');
+          const mat = m.material as THREE.MeshStandardMaterial;
+          if (mat.vertexColors) {
+            mat.vertexColors = false;
+            mat.needsUpdate = true;
+          }
         }
       });
       const l: Loaded = { part, group };
-      const tris: TriFile[] = [];
+      const tris: ShaperTri[] = [];
       let count = -1;
-      for (const file of part.tris) {
+      for (const { type, file } of part.tris) {
         try {
           const t = await this.client.call('tri', file);
           if (count < 0) count = t.vertexCount;
           else if (t.vertexCount !== count) continue;
-          tris.push({ morphs: t.morphs.map((m) => ({ name: m.name, deltas: m.deltas })) } as unknown as TriFile);
+          const morphs = t.morphs.filter((m) => type !== 1 || m.name === 'SkinnyMorph').map((m) => ({ name: m.name, deltas: m.deltas }));
+          tris.push({ morphs, kind: type === 0 ? 'race' : type === 1 ? 'expression' : 'chargen' } as unknown as ShaperTri);
         } catch {
           missing.push(file);
         }
@@ -170,7 +180,13 @@ export class HeadPreview {
         const m = o as THREE.Mesh;
         if (!target && m.isMesh && (count < 0 || m.geometry.getAttribute('position').count === count)) target = m;
       });
-      if (target) l.morphTarget = { mesh: target, base: (target.geometry.getAttribute('position').array as Float32Array).slice(), tris };
+      if (target) {
+        // Shape in one space for all parts: the mesh's own placement (the bind pose for skinned heads).
+        const base = (target.geometry.getAttribute('position').array as Float32Array).slice();
+        const model = base.slice();
+        new THREE.BufferAttribute(model, 3).applyMatrix4(target.matrix);
+        l.morphTarget = { mesh: target, base, tris, model };
+      }
       else if (count >= 0) missing.push(`${part.tris[0]}: vertex count doesn't match the mesh`);
       if (gen !== this.generation) return { missing };
       this.loaded.set(part.key, l);
@@ -182,7 +198,7 @@ export class HeadPreview {
   }
 
   private rebuildShaper(): void {
-    const parts = [...this.loaded.values()].filter((l) => l.morphTarget).map((l) => ({ key: l.part.key, type: l.part.type, positions: l.morphTarget!.base, tris: l.morphTarget!.tris }));
+    const parts = [...this.loaded.values()].filter((l) => l.morphTarget).map((l) => ({ key: l.part.key, type: l.part.type, positions: l.morphTarget!.model, tris: l.morphTarget!.tris }));
     this.shaper = parts.length ? new FaceShaper(parts) : undefined;
     this.onShaper?.({ regions: this.shaper?.availableRegions() ?? [], extraMorphs: this.shaper?.extraMorphs() ?? [] });
   }
@@ -201,11 +217,31 @@ export class HeadPreview {
       const pos = t && shaped.get(l.part.key);
       if (!t || !pos) continue;
       const attr = t.mesh.geometry.getAttribute('position') as THREE.BufferAttribute;
-      (attr.array as Float32Array).set(pos);
+      const local = new THREE.BufferAttribute(pos.slice(), 3).applyMatrix4(t.mesh.matrix.clone().invert());
+      (attr.array as Float32Array).set(local.array as Float32Array);
       attr.needsUpdate = true;
       t.mesh.geometry.computeVertexNormals();
     }
     this.dirty = true;
+  }
+
+  private faceTexture?: THREE.DataTexture;
+
+  /** The head's colour as the game shows it (diffuse × tint, from the host); null to go back to the plain texture. */
+  setFaceTexture(img: { width: number; height: number; rgba: Uint8Array } | null): void {
+    this.faceTexture?.dispose();
+    this.faceTexture = undefined;
+    if (img) {
+      const t = new THREE.DataTexture(img.rgba, img.width, img.height, THREE.RGBAFormat, THREE.UnsignedByteType);
+      t.colorSpace = THREE.SRGBColorSpace;
+      t.flipY = false;
+      t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      t.generateMipmaps = true;
+      t.minFilter = THREE.LinearMipmapLinearFilter;
+      t.needsUpdate = true;
+      this.faceTexture = t;
+    }
+    this.applyAll();
   }
 
   setColors(hair: { r: number; g: number; b: number } | null, skin: { r: number; g: number; b: number } | null): void {
@@ -217,15 +253,30 @@ export class HeadPreview {
 
   private applyAll(): void {
     this.applyShape();
+    this.applyColours();
+  }
+
+  private applyColours(): void {
     for (const l of this.loaded.values()) {
-      const isHair = l.part.type === 'Hair' || l.part.type === 'Facial Hair' || l.part.type === 'Eyebrows';
+      const typeHair = l.part.type === 'Hair' || l.part.type === 'Facial Hair' || l.part.type === 'Eyebrows';
       l.group.traverse((o) => {
         const m = o as THREE.Mesh;
         if (!m.isMesh) return;
         const mat = m.material as THREE.MeshStandardMaterial;
         if (!mat.color) return;
+        // Hair-tint shaders take the hair colour (hairlines and brows too, as in the game).
+        const isHair = mat.userData.shaderType === 6 || (mat.userData.shaderType === undefined && typeHair);
         if (isHair) mat.color.copy(this.hair).multiplyScalar(2.2);
-        else if (l.part.type === 'Face') mat.color.copy(this.skin);
+        else if (l.part.type === 'Face') {
+          if (this.faceTexture) {
+            // Already includes the skin tone and paint.
+            if (mat.map !== this.faceTexture) {
+              mat.map = this.faceTexture;
+              mat.needsUpdate = true;
+            }
+            mat.color.setRGB(1, 1, 1);
+          } else mat.color.copy(this.skin);
+        }
       });
     }
     this.dirty = true;

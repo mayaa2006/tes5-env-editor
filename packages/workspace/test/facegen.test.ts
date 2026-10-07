@@ -121,11 +121,14 @@ describe('FaceGen', () => {
     expect(res!.mesh).toMatch(/^meshes\\actors\\character\\facegendata\\facegeom\\demoworld\.esm\\[0-9a-f]{8}\.nif$/);
     expect(ws.vfs.has(res!.mesh)).toBe(true);
     const nif = parseNif(await ws.vfs.read(res!.mesh));
-    const root = nif.roots[0]!;
-    expect(root.name).toBe('BSFaceGenNiNodeSkinned');
-    expect(root.children.map((c) => c.name)).toEqual(['DemoHeadMale', 'DemoHairShort', 'DemoEyesBrown', 'DemoBrows', 'DemoBeardFull']);
-    const headMesh = root.children[0]!.mesh!;
-    expect(headMesh.material.textures[6]).toBe(res!.tint);
+    // The CK's layout: a BSFadeNode named after the file, the bones, then the shapes under BSFaceGenNiNodeSkinned.
+    expect(nif.roots[0]!.type).toBe('BSFadeNode');
+    expect(nif.roots[0]!.name).toBe(res!.mesh.split('\\').pop()!.toUpperCase());
+    const root = nif.roots[0]!.children.find((c) => c.name === 'BSFaceGenNiNodeSkinned')!;
+    // The character's own parts in reverse order (as the CK writes them).
+    expect(root.children.map((c) => c.name)).toEqual(['DemoBeardFull', 'DemoBrows', 'DemoEyesBrown', 'DemoHairShort', 'DemoHeadMale']);
+    const headMesh = root.children.find((c) => c.name === 'DemoHeadMale')!.mesh!;
+    expect(headMesh.material.textures[6]).toBe(`data\\${res!.tint}`); // as the CK writes it
     const orig = parseNif(await ws.vfs.read('meshes\\demo\\head_male.nif')).roots[0]!.children[0]!.mesh!;
     expect(headMesh.positions.length).toBe(orig.positions.length);
     // Pointed ears: the widest point is wider than before.
@@ -158,10 +161,29 @@ describe('FaceGen', () => {
     expect(lips[0]! - lips[1]!).toBeGreaterThan(brow[0]! - brow[1]! + 30);
   });
 
+  it("uses the race's default head when a character lists none, and ignores the CK's unset slider marker", async () => {
+    const { ws, faces, npcs } = await setup();
+    const guard = ws.byEditorId('DemoGuard')!;
+    expect(npcs.appearance(guard).headParts.map((k) => npcs.headPart(k)?.type)).toEqual(['Hair', 'Eyebrows']);
+    expect(npcs.appearance(guard).morphs.vampireMorph).toBe(0);
+    expect(faces.headPartsOf(guard).map((p) => p.editorId)).toEqual(['DemoHeadMale', 'DemoEyesBrown', 'DemoHairShort', 'DemoBrows']);
+    const { nif } = await faces.bake(guard);
+    const root = parseNif(nif).roots[0]!.children.find((c) => c.name === 'BSFaceGenNiNodeSkinned')!;
+    // Race defaults (reversed), then the character's own (reversed).
+    expect(root.children.map((c) => c.name)).toEqual(['DemoEyesBrown', 'DemoHeadMale', 'DemoBrows', 'DemoHairShort']);
+    // Nothing moved: no sliders set, and the FLT_MAX marker wasn't applied as a weight.
+    const orig = parseNif(await ws.vfs.read('meshes\\demo\\head_male.nif')).roots[0]!.children[0]!.mesh!;
+    const head = root.children.find((c) => c.name === 'DemoHeadMale')!.mesh!;
+    expect(head.positions.every((v, i) => Math.abs(v - orig.positions[i]!) < 1e-4)).toBe(true);
+    // Editing other sliders keeps the marker in the record.
+    npcs.setAppearance(guard, { morphs: { ...npcs.appearance(guard).morphs, noseUpDown: 0.5 } });
+    expect((ws.view(guard)!.data as any).faceMorph.vampireMorph).toBeGreaterThan(1e38);
+  });
+
   it('explains when there is no head to bake', async () => {
     const { ws, faces, npcs } = await setup();
     const guard = ws.byEditorId('DemoGuard')!;
-    npcs.setAppearance(guard, { headParts: npcs.appearance(guard).headParts.filter((k) => npcs.headPart(k)?.type !== 'Face') });
+    npcs.setAppearance(guard, { race: null as never });
     await expect(faces.bake(guard)).rejects.toThrow(/no head/);
   });
 });
