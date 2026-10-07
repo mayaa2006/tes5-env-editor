@@ -6,6 +6,15 @@ The editor reads and writes Skyrim LE/SE plugins (`.esm`/`.esp`/`.esl`) itself. 
 
 > **Status: early.** The core works end to end on the bundled demo data set, with automated tests for each part. It has **not** been tested against a full Skyrim.esm load order. See [ROADMAP.md](ROADMAP.md) for what's done, what's partial and what's missing.
 
+## Download
+
+Get the Windows app from the [latest release](https://github.com/mayaa2006/tes5-env-editor/releases/latest):
+
+- **TES5-Env-Editor-x.y.z-Setup.exe** installs it, with Start menu and desktop shortcuts.
+- **TES5-Env-Editor-x.y.z-Portable.exe** runs without installing.
+
+The exe isn't code-signed yet, so Windows SmartScreen may say "Windows protected your PC". Choose **More info → Run anyway**. Each release's notes list what changed (also in [CHANGELOG.md](CHANGELOG.md)).
+
 ## What it does
 
 | Area | Highlights |
@@ -40,7 +49,7 @@ npm install
 npm run dev:web     # browser demo on http://localhost:5173 (in-memory demo data, nothing touches your game)
 npm run dev         # desktop app (Electron) with real file access
 npm run build       # production build (web bundle + Electron main/worker)
-npm run dist -w @tes5/studio   # Windows installer/portable build via electron-builder
+npm run dist -w @tes5/studio   # Windows installer + portable exe in apps/studio/release
 ```
 
 When you start the desktop app you can open either:

@@ -1,0 +1,58 @@
+name: Windows app
+
+# Builds the Windows installer and portable exe on every pull request (as a
+# packaging check, downloadable from the run's artifacts) and on main. When
+# main carries a version of apps/studio that has no GitHub release yet, the
+# exes are published as release v<version>. To ship a new exe, bump
+# "version" in apps/studio/package.json.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - run: npm run dist -w @tes5/studio
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TES5-Env-Editor-windows
+          path: |
+            apps/studio/release/*.exe
+          if-no-files-found: error
+
+      - name: Publish release for a new version
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p "require('./apps/studio/package.json').version")
+          tag="v$version"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists; bump apps/studio version to publish a new exe."
+            exit 0
+          fi
+          node scripts/release-notes.mjs "$version" > notes.md
+          gh release create "$tag" apps/studio/release/*.exe \
+            --target "$GITHUB_SHA" \
+            --title "TES5 Env Editor $version" \
+            --notes-file notes.md
