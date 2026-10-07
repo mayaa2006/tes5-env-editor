@@ -33,3 +33,4 @@ export * from './newrecord';
 export * from './catalog';
 export * from './terrain';
 export * from './actormodel';
+export * from './landtex';

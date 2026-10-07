@@ -35,6 +35,8 @@ export interface Settings {
   snapRotateDeg: number;
   snapScale: number;
   showMarkers: boolean;
+  /** Editor-only shapes inside furniture and props (lean, sit and landing markers). */
+  showMarkerShapes: boolean;
   /** Rings of cells loaded around an outdoor cell: 0 = just the cell, 1 = 3×3, 2 = 5×5. */
   surroundingCells: number;
   /** Draw characters with their body, clothes and head (off: simple capsules). */
@@ -63,6 +65,7 @@ const DEFAULT_SETTINGS: Settings = {
   snapRotateDeg: 15,
   snapScale: 0.1,
   showMarkers: true,
+  showMarkerShapes: false,
   surroundingCells: 1,
   actorModels: true,
   kitSnap: true,

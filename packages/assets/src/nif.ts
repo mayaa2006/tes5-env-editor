@@ -25,6 +25,23 @@ export interface NifMaterial {
   specularStrength: number;
   /** Lighting shader type (0 default, 1 env map, 5 face tint, 6 hair tint, 7 parallax occ...). */
   shaderType: number;
+  /** Blends by adding to what's behind (NiAlphaProperty destination ONE): glows, sparks, mist. */
+  additive?: boolean;
+  /** Drawn with the water shader (rivers, troughs); no texture set of its own. */
+  water?: boolean;
+}
+
+/**
+ * The texture path the game actually loads: vanilla meshes sometimes keep the
+ * artist's absolute path ("skyrimhd\build\pc\data\textures\plants\x.dds");
+ * the engine uses what follows "textures\".
+ */
+export function gameTexturePath(p: string): string {
+  const n = p.trim().replace(/\//g, '\\').toLowerCase().replace(/^\\+/, '');
+  if (n.startsWith('textures\\')) return n;
+  const i = n.indexOf('\\textures\\');
+  if (i >= 0) return n.slice(i + 1);
+  return n.startsWith('data\\') ? gameTexturePath(n.slice(5)) : `textures\\${n}`;
 }
 
 export interface NifMesh {
@@ -656,6 +673,8 @@ export function parseNif(bytes: Uint8Array): NifFile {
         blocks.push(readLightingShader(r, h));
       } else if (type === 'BSEffectShaderProperty') {
         blocks.push(readEffectShader(r, h));
+      } else if (type === 'BSWaterShaderProperty') {
+        blocks.push({ type, material: { water: true, twoSided: true } });
       } else if (type === 'BSShaderTextureSet') {
         const n = r.u32();
         const textures: string[] = [];
@@ -720,6 +739,8 @@ export function parseNif(bytes: Uint8Array): NifFile {
     const alpha = b.alphaRef !== undefined && b.alphaRef >= 0 ? blocks[b.alphaRef] : undefined;
     if (alpha?.alphaFlags !== undefined) {
       m.alphaBlend = (alpha.alphaFlags & 0x1) !== 0;
+      // Destination blend factor (bits 5–8): 0 is ONE, i.e. added on top of what's behind.
+      m.additive = m.alphaBlend && ((alpha.alphaFlags >> 5) & 0xf) === 0;
       m.alphaTest = (alpha.alphaFlags & 0x200) !== 0;
       m.alphaThreshold = alpha.alphaThreshold ?? 128;
     }

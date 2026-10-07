@@ -48,6 +48,9 @@ export class HeadPreview {
   private hair = new THREE.Color(0.25, 0.18, 0.12);
   private skin = new THREE.Color(1, 1, 1);
   private generation = 0;
+  /** Body and worn armor (rest pose), shown under the head. */
+  private body = new THREE.Group();
+  private bodyKey = '';
 
   constructor(
     private readonly container: HTMLElement,
@@ -69,6 +72,7 @@ export class HeadPreview {
     const rim = new THREE.DirectionalLight(0xffffff, 0.8);
     rim.position.set(0, -1, 0.5);
     this.scene.add(key, fill, rim, new THREE.HemisphereLight(0xffffff, 0x404040, 1.3));
+    this.scene.add(this.body);
     const el = this.renderer.domElement;
     el.addEventListener('pointerdown', (e) => {
       this.drag = { x: e.clientX, y: e.clientY, pan: e.button === 1 || e.button === 2 || e.shiftKey };
@@ -257,6 +261,12 @@ export class HeadPreview {
   }
 
   private applyColours(): void {
+    this.body.traverse((o) => {
+      const m = o as THREE.Mesh;
+      const mat = m.isMesh ? (m.material as THREE.MeshStandardMaterial) : undefined;
+      // Skin-tint shader (the bare body, hands, feet) takes the character's skin tone.
+      if (mat?.color && mat.userData.shaderType === 5) mat.color.copy(this.skin);
+    });
     for (const l of this.loaded.values()) {
       const typeHair = l.part.type === 'Hair' || l.part.type === 'Facial Hair' || l.part.type === 'Eyebrows';
       l.group.traverse((o) => {
@@ -280,6 +290,48 @@ export class HeadPreview {
       });
     }
     this.dirty = true;
+  }
+
+  /** Show the body and worn armor (model paths under Data\\meshes); empty to show only the head. */
+  async setBody(models: string[]): Promise<void> {
+    const key = models.join('|');
+    if (key === this.bodyKey) return;
+    this.bodyKey = key;
+    const groups = await Promise.all(models.map((m) => this.assets.mesh(m)));
+    if (key !== this.bodyKey) return;
+    this.body.clear();
+    for (const g of groups) {
+      if (!g) continue;
+      const c = g.clone();
+      c.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh) return;
+        // Skinned meshes' stored normals decode wrongly (clothes come out black): recompute them, and drop the unused vertex colours.
+        m.geometry = m.geometry.clone();
+        m.geometry.deleteAttribute('color');
+        m.geometry.computeVertexNormals();
+        const mat = m.material as THREE.MeshStandardMaterial;
+        if (mat.vertexColors) {
+          mat.vertexColors = false;
+          mat.needsUpdate = true;
+        }
+      });
+      this.body.add(c);
+    }
+    this.applyColours();
+  }
+
+  /** Camera on the face, or on the whole figure. */
+  view(mode: 'head' | 'body'): void {
+    if (mode === 'body' && this.body.children.length) {
+      this.scene.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(this.body, true);
+      for (const l of this.loaded.values()) box.expandByObject(l.group);
+      const sp = box.getBoundingSphere(new THREE.Sphere());
+      this.target.copy(sp.center);
+      this.dist = Math.max(200, sp.radius * 4.2);
+      this.dirty = true;
+    } else this.frame();
   }
 
   frame(): void {

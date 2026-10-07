@@ -16,6 +16,7 @@ import {
   parseTri,
   writeBsa,
   writeNif,
+  gameTexturePath,
   writeBc3Dds,
   writeRgbaDds,
   writeTri,
@@ -129,6 +130,15 @@ describe('NIF', () => {
     expect(halfToFloat(0x3c00)).toBe(1);
     expect(halfToFloat(0xc000)).toBe(-2);
     expect(halfToFloat(0x3555)).toBeCloseTo(0.333, 3);
+  });
+});
+
+describe('texture paths', () => {
+  it('finds the path the game loads, even when the artist left a full path in the mesh', () => {
+    expect(gameTexturePath('skyrimhd\\build\\pc\\data\\textures\\plants\\Thistle01.dds')).toBe('textures\\plants\\thistle01.dds');
+    expect(gameTexturePath('Data/Textures/Effects/Glow.dds')).toBe('textures\\effects\\glow.dds');
+    expect(gameTexturePath('textures\\a.dds')).toBe('textures\\a.dds');
+    expect(gameTexturePath('landscape\\dirt01.dds')).toBe('textures\\landscape\\dirt01.dds');
   });
 });
 

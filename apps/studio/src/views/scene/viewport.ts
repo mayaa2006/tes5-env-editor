@@ -127,6 +127,7 @@ export class Viewport {
   private ctrlHeld = false;
   snap = { move: 16, rotateDeg: 15, scale: 0.1 };
   private showMarkers = true;
+  private showMarkerShapes = false;
   private cellLighting = false;
   private cellAmbient = new THREE.Color(0.35, 0.33, 0.3);
 
@@ -252,11 +253,12 @@ export class Viewport {
 
   // ---------------------------------------------------------------- content
 
-  setOptions(o: { showMarkers?: boolean; cellLighting?: boolean; ambient?: [number, number, number] | null; snap?: Viewport['snap'] }): void {
+  setOptions(o: { showMarkerShapes?: boolean; showMarkers?: boolean; cellLighting?: boolean; ambient?: [number, number, number] | null; snap?: Viewport['snap'] }): void {
     if (o.snap) this.snap = o.snap;
     if (o.ambient) this.cellAmbient.setRGB(o.ambient[0] / 255, o.ambient[1] / 255, o.ambient[2] / 255, THREE.SRGBColorSpace);
-    if (o.showMarkers !== undefined && o.showMarkers !== this.showMarkers) {
-      this.showMarkers = o.showMarkers;
+    if ((o.showMarkers !== undefined && o.showMarkers !== this.showMarkers) || (o.showMarkerShapes !== undefined && o.showMarkerShapes !== this.showMarkerShapes)) {
+      this.showMarkers = o.showMarkers ?? this.showMarkers;
+      this.showMarkerShapes = o.showMarkerShapes ?? this.showMarkerShapes;
       for (const e of this.entries.values()) this.applyVisibility(e);
     }
     if (o.cellLighting !== undefined) this.cellLighting = o.cellLighting;
@@ -323,7 +325,11 @@ export class Viewport {
     const set = (o: THREE.Object3D) => {
       if (e.contentKey !== key) return;
       for (const c of [...e.obj.children]) e.obj.remove(c);
-      o.traverse((c) => (c.userData.formKey = e.ref.formKey));
+      o.traverse((c) => {
+        c.userData.formKey = e.ref.formKey;
+        // Editor-only shapes inside meshes (the boxes on effects, markers on furniture) follow the markers toggle.
+        if (c.userData.editorMarker) c.visible = this.markerShapeVisible(e, c);
+      });
       e.obj.add(o);
       e.box?.setFromObject(e.obj);
       this.invalidate(true);
@@ -339,7 +345,14 @@ export class Viewport {
       set(placeholder('marker'));
       void this.assets.mesh(e.ref.model!).then((tpl) => {
         if (this.disposed) return;
-        if (!tpl || !tpl.children.length) set(placeholder('missing'));
+        // An effect (mist, smoke) has nothing drawable here: show its small marker instead of "missing".
+        if (tpl && !tpl.children.length && /^effects[\\/]/i.test(e.ref.model!.replace(/^meshes[\\/]/i, ''))) {
+          const mark = placeholder('marker');
+          mark.userData.editorMarker = true;
+          mark.userData.markerObject = true;
+          set(mark);
+        }
+        else if (!tpl || !tpl.children.length) set(placeholder('missing'));
         else set(tpl.clone());
       });
     }
@@ -401,6 +414,14 @@ export class Viewport {
 
   private applyVisibility(e: Entry): void {
     e.obj.visible = !this.hidden.has(e.ref.formKey) && (this.showMarkers || !(e.ref.marker || e.contentKey === 'marker'));
+    e.obj.traverse((c) => {
+      if (c.userData.editorMarker) c.visible = this.markerShapeVisible(e, c);
+    });
+  }
+
+  /** Marker objects (X markers, effects) show with the markers; marker shapes inside furniture and perches have their own switch. */
+  private markerShapeVisible(e: Entry, c: THREE.Object3D): boolean {
+    return e.ref.marker || c.userData.markerObject ? this.showMarkers : this.showMarkers && this.showMarkerShapes;
   }
 
   private applyTransform(obj: THREE.Object3D, t: Transform): void {
@@ -420,6 +441,31 @@ export class Viewport {
     };
   }
 
+  /** Ground textures per cell, kept across refreshes (the painted layers don't change while sculpting). */
+  private landTextures = new Map<FormKey, Promise<THREE.Texture | null>>();
+
+  private landTexture(cell: FormKey): Promise<THREE.Texture | null> {
+    let p = this.landTextures.get(cell);
+    if (!p) {
+      p = this.client
+        .call('terrainTexture', cell)
+        .then((t) => {
+          if (!t) return null;
+          const tex = new THREE.DataTexture(t.rgba, t.width, t.height, THREE.RGBAFormat);
+          tex.colorSpace = THREE.SRGBColorSpace;
+          tex.magFilter = THREE.LinearFilter;
+          tex.minFilter = THREE.LinearMipmapLinearFilter;
+          tex.generateMipmaps = true;
+          tex.anisotropy = 4;
+          tex.needsUpdate = true;
+          return tex;
+        })
+        .catch(() => null);
+      this.landTextures.set(cell, p);
+    }
+    return p;
+  }
+
   setTerrain(lands: TerrainData[]): void {
     for (const c of [...this.terrainGroup.children]) {
       this.terrainGroup.remove(c);
@@ -428,12 +474,15 @@ export class Viewport {
     for (const land of lands) {
       const pos = new Float32Array(33 * 33 * 3);
       const col = new Float32Array(33 * 33 * 3);
+      const uv = new Float32Array(33 * 33 * 2);
       for (let r = 0; r < 33; r++)
         for (let c = 0; c < 33; c++) {
           const i = r * 33 + c;
           pos.set([land.origin.x + c * 128, land.origin.y + r * 128, land.heights[i]!], i * 3);
+          // Vertex colours (VCLR) shade the ground texture, as in game.
           const k = land.colors ? [land.colors[i * 3]! / 255, land.colors[i * 3 + 1]! / 255, land.colors[i * 3 + 2]! / 255] : [1, 1, 1];
-          col.set([0.42 * k[0]!, 0.5 * k[1]!, 0.32 * k[2]!], i * 3);
+          col.set(k, i * 3);
+          uv.set([c / 32, r / 32], i * 2);
         }
       const idx: number[] = [];
       for (let r = 0; r < 32; r++)
@@ -444,12 +493,23 @@ export class Viewport {
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
       g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
       g.setIndex(idx);
       g.computeVertexNormals();
-      const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 }));
+      // Grass green until the cell's own ground texture arrives (or when it has none).
+      const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, color: new THREE.Color(0.42, 0.5, 0.32) });
+      const m = new THREE.Mesh(g, mat);
       m.userData.terrain = true;
       m.userData.cell = land.cell;
       this.terrainGroup.add(m);
+      if (land.cell)
+        void this.landTexture(land.cell).then((tex) => {
+          if (!tex || this.disposed) return;
+          mat.map = tex;
+          mat.color.setRGB(1, 1, 1);
+          mat.needsUpdate = true;
+          this.invalidate();
+        });
     }
     this.invalidate();
   }

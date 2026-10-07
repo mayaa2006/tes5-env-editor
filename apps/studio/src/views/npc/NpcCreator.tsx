@@ -168,6 +168,9 @@ function Creator({ npc }: { npc: FormKey }) {
   const [sculpt, setSculpt] = useState<FaceSculpt>(emptySculpt());
   const [shapeInfo, setShapeInfo] = useState<{ regions: string[]; extraMorphs: string[] }>({ regions: [], extraMorphs: [] });
   const [tab, setTab] = useState<Tab>('head');
+  // Async loads finish later: they frame the camera for the page showing then, not the one when they started.
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
   const previewEl = useRef<HTMLDivElement>(null);
   const preview = useRef<HeadPreview | null>(null);
   const [missing, setMissing] = useState<string[]>([]);
@@ -198,6 +201,7 @@ function Creator({ npc }: { npc: FormKey }) {
     const p = new HeadPreview(previewEl.current, client);
     p.onShaper = setShapeInfo;
     preview.current = p;
+    (window as unknown as { __headPreview?: HeadPreview }).__headPreview = p;
     return () => {
       p.dispose();
       preview.current = null;
@@ -208,9 +212,16 @@ function Creator({ npc }: { npc: FormKey }) {
     if (!p) return;
     void p.setParts(previewParts).then((r) => {
       setMissing(r.missing);
-      p.frame();
+      p.view(tabRef.current === 'body' ? 'body' : 'head');
     });
   }, [previewParts]);
+  // The body and what they wear by default, so the Body page shows the whole character.
+  const { data: actor } = useQuery(() => client?.call('actorModel', npc), [npc]);
+  const bodyModels = (actor?.parts ?? []).filter((p) => p.kind !== 'head').map((p) => p.model);
+  useEffect(() => {
+    void preview.current?.setBody(bodyModels).then(() => preview.current?.view(tabRef.current === 'body' ? 'body' : 'head'));
+  }, [bodyModels.join('|')]);
+  useEffect(() => preview.current?.view(tab === 'body' ? 'body' : 'head'), [tab]);
   const lookKey = a ? JSON.stringify([a.morphs, a.weight, a.faceParts, sculpt, race]) : '';
   useEffect(() => {
     // The same look the face files are baked from: race shape, weight, presets, vampire morph, sliders and sculpt.

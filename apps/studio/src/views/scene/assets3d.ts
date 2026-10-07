@@ -3,6 +3,7 @@
  * with caching so each file is fetched and uploaded once.
  */
 import * as THREE from 'three';
+import { gameTexturePath } from '@tes5/assets';
 import type { EngineClient } from '../../engine/client';
 import type { MeshPayload, TexturePayload } from '../../engine/host';
 
@@ -34,13 +35,7 @@ const COMPRESSED: Record<string, { format: THREE.CompressedPixelFormat; cap: key
   bc7: { format: THREE.RGBA_BPTC_Format, cap: 'bptc' },
 };
 
-function normalizeTexturePath(p: string): string {
-  return p
-    .replace(/\//g, '\\')
-    .replace(/^.*?\bdata\\/i, '')
-    .replace(/^\\+/, '')
-    .toLowerCase();
-}
+const normalizeTexturePath = gameTexturePath;
 
 export class AssetCache {
   private meshes = new Map<string, Promise<THREE.Group | null>>();
@@ -122,7 +117,13 @@ export class AssetCache {
     const group = new THREE.Group();
     group.name = payload.path;
     for (const w of payload.warnings) this.warnings.add(`${payload.path}: ${w}`);
-    for (const s of payload.shapes) group.add(this.buildShape(s));
+    // Effects (mist, smoke, sparks) are particle systems the editor can't draw; their only shape is an editor box the game never shows.
+    const effect = /^meshes\\effects\\/i.test(payload.path);
+    for (const s of payload.shapes) {
+      const mesh = this.buildShape(s);
+      if (effect && mesh.userData.editorMarker) continue;
+      group.add(mesh);
+    }
     return group;
   }
 
@@ -147,8 +148,27 @@ export class AssetCache {
 
     const m = s.material;
     let mat: THREE.Material;
-    if (m.shader === 'effect') {
-      mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+    // Shapes only the editor shows: the box on effect meshes, furniture and idle markers.
+    const editorMarker = /^(editormarker|marker)/i.test(s.name);
+    if (editorMarker) {
+      mat = MARKER_SHAPE_MAT;
+    } else if (m.water) {
+      mat = WATER_MAT;
+    } else if (m.shader === 'effect') {
+      // Glows, mist, sparks, webs: the texture tinted by the base colour, blended (often additively) over the scene.
+      const base = new THREE.Color(m.emissive[0] || 1, m.emissive[1] || 1, m.emissive[2] || 1).multiplyScalar(Math.max(0.2, Math.min(m.emissiveMultiple || 1, 3)));
+      mat = new THREE.MeshBasicMaterial({
+        color: base,
+        transparent: true,
+        opacity: Math.max(0.05, Math.min(1, m.alpha || 1)),
+        blending: m.additive || !m.alphaBlend ? THREE.AdditiveBlending : THREE.NormalBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        vertexColors: !!geo.getAttribute('color'),
+        alphaTest: m.alphaTest ? Math.max(0.01, m.alphaThreshold / 255) : 0,
+      });
+      // With no texture an effect would be a flat bright sheet; keep it faint.
+      if (!m.textures[0]) (mat as THREE.MeshBasicMaterial).opacity = 0.15;
     } else {
       mat = new THREE.MeshStandardMaterial({
         color: 0xffffff,
@@ -169,7 +189,7 @@ export class AssetCache {
         std.emissiveIntensity = Math.min(2, m.emissiveMultiple);
       }
     }
-    const diffuse = m.textures[0];
+    const diffuse = editorMarker || m.water ? undefined : m.textures[0];
     if (diffuse) {
       void this.texture(diffuse).then((t) => {
         if (!t) return;
@@ -184,6 +204,7 @@ export class AssetCache {
     }
     const mesh = new THREE.Mesh(geo, mat);
     mesh.name = s.name;
+    if (editorMarker) mesh.userData.editorMarker = true;
     mesh.matrixAutoUpdate = false;
     mesh.matrix.fromArray(s.matrix);
     mesh.updateMatrixWorld(true);
@@ -215,6 +236,10 @@ export class AssetCache {
 }
 
 // ------------------------------------------------------------------ editor-only shapes
+
+const MARKER_SHAPE_MAT = new THREE.MeshBasicMaterial({ color: 0xff9a3c, transparent: true, opacity: 0.55, depthWrite: false, wireframe: true });
+/** Water surfaces (rivers, troughs): the game's water shader is out of reach, so a calm translucent blue. */
+const WATER_MAT = new THREE.MeshStandardMaterial({ color: 0x2f5f7a, roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.6, depthWrite: false, side: THREE.DoubleSide });
 
 const markerMats = new Map<number, THREE.Material>();
 function markerMat(color: number): THREE.Material {

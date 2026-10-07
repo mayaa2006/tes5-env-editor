@@ -4,7 +4,7 @@
  * demo runs it in-page against an in-memory demo data set. Every method takes
  * and returns structured-clone friendly values.
  */
-import { decodeToRgba, flattenMeshes, isCompressed, parseDds, parseNif, parseTri, type NifMaterial } from '@tes5/assets';
+import { decodeToRgba, flattenMeshes, gameTexturePath, isCompressed, parseDds, parseNif, parseTri, type NifMaterial } from '@tes5/assets';
 import { allConditionFunctions, isFormKey, newCondition, parseFormKey, recordTypeName, type FormKey, type Navmesh, type VmadProperty } from '@tes5/esp';
 import { validateNavmesh } from '@tes5/navmesh';
 import {
@@ -60,6 +60,7 @@ import {
   WorldService,
   Workspace,
   TerrainService,
+  LandTextureBaker,
   ActorModels,
   type SculptMode,
   CREATABLE_TYPES,
@@ -154,6 +155,7 @@ export class EngineHost {
   ws?: Workspace;
   world?: WorldService;
   terrainService?: TerrainService;
+  landTextures?: LandTextureBaker;
   actorModels?: ActorModels;
   npcs?: NpcService;
   faces?: FaceGenService;
@@ -229,6 +231,7 @@ export class EngineHost {
     this.ws = ws;
     this.world = new WorldService(ws);
     this.terrainService = new TerrainService(ws, this.world);
+    this.landTextures = new LandTextureBaker(ws, this.world);
     this.npcs = new NpcService(ws);
     this.actorModels = new ActorModels(ws, this.npcs);
     this.faces = new FaceGenService(ws, this.npcs);
@@ -466,6 +469,11 @@ export class EngineHost {
   }
 
   /** Raise, lower, smooth or flatten the terrain along a brush stroke (one undo step). Returns the cells changed. */
+  /** The cell's ground texture layers blended into one picture (rows south → north), or null when it has none. */
+  async terrainTexture(cell: FormKey) {
+    return (await this.landTextures!.bake(cell)) ?? null;
+  }
+
   sculptTerrain(cell: FormKey, points: { x: number; y: number }[], opts: { mode: SculptMode; radius: number; strength: number }) {
     return this.terrainService!.sculpt(cell, points, opts);
   }
@@ -593,8 +601,7 @@ export class EngineHost {
    * without S3TC/BPTC support. Uncompressed formats are always decoded.
    */
   async texture(path: string, decode = false): Promise<TexturePayload> {
-    const p = path.toLowerCase().replace(/\//g, '\\');
-    const full = p.startsWith('textures\\') ? p : `textures\\${p}`;
+    const full = gameTexturePath(path);
     const dds = parseDds(await this.requireWs().vfs.read(full));
     const top = dds.mipmaps[0];
     return {

@@ -190,11 +190,12 @@ export default function SceneView() {
   useEffect(() => {
     vpRef.current?.setOptions({
       showMarkers: settings.showMarkers,
+      showMarkerShapes: settings.showMarkerShapes ?? false,
       cellLighting,
       ambient: lighting?.ambient ? [lighting.ambient.r, lighting.ambient.g, lighting.ambient.b] : null,
       snap: { move: settings.snapMove, rotateDeg: settings.snapRotateDeg, scale: settings.snapScale },
     });
-  }, [settings.showMarkers, settings.snapMove, settings.snapRotateDeg, settings.snapScale, cellLighting, lighting]);
+  }, [settings.showMarkers, settings.showMarkerShapes, settings.snapMove, settings.snapRotateDeg, settings.snapScale, cellLighting, lighting]);
   useEffect(() => {
     if (navEdit) vpRef.current?.setNavEdit(null);
     setNavEdit(null);
@@ -307,6 +308,14 @@ export default function SceneView() {
               <div className="menu-label">Show</div>
               <MenuItem checked={settings.showMarkers} onClick={() => useStore.getState().updateSettings({ showMarkers: !settings.showMarkers })}>
                 Editor markers
+              </MenuItem>
+              <MenuItem
+                checked={settings.showMarkerShapes ?? false}
+                disabled={!settings.showMarkers}
+                title="The outlines some furniture, perches and props carry for the editor (where to lean, sit or land). The game never shows them."
+                onClick={() => useStore.getState().updateSettings({ showMarkerShapes: !(settings.showMarkerShapes ?? false) })}
+              >
+                Marker shapes on furniture
               </MenuItem>
               <MenuItem checked={cellLighting} onClick={() => setCellLighting(!cellLighting)} title="Preview the cell's own ambient light and light sources">
                 Cell lighting preview
