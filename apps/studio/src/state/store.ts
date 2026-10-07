@@ -3,7 +3,13 @@ import type { FormKey } from '@tes5/esp';
 import type { EngineClient } from '../engine/client';
 import type { SessionInfo } from '../engine/host';
 
-export type WorkspaceTab = 'scene' | 'npc' | 'quest' | 'script' | 'records' | 'clean' | 'automations' | 'plugins' | 'release';
+export type WorkspaceTab = 'scene' | 'npc' | 'items' | 'magic' | 'quest' | 'script' | 'records' | 'clean' | 'automations' | 'plugins' | 'release';
+
+/** Where you are in the Items or Magic workspace: the category and the record open in it. */
+export interface CatalogPlace {
+  category: string;
+  record?: FormKey;
+}
 
 export interface Toast {
   id: number;
@@ -54,7 +60,7 @@ const DEFAULT_SETTINGS: Settings = {
   snapScale: 0.1,
   showMarkers: true,
   kitSnap: true,
-  inspector: { npc: false, quest: false },
+  inspector: { npc: false, quest: false, items: false, magic: false },
   textured: true,
   mo2Executable: 'SKSE',
   mo2Exe: '',
@@ -81,6 +87,7 @@ interface Store {
   quest?: FormKey;
   npc?: FormKey;
   script?: string;
+  catalog: { items: CatalogPlace; magic: CatalogPlace };
   /** Bumped whenever the engine reports a change; views re-query on change. */
   revision: number;
   toasts: Toast[];
@@ -102,6 +109,8 @@ interface Store {
   setCell(k?: FormKey): void;
   setQuest(k?: FormKey): void;
   setNpc(k?: FormKey): void;
+  /** Open a category (and optionally a record) in the Items or Magic workspace. */
+  openCatalog(tab: 'items' | 'magic', place: Partial<CatalogPlace>): void;
   setScript(n?: string): void;
   bump(): void;
   toast(kind: Toast['kind'], text: string): void;
@@ -118,6 +127,7 @@ export const useStore = create<Store>((set, get) => ({
   session: { open: false, dirty: false, canUndo: false, canRedo: false, loadOrder: [] },
   tab: 'scene',
   sceneSelection: [],
+  catalog: { items: { category: 'weapons' }, magic: { category: 'spells' } },
   revision: 0,
   toasts: [],
   log: [],
@@ -136,6 +146,12 @@ export const useStore = create<Store>((set, get) => ({
   setCell: (cell) => set({ cell, sceneSelection: [] }),
   setQuest: (quest) => set({ quest, selected: quest }),
   setNpc: (npc) => set({ npc, selected: npc }),
+  openCatalog: (tab, place) => {
+    const cur = get().catalog[tab];
+    const next = { ...cur, ...place };
+    if (place.category && place.category !== cur.category && !('record' in place)) next.record = undefined;
+    set({ catalog: { ...get().catalog, [tab]: next } });
+  },
   setScript: (script) => set({ script }),
   bump: () => set({ revision: get().revision + 1 }),
   toast: (kind, text) => {

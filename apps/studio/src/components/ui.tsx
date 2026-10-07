@@ -43,6 +43,8 @@ export function useDebounced<T>(value: T, ms = 200): T {
 const ICONS: Record<string, string> = {
   scene: 'M3 17l6-10 4 6 3-4 5 8z',
   npc: 'M12 12a4 4 0 100-8 4 4 0 000 8zm-7 9a7 7 0 0114 0z',
+  items: 'M4 8l8-4 8 4v9l-8 4-8-4zM4 8l8 4 8-4M12 12v9',
+  magic: 'M12 3l2.2 5.8L20 9.5l-4.5 3.8L17 19l-5-3.2L7 19l1.5-5.7L4 9.5l5.8-.7z',
   quest: 'M6 3h10l3 3v15H6zM9 9h7M9 13h7M9 17h4',
   script: 'M8 6l-5 6 5 6M16 6l5 6-5 6M14 4l-4 16',
   records: 'M4 5h16M4 10h16M4 15h16M4 20h10',
@@ -407,7 +409,17 @@ export function FormPicker({ value, sigs, onChange, placeholder, allowNone = tru
     <div ref={ref} style={{ position: 'relative' }}>
       <div className="row">
         <button className="input" style={{ textAlign: 'left', cursor: 'pointer' }} onClick={() => setOpen(!open)} title={value ?? ''}>
-          {value ? (cur?.editorId ?? cur?.name ?? value) : <span className="faint">{placeholder ?? 'None'}</span>}
+          {value ? (
+            cur?.name ? (
+              <>
+                {cur.name} <span className="faint small">{cur.editorId}</span>
+              </>
+            ) : (
+              (cur?.editorId ?? value)
+            )
+          ) : (
+            <span className="faint">{placeholder ?? 'None'}</span>
+          )}
         </button>
         {value && (
           <button className="btn icon ghost" title="Show its properties" onClick={() => useStore.getState().showProperties(value)}>
@@ -442,8 +454,8 @@ export function FormPicker({ value, sigs, onChange, placeholder, allowNone = tru
                 }}
               >
                 <span className="sig">{i.sig}</span>
-                <span className="name">{i.editorId ?? i.formKey}</span>
-                {i.name && <span className="meta">{i.name}</span>}
+                <span className="name">{i.name || i.editorId || i.formKey}</span>
+                {i.name && i.editorId && <span className="meta">{i.editorId}</span>}
               </li>
             ))}
             {data && data.total > data.items.length && <li className="list-item dim">{data.total - data.items.length} more…</li>}

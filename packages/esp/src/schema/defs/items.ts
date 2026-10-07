@@ -189,7 +189,8 @@ export const BOOK: RecordDef = record(
       struct([
         ['flags', 'Flags', flags('u8', flagList('Teaches Skill', "Can't be Taken", 'Teaches Spell'))],
         ['type', 'Type', bytes(3, { hidden: true })],
-        ['teaches', 'Skill / Spell', u32()],
+        // A skill (actor value) for skill books, a spell for spell tomes.
+        ['teaches', 'Skill / Spell', union(({ parent }) => (Number(parent?.flags ?? 0) & 4 ? 1 : 0), [u32(), formid(['SPEL'])])],
         ['value', 'Value', u32()],
         ['weight', 'Weight', f32()],
       ]),

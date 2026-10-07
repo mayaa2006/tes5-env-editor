@@ -1319,3 +1319,79 @@ table.grid tr.diff td {
 .always-list li.question svg {
   color: var(--warn);
 }
+
+/* ------------------------------------------------------------------ Items & Magic workspaces */
+.catalog-categories {
+  width: 190px;
+}
+.catalog-list {
+  width: 300px;
+}
+.catalog-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  padding: 5px 10px;
+}
+.catalog-row .name {
+  font-weight: 500;
+}
+.catalog-editor {
+  max-width: 1000px;
+}
+.catalog-editor h2 {
+  font-size: 18px;
+  font-weight: 600;
+}
+.catalog-section + .catalog-section {
+  padding-top: 0;
+}
+.catalog-grid2,
+.catalog-grid3 {
+  display: grid;
+  gap: 4px 14px;
+  margin-bottom: 6px;
+}
+.catalog-grid2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.catalog-grid3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.catalog-grid2 .field,
+.catalog-grid3 .field,
+.catalog-editor .field.stack {
+  grid-template-columns: 1fr;
+  gap: 3px;
+}
+.catalog-effect {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.catalog-subcard {
+  border-left: 2px solid var(--border);
+  padding-left: 8px;
+  margin: 6px 0;
+}
+.catalog-table td {
+  vertical-align: middle;
+}
+.catalog-flags {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 4px 12px;
+  margin-top: 8px;
+}
+@media (max-width: 1440px) {
+  .catalog-categories {
+    width: 160px;
+  }
+  .catalog-list {
+    width: 250px;
+  }
+  .catalog-grid3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

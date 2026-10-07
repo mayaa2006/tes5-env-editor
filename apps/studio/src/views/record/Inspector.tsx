@@ -21,9 +21,7 @@ export function Inspector() {
   const { data: view } = useQuery(() => (selected ? client?.call('view', selected) : undefined), [selected]);
   const { data: schema } = useQuery(() => (view ? client?.call('uiSchema', view.sig) : undefined), [view?.sig], { revision: false });
   const [draft, setDraft] = useState<Record<string, unknown> | undefined>(view?.data);
-  const [refs, setRefs] = useState<RecordSummary[] | null>(null);
   useEffect(() => setDraft(view?.data), [view]);
-  useEffect(() => setRefs(null), [selected]);
 
   if (!selected) return <div className="empty">Select something to see its properties.</div>;
   if (!view) return <div className="empty">Loading…</div>;
@@ -33,7 +31,6 @@ export function Inspector() {
     await engine((c) => c.call('updateRecord', view.formKey, data, { unknown: view.unknown, label: `Edit ${view.editorId ?? view.typeName}` }));
   };
   const isRef = REF_SIGS.has(view.sig);
-  const newHere = view.owner === session.activePlugin;
 
   return (
     <div className="panel" data-testid="inspector">
@@ -50,41 +47,7 @@ export function Inspector() {
             Your first edit will ask you to create a plugin to hold your changes.
           </div>
         )}
-        <div className="row wrap pad" style={{ paddingTop: 0, gap: 4 }}>
-          <button className="btn small" title="Make a copy as a new form" onClick={() => duplicate(view)}>
-            <Icon name="copy" size={12} /> Duplicate
-          </button>
-          <button
-            className="btn small"
-            title={newHere ? 'Remove this new form' : isRef ? 'Disable this reference (safe delete)' : 'Remove your override of this form'}
-            onClick={async () => {
-              const r = await engine((c) => c.call('deleteRecord', view.formKey));
-              if (r) useStore.getState().toast('success', r === 'disabled' ? 'Reference disabled (deleting master references crashes the game)' : r === 'reverted' ? 'Override removed' : 'Deleted');
-              if (r === 'removed' || r === 'reverted') useStore.getState().select(r === 'reverted' ? view.formKey : undefined);
-            }}
-          >
-            <Icon name="trash" size={12} /> {newHere ? 'Delete' : isRef ? 'Disable' : 'Revert'}
-          </button>
-          {view.inActive && !newHere && isRef && (
-            <button className="btn small ghost" title="Drop your changes to this reference" onClick={() => engine((c) => c.call('revertRecord', view.formKey), { success: 'Reverted' })}>
-              Revert
-            </button>
-          )}
-          <button className="btn small ghost" onClick={async () => setRefs((await engine((c) => c.call('findReferences', view.formKey), { refreshSession: false })) ?? [])}>
-            <Icon name="link" size={12} /> Used by…
-          </button>
-          {view.sig === 'NPC_' && (
-            <button className="btn small ghost" onClick={() => (useStore.getState().setNpc(view.formKey), useStore.getState().setTab('npc'))}>
-              <Icon name="npc" size={12} /> Character creator
-            </button>
-          )}
-          {view.sig === 'QUST' && (
-            <button className="btn small ghost" onClick={() => (useStore.getState().setQuest(view.formKey), useStore.getState().setTab('quest'))}>
-              <Icon name="quest" size={12} /> Quest designer
-            </button>
-          )}
-        </div>
-        {refs && <References refs={refs} onClose={() => setRefs(null)} />}
+        <RecordActions view={view} onSelect={(k) => useStore.getState().select(k)} />
         {view.errors.length > 0 && (
           <div className="pad small warn" style={{ paddingTop: 0 }}>
             {view.errors.map((e) => (
@@ -115,12 +78,79 @@ export function Inspector() {
   );
 }
 
-async function duplicate(view: RecordView) {
+async function duplicate(view: RecordView, onSelect: (k: FormKey) => void) {
   const key = await engine((c) => c.call('duplicateRecord', view.formKey), { success: `Duplicated ${view.editorId ?? view.formKey}` });
-  if (key) useStore.getState().select(key);
+  if (key) onSelect(key);
 }
 
-function Header({ view }: { view: RecordView }) {
+/** Duplicate, delete/revert, "Used by…" and links to the dedicated editors, for any record. */
+export function RecordActions({ view, onSelect }: { view: RecordView; onSelect: (k: FormKey | undefined) => void }) {
+  const session = useStore((s) => s.session);
+  const [refs, setRefs] = useState<RecordSummary[] | null>(null);
+  useEffect(() => setRefs(null), [view.formKey]);
+  const isRef = REF_SIGS.has(view.sig);
+  const newHere = view.owner === session.activePlugin;
+  const category = categoryLink(view);
+  return (
+    <>
+      <div className="row wrap pad" style={{ paddingTop: 0, gap: 4 }}>
+        <button className="btn small" title="Make a copy as a new form" onClick={() => duplicate(view, onSelect)}>
+          <Icon name="copy" size={12} /> Duplicate
+        </button>
+        <button
+          className="btn small"
+          title={newHere ? 'Remove this new form' : isRef ? 'Disable this reference (safe delete)' : 'Remove your override of this form'}
+          onClick={async () => {
+            const r = await engine((c) => c.call('deleteRecord', view.formKey));
+            if (r) useStore.getState().toast('success', r === 'disabled' ? 'Reference disabled (deleting master references crashes the game)' : r === 'reverted' ? 'Override removed' : 'Deleted');
+            if (r === 'removed') onSelect(undefined);
+          }}
+        >
+          <Icon name="trash" size={12} /> {newHere ? 'Delete' : isRef ? 'Disable' : 'Revert'}
+        </button>
+        {view.inActive && !newHere && isRef && (
+          <button className="btn small ghost" title="Drop your changes to this reference" onClick={() => engine((c) => c.call('revertRecord', view.formKey), { success: 'Reverted' })}>
+            Revert
+          </button>
+        )}
+        <button className="btn small ghost" onClick={async () => setRefs((await engine((c) => c.call('findReferences', view.formKey), { refreshSession: false })) ?? [])}>
+          <Icon name="link" size={12} /> Used by…
+        </button>
+        {view.sig === 'NPC_' && (
+          <button className="btn small ghost" onClick={() => (useStore.getState().setNpc(view.formKey), useStore.getState().setTab('npc'))}>
+            <Icon name="npc" size={12} /> Character creator
+          </button>
+        )}
+        {view.sig === 'QUST' && (
+          <button className="btn small ghost" onClick={() => (useStore.getState().setQuest(view.formKey), useStore.getState().setTab('quest'))}>
+            <Icon name="quest" size={12} /> Quest designer
+          </button>
+        )}
+      </div>
+      {refs && <References refs={refs} onClose={() => setRefs(null)} onSelect={onSelect} />}
+    </>
+  );
+}
+
+/** Items/Magic workspace that has a dedicated editor for this record, if any. */
+function categoryLink(view: RecordView): { tab: 'items' | 'magic'; label: string } | null {
+  const items = ['WEAP', 'ARMO', 'ALCH', 'INGR', 'BOOK', 'SCRL', 'AMMO', 'KEYM', 'SLGM', 'MISC', 'APPA', 'LVLI', 'COBJ', 'OTFT'];
+  const magic = ['SPEL', 'MGEF', 'ENCH', 'SHOU', 'WOOP', 'PERK', 'LVSP'];
+  if (items.includes(view.sig)) return { tab: 'items', label: 'Open in Items' };
+  if (magic.includes(view.sig)) return { tab: 'magic', label: 'Open in Magic' };
+  return null;
+}
+
+async function openInCatalog(key: FormKey) {
+  const where = await engine((c) => c.call('categoryOf', key), { refreshSession: false });
+  if (!where) return;
+  const s = useStore.getState();
+  s.openCatalog(where.tab, { category: where.id, record: key });
+  s.setTab(where.tab);
+}
+
+
+export function Header({ view }: { view: RecordView }) {
   const client = useStore((s) => s.client);
   const { data: runtime } = useQuery(() => client?.call('runtimeFormId', view.formKey), [view.formKey]);
   return (
@@ -214,8 +244,8 @@ function RawView({ view, note }: { view: RecordView; note: string }) {
   );
 }
 
-function References({ refs, onClose }: { refs: RecordSummary[]; onClose: () => void }) {
-  const select = useStore((s) => s.select);
+function References({ refs, onClose, onSelect }: { refs: RecordSummary[]; onClose: () => void; onSelect: (k: FormKey) => void }) {
+  const select = onSelect;
   return (
     <div className="pad" style={{ paddingTop: 0 }}>
       <div className="card" style={{ padding: 0 }}>

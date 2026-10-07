@@ -143,8 +143,25 @@ export function blankRecordData(ws: Workspace, sig: string, editorId?: string): 
   return data;
 }
 
-/** Create a new record of the given type in the active plugin (one undo step). */
-export function createBlankRecord(ws: Workspace, sig: string, editorId?: string): FormKey {
-  if (!isCreatable(sig)) throw new Error(`New ${sig} records can't be created here yet; duplicate an existing one instead.`);
-  return ws.createRecord(sig, blankRecordData(ws, sig, editorId));
+/** Shallow-merge `patch` into `data`, one level deep for nested objects. */
+function mergeInto(data: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...data };
+  for (const [k, v] of Object.entries(patch)) {
+    const cur = out[k];
+    out[k] = v && typeof v === 'object' && !Array.isArray(v) && cur && typeof cur === 'object' && !Array.isArray(cur) ? { ...(cur as object), ...(v as object) } : v;
+  }
+  return out;
 }
+
+/** Create a new record of the given type in the active plugin (one undo step). */
+export function createBlankRecord(ws: Workspace, sig: string, editorId?: string, patch: Record<string, unknown> = {}): FormKey {
+  if (!isCreatable(sig)) throw new Error(`New ${sig} records can't be created here yet; duplicate an existing one instead.`);
+  return ws.createRecord(sig, mergeInto(blankRecordData(ws, sig, editorId), patch));
+}
+
+/** Starting values for a new record in a catalog category (e.g. a new power is a greater power cast on yourself). */
+export const CATEGORY_PRESETS: Record<string, { name?: string; editorId?: string; patch: Record<string, unknown> }> = {
+  powers: { name: 'New Power', editorId: 'NewPower', patch: { data: { type: 2, castingType: 1, delivery: 0, chargeTime: 0 } } },
+  abilities: { name: 'New Ability', editorId: 'NewAbility', patch: { data: { type: 4, castingType: 0, delivery: 0, chargeTime: 0 }, equipType: null } },
+  afflictions: { name: 'New Disease', editorId: 'NewDisease', patch: { data: { type: 1, castingType: 0, delivery: 1, chargeTime: 0 }, equipType: null } },
+};

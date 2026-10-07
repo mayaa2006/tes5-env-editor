@@ -6,7 +6,8 @@ import { NewCellDialog } from './scene/NewCellDialog';
 type Tab = 'objects' | 'cells' | 'assets';
 
 /** Base object types that can be placed in the world by drag & drop. */
-export const PLACEABLE = ['STAT', 'MSTT', 'FURN', 'ACTI', 'CONT', 'DOOR', 'LIGH', 'TREE', 'FLOR', 'MISC', 'WEAP', 'ARMO', 'BOOK', 'KEYM', 'NPC_', 'SCOL', 'ALCH', 'INGR', 'AMMO', 'SLGM'];
+export const PLACEABLE = ['STAT', 'MSTT', 'FURN', 'ACTI', 'CONT', 'DOOR', 'LIGH', 'TREE', 'FLOR', 'MISC', 'WEAP', 'ARMO', 'BOOK', 'KEYM', 'NPC_', 'SCOL', 'ALCH', 'INGR', 'AMMO', 'SLGM', 'SCRL', 'APPA'];
+const ITEM_SIGS = ['WEAP', 'ARMO', 'ALCH', 'INGR', 'BOOK', 'SCRL', 'AMMO', 'KEYM', 'SLGM', 'MISC', 'APPA'];
 
 export function ObjectBrowser() {
   const tab = useStore((s) => s.tab);
@@ -40,13 +41,14 @@ function Objects() {
   const dq = useDebounced(q);
   const { data: types } = useQuery(() => client?.call('recordTypes'), [client]);
   const { data: list } = useQuery(() => client?.call('search', { sigs: sig ? [sig] : undefined, query: dq, limit: 400 }), [sig, dq]);
+  // Only things you can place in the world; everything else has its own workspace.
   const grouped = useMemo(() => {
-    const m = new Map<string, NonNullable<typeof types>>();
-    for (const t of types ?? []) {
-      if (!m.has(t.category)) m.set(t.category, []);
-      m.get(t.category)!.push(t);
-    }
-    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    const world = (types ?? []).filter((t) => PLACEABLE.includes(t.sig) && !ITEM_SIGS.includes(t.sig));
+    const items = (types ?? []).filter((t) => ITEM_SIGS.includes(t.sig));
+    return [
+      ['World objects', world],
+      ['Items (drag to place, edit in the Items tab)', items],
+    ] as const;
   }, [types]);
   const current = types?.find((t) => t.sig === sig);
   const typeName = current?.name ?? sig;
@@ -93,7 +95,17 @@ function Objects() {
           </button>
         </div>
         <input className="input" placeholder="Filter by name or Editor ID…" value={q} onChange={(e) => setQ(e.target.value)} />
-        {PLACEABLE.includes(sig) && <div className="faint small">Drag one into the 3D view to place it.</div>}
+        <div className="faint small">
+          Drag one into the 3D view to place it. Spells, perks, recipes and loot lists are in the{' '}
+          <a href="#" onClick={(e) => (e.preventDefault(), useStore.getState().setTab('items'))}>
+            Items
+          </a>{' '}
+          and{' '}
+          <a href="#" onClick={(e) => (e.preventDefault(), useStore.getState().setTab('magic'))}>
+            Magic
+          </a>{' '}
+          tabs.
+        </div>
       </div>
       <ul className="list scroll" style={{ flex: 1 }} data-testid="object-list">
         {list?.items.map((i) => (

@@ -30,3 +30,4 @@ export * from './faceshape';
 export * from './facegen';
 export * from './facekit';
 export * from './newrecord';
+export * from './catalog';

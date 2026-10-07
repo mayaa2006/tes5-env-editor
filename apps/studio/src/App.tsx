@@ -13,21 +13,24 @@ const NpcCreator = lazy(() => import('./views/npc/NpcCreator'));
 const QuestDesigner = lazy(() => import('./views/quest/QuestDesigner'));
 const ScriptEditor = lazy(() => import('./views/script/ScriptEditor'));
 const RecordsView = lazy(() => import('./views/record/RecordsView'));
+const CatalogView = lazy(() => import('./views/catalog/CatalogView'));
 const CleanerView = lazy(() => import('./views/CleanerView'));
 const AutomationsView = lazy(() => import('./views/AutomationsView'));
 const ReleaseView = lazy(() => import('./views/ReleaseView'));
 const ScriptList = lazy(() => import('./views/script/ScriptList'));
 
-const TABS: { id: WorkspaceTab; label: string; icon: string; key: string }[] = [
-  { id: 'scene', label: 'World', icon: 'scene', key: '1' },
-  { id: 'npc', label: 'Characters', icon: 'npc', key: '2' },
-  { id: 'quest', label: 'Quests', icon: 'quest', key: '3' },
-  { id: 'script', label: 'Scripts', icon: 'script', key: '4' },
-  { id: 'records', label: 'Records', icon: 'records', key: '5' },
-  { id: 'clean', label: 'Clean', icon: 'clean', key: '6' },
-  { id: 'automations', label: 'Automations', icon: 'auto', key: '7' },
-  { id: 'plugins', label: 'Plugins', icon: 'plugins', key: '8' },
-  { id: 'release', label: 'Release', icon: 'flag', key: '9' },
+const TABS: { id: WorkspaceTab; label: string; icon: string; key?: string; hint: string }[] = [
+  { id: 'scene', label: 'World', icon: 'scene', key: '1', hint: 'Cells, placing objects, navmesh and world tools' },
+  { id: 'npc', label: 'Characters', icon: 'npc', key: '2', hint: 'Characters: look, face, outfit, inventory and routine' },
+  { id: 'items', label: 'Items', icon: 'items', key: '3', hint: 'Weapons, armor, potions, books, loot lists and crafting recipes' },
+  { id: 'magic', label: 'Magic', icon: 'magic', key: '4', hint: 'Spells, powers, abilities, enchantments, shouts and perks' },
+  { id: 'quest', label: 'Quests', icon: 'quest', key: '5', hint: 'Quest map, dialogue and quests from writing' },
+  { id: 'script', label: 'Scripts', icon: 'script', key: '6', hint: 'Papyrus scripts' },
+  { id: 'records', label: 'Records', icon: 'records', key: '7', hint: 'Every record of every type, and how plugins conflict' },
+  { id: 'clean', label: 'Clean', icon: 'clean', key: '8', hint: 'Clean dirty edits from a plugin' },
+  { id: 'automations', label: 'Automations', icon: 'auto', key: '9', hint: 'What happens automatically on save' },
+  { id: 'plugins', label: 'Plugins', icon: 'plugins', key: '0', hint: 'Load order and the plugin you edit' },
+  { id: 'release', label: 'Release', icon: 'flag', hint: 'Check and pack your mod for sharing' },
 ];
 
 export function App() {
@@ -39,7 +42,7 @@ export function App() {
   const [savePrompt, setSavePrompt] = useState(false);
   const pluginPrompt = useStore((s) => s.pluginPrompt);
   const loaded = session.open && session.loadOrder.some((p) => p.loaded);
-  const inspectorOpen = useStore((s) => s.settings.inspector[s.tab] !== false);
+  const inspectorOpen = useStore((s) => s.settings.inspector[s.tab] ?? !CLOSED_BY_DEFAULT.has(s.tab));
 
   useEffect(() => {
     if (!client) return;
@@ -85,7 +88,7 @@ export function App() {
       'ctrl+z': () => void engine((c) => c.call('undo')),
       'ctrl+shift+z': () => void engine((c) => c.call('redo')),
       'ctrl+y': () => void engine((c) => c.call('redo')),
-      ...Object.fromEntries(TABS.map((t) => [`ctrl+${t.key}`, () => setTab(t.id)])),
+      ...Object.fromEntries(TABS.filter((t) => t.key).map((t) => [`ctrl+${t.key}`, () => setTab(t.id)])),
     },
     [session.activePlugin],
   );
@@ -116,6 +119,8 @@ export function App() {
           <Suspense fallback={<div className="empty">Loading…</div>}>
             {tab === 'scene' && <SceneView />}
             {tab === 'npc' && <NpcCreator />}
+            {tab === 'items' && <CatalogView key="items" tab="items" />}
+            {tab === 'magic' && <CatalogView key="magic" tab="magic" />}
             {tab === 'quest' && <QuestDesigner />}
             {tab === 'script' && <ScriptEditor />}
             {tab === 'records' && <RecordsView />}
@@ -151,8 +156,11 @@ export function App() {
   );
 }
 
+/** Workspaces whose properties panel starts closed (they have their own editor; the panel shows linked forms). */
+const CLOSED_BY_DEFAULT = new Set<WorkspaceTab>(['npc', 'quest', 'items', 'magic']);
+
 /** Workspaces with a properties panel on the right. */
-const hasInspector = (tab: WorkspaceTab) => tab === 'scene' || tab === 'npc' || tab === 'quest' || tab === 'records';
+const hasInspector = (tab: WorkspaceTab) => tab === 'scene' || tab === 'npc' || tab === 'items' || tab === 'magic' || tab === 'quest' || tab === 'records';
 
 function ScriptSidebar() {
   return (
@@ -176,7 +184,7 @@ function TopBar({ onSave }: { onSave: () => void }) {
       {loaded && (
         <nav className="workspace-tabs" aria-label="Workspaces">
           {TABS.map((t) => (
-            <button key={t.id} className={`workspace-tab ${tab === t.id ? 'active' : ''}`} onClick={() => setTab(t.id)} title={`${t.label} (Ctrl+${t.key})`}>
+            <button key={t.id} className={`workspace-tab ${tab === t.id ? 'active' : ''}`} onClick={() => setTab(t.id)} title={`${t.hint}${t.key ? ` (Ctrl+${t.key})` : ''}`}>
               <Icon name={t.icon} size={14} />
               {t.label}
             </button>
@@ -208,7 +216,7 @@ function TopBar({ onSave }: { onSave: () => void }) {
 }
 
 function PropertiesToggle() {
-  const open = useStore((s) => s.settings.inspector[s.tab] !== false);
+  const open = useStore((s) => s.settings.inspector[s.tab] ?? !CLOSED_BY_DEFAULT.has(s.tab));
   return (
     <button className={`btn ghost ${open ? 'active' : ''}`} aria-pressed={open} title={open ? 'Hide the properties panel' : 'Show the properties panel (every field of the selected form)'} onClick={() => useStore.getState().setInspector(!open)} data-testid="toggle-properties">
       <Icon name="sliders" /> <span className="hide-narrow">Properties</span>
