@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Icon, Tabs, useDebounced, useQuery } from '../components/ui';
-import { useStore } from '../state/store';
+import { engine, useStore } from '../state/store';
 import { NewCellDialog } from './scene/NewCellDialog';
 
 type Tab = 'objects' | 'cells' | 'assets';
@@ -32,7 +32,9 @@ export function ObjectBrowser() {
 function Objects() {
   const client = useStore((s) => s.client);
   const select = useStore((s) => s.select);
+  const showProperties = useStore((s) => s.showProperties);
   const selected = useStore((s) => s.selected);
+  const activePlugin = useStore((s) => s.session.activePlugin);
   const [sig, setSig] = useState<string>('STAT');
   const [q, setQ] = useState('');
   const dq = useDebounced(q);
@@ -46,20 +48,50 @@ function Objects() {
     }
     return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [types]);
+  const current = types?.find((t) => t.sig === sig);
+  const typeName = current?.name ?? sig;
+  const create = async () => {
+    // Selecting inside the call means it also happens when the call is retried after choosing a plugin.
+    await engine(
+      async (c) => {
+        const key = await c.call('createBlankRecord', sig);
+        showProperties(key);
+        return key;
+      },
+      { success: `Created a new ${typeName}. Fill it in on the right; Ctrl+Z undoes it.` },
+    );
+  };
   return (
     <div className="panel" style={{ minHeight: 0 }}>
       <div className="searchbox col" style={{ gap: 4 }}>
-        <select className="input" value={sig} onChange={(e) => setSig(e.target.value)} title="Kind of object">
-          {grouped.map(([cat, ts]) => (
-            <optgroup key={cat} label={cat}>
-              {ts.map((t) => (
-                <option key={t.sig} value={t.sig}>
-                  {t.name} ({t.count})
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
+        <div className="row" style={{ gap: 4 }}>
+          <select className="input grow" value={sig} onChange={(e) => setSig(e.target.value)} title="Kind of object" data-testid="object-type">
+            {grouped.map(([cat, ts]) => (
+              <optgroup key={cat} label={cat}>
+                {ts.map((t) => (
+                  <option key={t.sig} value={t.sig}>
+                    {t.name} ({t.count})
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+          <button
+            className="btn small"
+            data-testid="new-object"
+            disabled={!current?.creatable}
+            onClick={create}
+            title={
+              !current?.creatable
+                ? `New ${typeName} records are made elsewhere (placed in a cell, or part of a quest or topic). Select an existing one and use Duplicate instead.`
+                : activePlugin
+                  ? `Create a new ${typeName} in ${activePlugin} with sensible defaults and open it in the properties panel. Ctrl+Z undoes it.`
+                  : `Create a new ${typeName}. You'll be asked which plugin to put it in first.`
+            }
+          >
+            <Icon name="plus" size={12} /> New
+          </button>
+        </div>
         <input className="input" placeholder="Filter by name or Editor ID…" value={q} onChange={(e) => setQ(e.target.value)} />
         {PLACEABLE.includes(sig) && <div className="faint small">Drag one into the 3D view to place it.</div>}
       </div>
@@ -82,7 +114,11 @@ function Objects() {
           </li>
         ))}
         {list && list.total > list.items.length && <li className="list-item dim">Showing {list.items.length} of {list.total}. Refine the filter.</li>}
-        {list && !list.items.length && <li className="empty">Nothing found</li>}
+        {list && !list.items.length && (
+          <li className="empty">
+            {q ? 'Nothing matches that filter.' : current?.creatable ? `No ${typeName} records in your load order yet. Click New to make one.` : 'Nothing found'}
+          </li>
+        )}
       </ul>
     </div>
   );

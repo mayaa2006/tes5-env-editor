@@ -106,7 +106,7 @@ export const sub = (sig: string, key: string, label: string, def: ValueDef, opts
   ...opts,
 });
 
-export const rarray = (key: string, label: string, of: MemberDef, opts: { required?: boolean; help?: string } = {}): RArrayMember => ({
+export const rarray = (key: string, label: string, of: MemberDef, opts: { required?: boolean; help?: string; prominent?: boolean } = {}): RArrayMember => ({
   m: 'rarray',
   key,
   label,
@@ -128,7 +128,7 @@ export const counted = (
   key: string,
   label: string,
   inner: SubMember | RArrayMember,
-  opts: { help?: string } = {},
+  opts: { help?: string; prominent?: boolean } = {},
 ): CountedMember => ({ m: 'counted', countSig, countSize, key, label, inner, ...opts });
 
 export const runion = (key: string, label: string, options: readonly MemberDef[]): RUnionMember => ({ m: 'runion', key, label, options });

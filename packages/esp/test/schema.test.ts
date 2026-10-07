@@ -261,3 +261,74 @@ describe('setPath', () => {
     expect(b.x.y).toEqual([1, 9, 3]);
   });
 });
+
+describe('magic, perk and crafting records', () => {
+  const u32 = (...v: number[]) => new Uint8Array(new Uint32Array(v).buffer);
+  const f32 = (...v: number[]) => new Uint8Array(new Float32Array(v).buffer);
+  const cat = (...parts: Uint8Array[]) => {
+    const out = new Uint8Array(parts.reduce((n, p) => n + p.byteLength, 0));
+    let o = 0;
+    for (const p of parts) (out.set(p, o), (o += p.byteLength));
+    return out;
+  };
+
+  it('reads a perk effect by its type: quest stage, ability and entry point with parameters', () => {
+    const rec = PluginRecord.create('PERK', 0x800, [
+      { sig: 'EDID', data: new TextEncoder().encode('P\0') },
+      { sig: 'DESC', data: new Uint8Array([0]) },
+      { sig: 'DATA', data: new Uint8Array([0, 0, 1, 1, 0]) },
+      { sig: 'PRKE', data: new Uint8Array([0, 0, 0]) },
+      { sig: 'DATA', data: cat(u32(0x123), new Uint8Array([10, 0, 0, 0])) },
+      { sig: 'PRKF', data: new Uint8Array(0) },
+      { sig: 'PRKE', data: new Uint8Array([1, 0, 0]) },
+      { sig: 'DATA', data: u32(0x456) },
+      { sig: 'PRKF', data: new Uint8Array(0) },
+      { sig: 'PRKE', data: new Uint8Array([2, 0, 0]) },
+      { sig: 'DATA', data: new Uint8Array([35, 3, 3]) },
+      { sig: 'PRKC', data: new Uint8Array([0]) },
+      { sig: 'EPFT', data: new Uint8Array([1]) },
+      { sig: 'EPFD', data: f32(1.25) },
+      { sig: 'PRKF', data: new Uint8Array(0) },
+    ]);
+    const t = decodeRecord(rec);
+    expect(t.lossless).toBe(true);
+    const fx = t.data.effects as any[];
+    expect(fx[0].data).toMatchObject({ quest: 0x123, stage: 10 });
+    expect(fx[1].data).toEqual({ ability: 0x456 });
+    expect(fx[2].data).toMatchObject({ entryPoint: 35, function: 3 });
+    expect(fx[2].function.data.value).toBeCloseTo(1.25);
+  });
+
+  it('keeps lists stored without their count, and 1-byte cell flags, exactly as they were', () => {
+    const cell = PluginRecord.create('CELL', 0x800, [
+      { sig: 'EDID', data: new TextEncoder().encode('C\0') },
+      { sig: 'DATA', data: new Uint8Array([1]) },
+    ]);
+    const tc = decodeRecord(cell);
+    expect(tc.lossless).toBe(true);
+    expect(tc.data.flags).toBe(1);
+
+    const recipe = PluginRecord.create('COBJ', 0x801, [
+      { sig: 'EDID', data: new TextEncoder().encode('R\0') },
+      { sig: 'CNTO', data: cat(u32(0x10), u32(2)) },
+      { sig: 'CNAM', data: u32(0x20) },
+      { sig: 'NAM1', data: new Uint8Array([1, 0]) },
+    ]);
+    const tr = decodeRecord(recipe);
+    expect(tr.lossless).toBe(true);
+    expect((tr.data.items as any[])[0].item).toEqual({ item: 0x10, count: 2 });
+  });
+
+  it('writes a spell with effects and reads it back', () => {
+    const { decoded } = roundTrip('SPEL', {
+      editorId: 'Firebolt',
+      name: 'Firebolt',
+      description: '',
+      data: { baseCost: 41, flags: 0, type: 0, chargeTime: 0.5, castingType: 1, delivery: 2, castDuration: 0, range: 0, halfCostPerk: 0 },
+      effects: [{ effect: 0x1234, data: { magnitude: 25, area: 0, duration: 1 } }],
+    });
+    expect(decoded.lossless).toBe(true);
+    expect(decoded.unknown).toEqual([]);
+    expect((decoded.data.effects as any[])[0]).toMatchObject({ effect: 0x1234, data: { magnitude: 25 } });
+  });
+});

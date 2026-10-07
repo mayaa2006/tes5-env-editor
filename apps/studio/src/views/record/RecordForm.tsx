@@ -5,7 +5,7 @@
  */
 import { useState, type ReactNode } from 'react';
 import type { UiMember, UiRecordSchema, UiValue } from '@tes5/workspace';
-import { Checkbox, DragNumber, FormPicker, Icon, Select, TextInput } from '../../components/ui';
+import { Checkbox, DragNumber, FormPicker, Help, Icon, Select, TextInput } from '../../components/ui';
 import { ConditionList } from './ConditionEditor';
 import { ScriptsEditor } from './ScriptsEditor';
 
@@ -109,7 +109,7 @@ export function ValueEditor({ def, value, onChange, label }: { def: UiValue; val
           {def.fields
             .filter((f) => !isHidden(f.value))
             .map((f) => (
-              <Row key={f.key} label={f.label}>
+              <Row key={f.key} label={f.label} help={valueHelp(f.value)}>
                 <ValueEditor def={f.value} value={value?.[f.key]} label={f.label} onChange={(v) => onChange({ ...(value ?? {}), [f.key]: v })} />
               </Row>
             ))}
@@ -165,10 +165,22 @@ function ColorField({ value, float, onChange }: { value: any; float: boolean; on
   );
 }
 
-function Row({ label, children, stack }: { label: string; children: ReactNode; stack?: boolean }) {
+function valueHelp(v: UiValue): string | undefined {
+  return 'help' in v ? v.help : undefined;
+}
+
+function Row({ label, children, stack, help }: { label: string; children: ReactNode; stack?: boolean; help?: string }) {
   return (
     <div className={`field ${stack ? 'stack' : ''}`}>
-      <label title={label}>{label}</label>
+      <label title={label}>
+        {label}
+        {help && (
+          <>
+            {' '}
+            <Help text={help} />
+          </>
+        )}
+      </label>
       <div>{children}</div>
     </div>
   );
@@ -184,7 +196,7 @@ function MemberEditor({ m, value, onChange, onRemove }: { m: UiMember; value: an
       if (m.value.kind === 'custom' && m.value.name === 'Condition') return <ConditionList items={[{ data: value }]} onChange={(items) => onChange(items[0]?.data)} single />;
       return (
         // Wide editors (attached scripts, structs) get the full panel width.
-        <Row label={m.label} stack={m.value.kind === 'custom' || m.value.kind === 'struct'}>
+        <Row label={m.label} stack={m.value.kind === 'custom' || m.value.kind === 'struct'} help={m.help ?? valueHelp(m.value)}>
           <div className="row">
             <div className="grow">
               <ValueEditor def={m.value} value={value} label={m.label} onChange={onChange} />
@@ -208,7 +220,7 @@ function MemberEditor({ m, value, onChange, onRemove }: { m: UiMember; value: an
         );
       }
       return (
-        <Collapsible label={`${m.label} (${arr.length})`} open={open} setOpen={setOpen}>
+        <Collapsible label={`${m.label} (${arr.length})`} open={open} setOpen={setOpen} help={m.help}>
           {arr.map((item, i) => (
             <div key={i} className="row" style={{ alignItems: 'flex-start', marginBottom: 4 }}>
               <div className="grow">
@@ -249,12 +261,17 @@ function MemberEditor({ m, value, onChange, onRemove }: { m: UiMember; value: an
   }
 }
 
-function Collapsible({ label, open, setOpen, children }: { label: string; open: boolean; setOpen: (o: boolean) => void; children: ReactNode }) {
+function Collapsible({ label, open, setOpen, children, help }: { label: string; open: boolean; setOpen: (o: boolean) => void; children: ReactNode; help?: string }) {
   return (
     <div style={{ margin: '4px 0' }}>
       <div className="row" style={{ cursor: 'pointer', color: 'var(--text-dim)', fontSize: 12 }} onClick={() => setOpen(!open)}>
         <Icon name={open ? 'chevronDown' : 'chevron'} size={12} />
         {label}
+        {help && (
+          <span onClick={(e) => e.stopPropagation()}>
+            <Help text={help} />
+          </span>
+        )}
       </div>
       {open && <div style={{ paddingLeft: 12, borderLeft: '1px solid var(--border)', marginLeft: 5 }}>{children}</div>}
     </div>
@@ -262,17 +279,18 @@ function Collapsible({ label, open, setOpen, children }: { label: string; open: 
 }
 
 export function Members({ members, data, onChange }: { members: UiMember[]; data: Data; onChange: (d: Data) => void }) {
-  const absent = members.filter((m) => data[m.key] === undefined && !(m.kind === 'sub' && isHidden(m.value)));
+  const prominent = (m: UiMember) => m.kind === 'list' && !!m.prominent;
+  const absent = members.filter((m) => data[m.key] === undefined && !prominent(m) && !(m.kind === 'sub' && isHidden(m.value)));
   const [adding, setAdding] = useState('');
   return (
     <>
       {members
-        .filter((m) => data[m.key] !== undefined)
+        .filter((m) => data[m.key] !== undefined || prominent(m))
         .map((m) => (
           <MemberEditor
             key={m.key}
             m={m}
-            value={data[m.key]}
+            value={data[m.key] ?? []}
             onChange={(v) => onChange({ ...data, [m.key]: v })}
             onRemove={() => {
               const copy = { ...data };

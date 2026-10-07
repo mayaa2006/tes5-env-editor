@@ -494,6 +494,8 @@ export class Workspace {
   }
 
   private lookupString(slot: PluginSlot, subSig: string, id: number): string | undefined {
+    // ID 0 is the game's "no text" (e.g. a spell without a description).
+    if (id === 0) return '';
     const kind = stringsKindFor(this.currentRecordSig ?? '', subSig);
     return slot.strings?.[kind]?.get(id);
   }
@@ -923,6 +925,7 @@ export class Workspace {
   }
 
   private storeString(subSig: string, text: string): number {
+    if (text === '') return 0;
     const a = this.requireActive();
     a.strings ??= {};
     const kind = stringsKindFor(this.currentRecordSig ?? '', subSig);

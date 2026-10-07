@@ -11,12 +11,13 @@
  *   tes5 nif <file.nif>
  *   tes5 face-compare <plugin> --data <dir> [--data <mod dir>…] [--npc <EditorID>…] [--limit N]
  *   tes5 face-kit <plugin> --data <dir> [--data <mod dir>…] [--npc <EditorID>…] [--limit N] [--out kit.zip]
+ *   tes5 records-check <plugin>… [--type SPEL,PERK…]
  */
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { readdirSync, statSync } from 'node:fs';
 import { BsaArchive, flattenMeshes, nifBounds, parseNif, writeBsa } from '@tes5/assets';
 import { MapMasterSource, cleanPlugin, crc32, summarizeReport, type CleanReport } from '@tes5/cleaner';
-import { parsePlugin, recordTypeName, type Plugin } from '@tes5/esp';
+import { decodeRecord, getRecordDef, parsePlugin, recordTypeName, type Plugin } from '@tes5/esp';
 import { NodeFileSystem } from '@tes5/workspace/node';
 import { FaceGenService, NpcService, Workspace, buildFaceKit, compareFaceGen, formatComparisons, kitSummary } from '@tes5/workspace';
 import { zipSync } from 'fflate';
@@ -36,7 +37,10 @@ function usage(msg?: string): never {
   tes5 face-compare <plugin> --data <Data dir> [--data <mod dir>...] [--npc <EditorID>...] [--limit N]
       Bake each character's face and compare with the face files the Creation Kit made.
   tes5 face-kit <plugin> --data <Data dir> [--data <mod dir>...] [--npc <EditorID>...] [--limit N] [--out face-kit.zip]
-      Zip just what comparing those faces needs (a few MB), to share instead of the whole game.`);
+      Zip just what comparing those faces needs (a few MB), to share instead of the whole game.
+  tes5 records-check <plugin>... [--type SPEL,PERK...]
+      For each record type with a form in the editor: how many records read and write back byte for byte,
+      and which fields the form doesn't cover yet (those are kept as they are).`);
   process.exit(msg ? 2 : 0);
 }
 
@@ -258,6 +262,33 @@ async function main(argv: string[]): Promise<void> {
       await fs.writeFile(out, zipSync(zip, { level: 6 }));
       console.log(`${kitSummary(kit)}\nWrote ${out}`);
       for (const n of kit.notes) console.log(`  ${n}`);
+      return;
+    }
+    case 'records-check': {
+      const types = option(args, '--type')?.split(',').map((t) => t.trim().toUpperCase());
+      const files = args.filter((a) => !a.startsWith('--'));
+      if (!files.length) usage('missing plugin path');
+      const stats = new Map<string, { n: number; exact: number; uncovered: Map<string, number>; example?: string }>();
+      for (const file of files) {
+        const p = parsePlugin(await fs.readFile(file), basename(file));
+        for (const rec of p.records()) {
+          if (types ? !types.includes(rec.sig) : !getRecordDef(rec.sig)) continue;
+          let s = stats.get(rec.sig);
+          if (!s) stats.set(rec.sig, (s = { n: 0, exact: 0, uncovered: new Map() }));
+          s.n++;
+          const t = decodeRecord(rec, { localized: p.isLocalized });
+          if (t.lossless) s.exact++;
+          else s.example ??= `${basename(file)} ${rec.formId.toString(16).toUpperCase().padStart(8, '0')}${t.errors.length ? ` (${t.errors[0]})` : ''}`;
+          for (const u of t.unknown) s.uncovered.set(u.sig, (s.uncovered.get(u.sig) ?? 0) + 1);
+        }
+      }
+      let bad = 0;
+      for (const [sig, s] of [...stats].sort()) {
+        if (s.exact < s.n) bad++;
+        const unc = [...s.uncovered].map(([k, v]) => `${k}×${v}`).join(' ');
+        console.log(`${s.exact === s.n ? 'ok  ' : 'FAIL'} ${sig} ${recordTypeName(sig).padEnd(24)} ${s.exact}/${s.n} exact${unc ? `  not in the form: ${unc}` : ''}${s.example ? `  e.g. ${s.example}` : ''}`);
+      }
+      if (bad) process.exitCode = 1;
       return;
     }
     default:

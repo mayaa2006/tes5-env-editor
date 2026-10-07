@@ -9,7 +9,7 @@ Tested means unit tests (`npm test`) plus the Playwright run of the browser demo
 | Feature | Status | Notes |
 | --- | --- | --- |
 | Read/write ESM/ESP/ESL, compressed records, localized strings | ✅ | Lossless round-trip is checked before a record can be edited. |
-| Record coverage | 🟡 | Full schemas for the main quest/NPC/world/item types. Others show a raw field list and are preserved exactly, but aren't editable as forms. |
+| Record coverage | 🟡 | Forms for quests, dialogue, characters, world objects, items, crafting, leveled lists, magic and perks (61 types). Checked with `tes5 records-check` on Skyrim.esm, Update.esm and the three DLC masters: every record of every type with a form reads and writes back byte for byte. Some forms don't cover every field yet (armor addons, factions, locations, packages, races, scenes, landscape texture layers); those fields are kept exactly as they are. **Still without a form** (shown as raw fields, kept exactly): weather, climate, image spaces, lighting templates, water, grass, load screens, sounds and music, combat styles, relationships, encounter zones, projectiles, explosions, hazards, art objects, visual effects, actor values, Story Manager nodes, and a few rarer types. New records can be created from scratch for 40 standalone types (World → Objects → New). |
 | Load order, plugins.txt, MO2 instances/profiles, BSA + loose VFS | ✅ | Real MO2 setups are untested. |
 | Undo/redo, auto masters, backups, atomic saves | ✅ | |
 | ITM / UDR cleaning (Quick Auto Clean) | ✅ | Safe and xEdit modes. Deleted-navmesh repair is experimental. |
@@ -75,6 +75,7 @@ Tested means unit tests (`npm test`) plus the Playwright run of the browser demo
 
 ## Next steps
 
+0. Forms for the remaining record types, starting with the Story Manager (quests started by game events), then weather, lighting templates, sounds, combat styles, factions (crime and vendor data) and races.
 1. Open a vanilla Skyrim SE install and a large MO2 setup. Confirm the synthetic benchmark numbers hold, then verify that saving unchanged plugins produces identical files.
 2. Load generated FaceGen in game; compress the tint (BC3 like the CK); find the CK's extra beard adjustment; follow templates for characters that use their template's traits; add a sculpt brush to the character creator.
 3. Render skinned actors and armour; add normal maps.

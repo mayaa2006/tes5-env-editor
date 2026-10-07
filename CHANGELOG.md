@@ -2,6 +2,19 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.2.0
+
+- **Spells, perks and more get proper forms:**
+  - **Magic:** magic effects, spells, enchantments, scrolls, shouts, words of power and leveled spells.
+  - **Perks:** quest-stage, ability and entry-point effects, with their conditions and values.
+  - **Items and crafting:** potions and food (with their effects), ingredients, leveled items, crafting and tempering recipes, apparatus, and the full weapon, ammunition and soul gem data.
+- **New from scratch:** pick a type in World → Objects and click **New**. The record gets game-like defaults, and its main list (effects, entries, components) is ready to fill.
+- **Help on fields:** form fields that need explaining now have a (?).
+- **Checked against the official masters:** every record of every type with a form in Skyrim.esm, Update.esm and the three DLC masters reads and writes back byte for byte. This includes 19 quests and 331 cells that could only be edited as raw fields before.
+- **New command:** `tes5 records-check` runs the same check on any plugin.
+- **Faster:** the first **New** or **Duplicate** after loading the full game takes under a second instead of about 7.
+- **Fix:** empty descriptions in the official masters showed as "localized string #0" and couldn't be edited. They now show as empty text you can fill in.
+
 ## 0.1.0
 
 The first downloadable build.

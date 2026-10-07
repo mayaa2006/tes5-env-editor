@@ -90,7 +90,17 @@ export const CELL: RecordDef = record(
       'DATA',
       'flags',
       'Flags',
-      union((c) => ((c.remaining ?? 2) >= 2 ? 1 : 0), [flags('u8', CELL_FLAGS), flags('u16', CELL_FLAGS)]),
+      // Most cells store 2 bytes of flags; some older ones only 1. Remember which, so saving keeps the size.
+      union(
+        (c) => {
+          if (c.remaining !== undefined) {
+            if (c.remaining < 2) c.record.__flagsU8 = true;
+            return c.remaining < 2 ? 0 : 1;
+          }
+          return c.record.__flagsU8 ? 0 : 1;
+        },
+        [flags('u8', CELL_FLAGS), flags('u16', CELL_FLAGS)],
+      ),
       { required: true },
     ),
     sub(
