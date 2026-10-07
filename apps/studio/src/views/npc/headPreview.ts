@@ -47,6 +47,8 @@ export class HeadPreview {
   onShaper?: (info: { regions: string[]; extraMorphs: string[] }) => void;
   private hair = new THREE.Color(0.25, 0.18, 0.12);
   private skin = new THREE.Color(1, 1, 1);
+  /** The character's skin tone as stored (white when unset), for the body's skin shader. */
+  private skinTone = new THREE.Color(0.5, 0.5, 0.5);
   private generation = 0;
   /** Body and worn armor (rest pose), shown under the head. */
   private body = new THREE.Group();
@@ -251,6 +253,9 @@ export class HeadPreview {
   setColors(hair: { r: number; g: number; b: number } | null, skin: { r: number; g: number; b: number } | null): void {
     if (hair) this.hair.setRGB(hair.r, hair.g, hair.b, THREE.SRGBColorSpace);
     // QNAM skin tone is a multiplier around mid-grey; keep it subtle for preview purposes.
+    const hasTone = !!skin && (skin.r > 0 || skin.g > 0 || skin.b > 0);
+    if (hasTone) this.skinTone.setRGB(skin!.r, skin!.g, skin!.b);
+    else this.skinTone.setRGB(0.5, 0.5, 0.5);
     this.skin.setRGB(skin && (skin.r || skin.g || skin.b) ? 0.6 + skin.r * 0.4 : 1, skin && (skin.r || skin.g || skin.b) ? 0.6 + skin.g * 0.4 : 1, skin && (skin.r || skin.g || skin.b) ? 0.6 + skin.b * 0.4 : 1);
     this.applyAll();
   }
@@ -264,8 +269,10 @@ export class HeadPreview {
     this.body.traverse((o) => {
       const m = o as THREE.Mesh;
       const mat = m.isMesh ? (m.material as THREE.MeshStandardMaterial) : undefined;
-      // Skin-tint shader (the bare body, hands, feet) takes the character's skin tone.
-      if (mat?.color && mat.userData.shaderType === 5) mat.color.copy(this.skin);
+      // Skin-tint shader (the bare body, hands, feet): texture × skin tone × 2 in gamma space, as the game's skin
+      // shader does (the same rule the face uses with its tint), so neck and hands match the face. Lighting here is
+      // linear, so the gamma-space factor is raised to 2.2.
+      if (mat?.color && mat.userData.shaderType === 5) mat.color.setRGB(...([this.skinTone.r, this.skinTone.g, this.skinTone.b].map((v) => Math.pow(2 * v, 2.2)) as [number, number, number]));
     });
     for (const l of this.loaded.values()) {
       const typeHair = l.part.type === 'Hair' || l.part.type === 'Facial Hair' || l.part.type === 'Eyebrows';
