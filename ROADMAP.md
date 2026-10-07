@@ -38,7 +38,7 @@ Tested means unit tests (`npm test`) plus the Playwright run of the browser demo
 | Papyrus editor and language service | ✅ | Built-in stubs cover the core API types. Full vanilla sources (Scripts.zip) give complete checking. |
 | Compiling scripts | 🟡 | Drives PapyrusCompiler.exe or Caprica. Tested with a fake runner only, since no compiler is available in CI. |
 | Precombines/previs, LOD generation, Havok collision authoring, lip-sync generation | ❌ | Out of scope for now; use the CK or dedicated tools. |
-| Packaging (Windows installer) | 🟡 | electron-builder is configured; no signed build has been produced yet. |
+| Packaging (Windows installer) | 🟡 | Every pull request builds a Windows installer and a portable exe, and each new version on `main` is published as a GitHub release with both. The packaged app was checked opening a real Skyrim SE folder and editing a face (on Linux; the Windows build is made the same way on a Windows runner). The exes aren't code-signed yet, so Windows SmartScreen warns on first launch. No auto-update. |
 
 ## Performance at Skyrim.esm scale
 

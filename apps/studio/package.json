@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "description": "TES5 Env Editor Studio: the desktop editor (Electron + React + three.js)",
+  "author": "mayaa2006",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mayaa2006/tes5-env-editor.git"
+  },
   "type": "module",
   "main": "dist-electron/main.cjs",
   "scripts": {
@@ -12,7 +17,7 @@
     "build": "vite build && node scripts/build-electron.mjs",
     "dev": "node scripts/build-electron.mjs && concurrently -k \"vite\" \"wait-on http://localhost:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
     "start": "electron .",
-    "dist": "npm run build && electron-builder --win nsis portable",
+    "dist": "npm run build && electron-builder --win nsis portable --x64 --publish never",
     "test:e2e": "playwright test",
     "test:stress": "tsx test/stress/engine-stress.ts && tsx test/stress/papyrus-fuzz.ts && node --max-old-space-size=1024 --import tsx test/stress/file-fuzz.ts"
   },
@@ -31,7 +36,7 @@
     "@xyflow/react": "^12.12.0",
     "concurrently": "^10.0.5",
     "cross-env": "^10.1.0",
-    "electron": "^44.5.1",
+    "electron": "44.5.1",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",
     "monaco-editor": "^0.57.0",
@@ -46,7 +51,8 @@
     "appId": "dev.tes5envedit.studio",
     "productName": "TES5 Env Editor",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "build"
     },
     "files": [
       "dist/**",
@@ -58,16 +64,27 @@
       "target": [
         "nsis",
         "portable"
-      ]
+      ],
+      "icon": "build/icon.png"
     },
     "linux": {
       "target": [
         "AppImage"
-      ]
+      ],
+      "executableName": "tes5-env-editor",
+      "category": "Development"
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "TES5-Env-Editor-${version}-Setup.${ext}",
+      "shortcutName": "TES5 Env Editor",
+      "createDesktopShortcut": true
+    },
+    "copyright": "TES5 Env Editor contributors",
+    "icon": "build/icon.png",
+    "portable": {
+      "artifactName": "TES5-Env-Editor-${version}-Portable.${ext}"
     }
   }
 }
