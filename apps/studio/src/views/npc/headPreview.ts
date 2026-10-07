@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import type { TriFile } from '@tes5/assets';
 import { FaceShaper, type FaceLook, type ShaperTri } from '@tes5/workspace';
 import type { EngineClient } from '../../engine/client';
-import { AssetCache } from '../scene/assets3d';
+import { AssetCache, atWeight, lightVariant } from '../scene/assets3d';
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 
@@ -64,6 +64,8 @@ export class HeadPreview {
     this.renderer.setClearColor(0x1f2023);
     container.appendChild(this.renderer.domElement);
     this.assets = new AssetCache(client, this.renderer);
+    // The face texture here already includes the tint (it follows edits live).
+    this.assets.faceTint = false;
     // Textures arrive after the meshes: re-apply colours (and the face texture) when they do.
     this.assets.onLoad = () => this.applyColours();
     const key = new THREE.DirectionalLight(0xfff4e8, 3.2);
@@ -300,21 +302,26 @@ export class HeadPreview {
   }
 
   /** Show the body and worn armor (model paths under Data\\meshes); empty to show only the head. */
-  async setBody(models: string[]): Promise<void> {
-    const key = models.join('|');
+  async setBody(models: string[], weight = 50): Promise<void> {
+    const key = `${models.join('|')}@${weight}`;
     if (key === this.bodyKey) return;
     this.bodyKey = key;
-    const groups = await Promise.all(models.map((m) => this.assets.mesh(m)));
+    // Bodies and armor come in heavy (_1) and thin (_0) versions, blended by the character's weight.
+    const groups = await Promise.all(
+      models.map(async (m) => {
+        const light = lightVariant(m);
+        const [heavy, thin] = await Promise.all([this.assets.mesh(m), light ? this.assets.mesh(light) : null]);
+        return heavy ? atWeight(heavy, thin, weight) : null;
+      }),
+    );
     if (key !== this.bodyKey) return;
     this.body.clear();
-    for (const g of groups) {
-      if (!g) continue;
-      const c = g.clone();
+    for (const c of groups) {
+      if (!c) continue;
       c.traverse((o) => {
         const m = o as THREE.Mesh;
         if (!m.isMesh) return;
         // Vertex colours aren't used on bodies and clothes: drop them.
-        m.geometry = m.geometry.clone();
         m.geometry.deleteAttribute('color');
         const mat = m.material as THREE.MeshStandardMaterial;
         if (mat.vertexColors) {

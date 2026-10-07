@@ -25,6 +25,8 @@ export interface NifMaterial {
   specularStrength: number;
   /** Lighting shader type (0 default, 1 env map, 5 face tint, 6 hair tint, 7 parallax occ...). */
   shaderType: number;
+  /** Specular highlights on (shader flags 1, bit 0); the normal map's alpha masks them. */
+  specular?: boolean;
   /** Blends by adding to what's behind (NiAlphaProperty destination ONE): glows, sparks, mist. */
   additive?: boolean;
   /** Drawn with the water shader (rivers, troughs); no texture set of its own. */
@@ -489,6 +491,7 @@ function readLightingShader(r: Reader, h: Header): ParsedBlock {
       twoSided: (f2 & 0x10) !== 0,
       vertexColors: (f2 & 0x20) !== 0,
       modelSpaceNormals: (f1 & 0x1000) !== 0,
+      specular: (f1 & 0x1) !== 0,
       uvOffset,
       uvScale,
       textureSetRef,

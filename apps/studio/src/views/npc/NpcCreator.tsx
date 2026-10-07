@@ -219,8 +219,8 @@ function Creator({ npc }: { npc: FormKey }) {
   const { data: actor } = useQuery(() => client?.call('actorModel', npc), [npc]);
   const bodyModels = (actor?.parts ?? []).filter((p) => p.kind !== 'head').map((p) => p.model);
   useEffect(() => {
-    void preview.current?.setBody(bodyModels).then(() => preview.current?.view(tabRef.current === 'body' ? 'body' : 'head'));
-  }, [bodyModels.join('|')]);
+    void preview.current?.setBody(bodyModels, a?.weight ?? 50).then(() => preview.current?.view(tabRef.current === 'body' ? 'body' : 'head'));
+  }, [bodyModels.join('|'), a?.weight]);
   useEffect(() => preview.current?.view(tab === 'body' ? 'body' : 'head'), [tab]);
   const lookKey = a ? JSON.stringify([a.morphs, a.weight, a.faceParts, sculpt, race]) : '';
   useEffect(() => {

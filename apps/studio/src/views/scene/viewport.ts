@@ -17,7 +17,7 @@ import * as THREE from 'three';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import type { FormKey, Navmesh } from '@tes5/esp';
 import { HeightField, sculptDab, type PlacedRef, type SculptOptions, type Transform } from '@tes5/workspace';
-import { AssetCache, placeholder } from './assets3d';
+import { AssetCache, atWeight, lightVariant, placeholder } from './assets3d';
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 
@@ -370,10 +370,21 @@ export class Viewport {
         .call('actorModel', base)
         .then(async (m) => {
           if (!m || !m.parts.length) return null;
-          const meshes = await Promise.all(m.parts.map((part) => this.assets.mesh(part.model)));
+          // Bodies and armor: heavy (_1) and thin (_0) meshes blended by the character's weight, so necks meet heads.
+          const meshes = await Promise.all(
+            m.parts.map(async (part) => {
+              const light = part.kind === 'head' ? undefined : lightVariant(part.model);
+              const [heavy, thin] = await Promise.all([this.assets.mesh(part.model), light ? this.assets.mesh(light) : null]);
+              return heavy && part.kind !== 'head' ? atWeight(heavy, thin, m.weight) : (heavy?.clone() ?? null);
+            }),
+          );
           const g = new THREE.Group();
-          for (const t of meshes) if (t && t.children.length) g.add(t.clone());
+          for (const t of meshes) if (t && t.children.length) g.add(t);
           if (!g.children.length) return null;
+          // Skin takes this character's skin tone (texture × tone × 2 in gamma space, as in game): a per-character copy
+          // of the skin material that follows the shared one as its textures arrive.
+          const tone = m.skinTone ? [m.skinTone.r, m.skinTone.g, m.skinTone.b].map((v) => Math.pow(2 * v, 2.2)) : undefined;
+          const skinCopies = new Map<THREE.Material, THREE.MeshStandardMaterial>();
           // Skin and clothes ignore their vertex colours in game (they're often black). These meshes are only used by
           // characters, so the shared materials are changed in place (copies would miss textures that load later).
           g.traverse((o) => {
@@ -386,6 +397,28 @@ export class Viewport {
                 mat.needsUpdate = true;
               }
             }
+            const src = mesh.material as THREE.MeshStandardMaterial;
+            if (tone && !Array.isArray(mesh.material) && src.userData.shaderType === 5) {
+              let copy = skinCopies.get(src);
+              if (!copy) {
+                copy = src.clone();
+                copy.color.setRGB(tone[0]!, tone[1]!, tone[2]!);
+                skinCopies.set(src, copy);
+              }
+              const c = copy;
+              mesh.material = c;
+              mesh.onBeforeRender = () => {
+                if (c.map !== src.map || c.normalMap !== src.normalMap) {
+                  c.map = src.map;
+                  c.normalMap = src.normalMap;
+                  c.normalMapType = src.normalMapType;
+                  c.roughness = src.roughness;
+                  c.onBeforeCompile = src.onBeforeCompile;
+                  c.customProgramCacheKey = src.customProgramCacheKey;
+                  c.needsUpdate = true;
+                }
+              };
+            }
           });
           g.scale.setScalar(m.scale);
           g.userData.actorNotes = m.notes;
@@ -394,7 +427,20 @@ export class Viewport {
         .catch(() => null);
       this.actorTemplates.set(base, p);
     }
-    return p.then((g) => (g ? g.clone() : null));
+    return p.then((g) => {
+      if (!g) return null;
+      const c = g.clone();
+      // clone() drops per-mesh render hooks: carry the skin-material sync over.
+      const src: THREE.Mesh[] = [];
+      g.traverse((o) => (o as THREE.Mesh).isMesh && src.push(o as THREE.Mesh));
+      let i = 0;
+      c.traverse((o) => {
+        if (!(o as THREE.Mesh).isMesh) return;
+        const from = src[i++];
+        if (from) (o as THREE.Mesh).onBeforeRender = from.onBeforeRender;
+      });
+      return c;
+    });
   }
 
   setShowActors(on: boolean): void {

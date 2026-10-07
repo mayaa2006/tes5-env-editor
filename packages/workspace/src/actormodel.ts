@@ -20,6 +20,10 @@ export interface ActorModel {
   /** The character's height multiplier. */
   scale: number;
   female: boolean;
+  /** Body weight 0–100: heavy (_1) and thin (_0) meshes are blended by it. */
+  weight: number;
+  /** Skin tone (0–1, QNAM), for the skin shader; undefined when unset. */
+  skinTone?: { r: number; g: number; b: number };
   /** Why something is missing, for the tooltip. */
   notes: string[];
 }
@@ -171,7 +175,10 @@ export class ActorModels {
       if (heads.length) notes.push('No face file yet: showing the race\'s default head');
     }
     const scale = typeof t.height === 'number' && t.height > 0 ? t.height : 1;
-    return { parts, scale, female, notes };
+    const weight = typeof t.weight === 'number' ? Math.max(0, Math.min(100, t.weight)) : 50;
+    const tl = t.textureLighting as { r: number; g: number; b: number } | undefined;
+    const skinTone = tl && (tl.r || tl.g || tl.b) ? { r: tl.r, g: tl.g, b: tl.b } : undefined;
+    return { parts, scale, female, weight, skinTone, notes };
   }
 
   /** The race whose armor addons this race uses (RACE RNAM), e.g. vampire races wear Nord armor. */
