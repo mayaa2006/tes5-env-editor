@@ -306,10 +306,9 @@ export class HeadPreview {
       c.traverse((o) => {
         const m = o as THREE.Mesh;
         if (!m.isMesh) return;
-        // Skinned meshes' stored normals decode wrongly (clothes come out black): recompute them, and drop the unused vertex colours.
+        // Vertex colours aren't used on bodies and clothes: drop them.
         m.geometry = m.geometry.clone();
         m.geometry.deleteAttribute('color');
-        m.geometry.computeVertexNormals();
         const mat = m.material as THREE.MeshStandardMaterial;
         if (mat.vertexColors) {
           mat.vertexColors = false;

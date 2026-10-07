@@ -779,15 +779,17 @@ export function parseNif(bytes: Uint8Array): NifFile {
         if (part) {
           try {
             const sp = readSkinPartition(part, h.bsVersion);
-            const n = geom.positions.length / 3;
+            // A shape with no vertex data of its own (numVertices 0) uses the partition's buffer for everything.
+            const own = geom.positions.length / 3;
+            const n = own || (sp.positions ? sp.positions.length / 3 : 0);
             const fits = (a: Float32Array | undefined, w: number) => (a && a.length === n * w ? a : undefined);
             geom = {
               ...geom,
               indices: sp.triangles,
               // The partition's buffer is the real one; the shape's own may be a zero-filled stub.
-              uvs: fits(sp.uvs, 2) ?? geom.uvs,
-              normals: fits(sp.normals, 3) ?? geom.normals,
-              positions: n ? geom.positions : (sp.positions ?? geom.positions),
+              uvs: fits(sp.uvs, 2) ?? (geom.uvs?.length ? geom.uvs : undefined),
+              normals: fits(sp.normals, 3) ?? (geom.normals?.length ? geom.normals : undefined),
+              positions: own ? geom.positions : (sp.positions ?? geom.positions),
             };
           } catch (e) {
             warnings.push(`Block ${index}: skin partition triangles: ${(e as Error).message}`);

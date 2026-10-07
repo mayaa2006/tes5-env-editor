@@ -379,10 +379,7 @@ export class Viewport {
           g.traverse((o) => {
             const mesh = o as THREE.Mesh;
             if (!mesh.isMesh) return;
-            if (!mesh.geometry.userData.actorNormals) {
-              mesh.geometry.computeVertexNormals();
-              mesh.geometry.userData.actorNormals = true;
-            }
+            if (!mesh.geometry.getAttribute('normal')) mesh.geometry.computeVertexNormals();
             for (const mat of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
               if ((mat as THREE.MeshStandardMaterial).vertexColors) {
                 (mat as THREE.MeshStandardMaterial).vertexColors = false;
