@@ -45,10 +45,23 @@ export default function SceneView() {
   const { data: cells } = useQuery(() => client?.call('cells', {}), [client]);
   const info = cells?.find((c) => c.formKey === cell);
   // Tagged with their cell: while a new cell loads, the previous cell's list must not be framed as the new one.
-  const { data: refsFor } = useQuery(() => (cell ? client?.call('references', cell).then((list) => ({ cell, list })) : undefined), [cell]);
-  const refs = refsFor && refsFor.cell === cell ? refsFor.list : undefined;
+  // Outdoors, the cells around the current one load too (like the CK), with their terrain.
+  const radius = info && !info.interior ? (settings.surroundingCells ?? 1) : 0;
+  const outdoorArea = !!info && !info.interior && radius > 0;
+  const { data: areaFor } = useQuery(() => (cell && outdoorArea ? client?.call('area', cell, radius).then((a) => ({ cell, area: a })) : undefined), [cell, outdoorArea, radius]);
+  const area = areaFor && areaFor.cell === cell ? areaFor.area : undefined;
+  const { data: refsFor } = useQuery(() => (cell && info && !outdoorArea ? client?.call('references', cell).then((list) => ({ cell, list })) : undefined), [cell, !!info, outdoorArea]);
+  const refs = outdoorArea ? area?.refs : refsFor && refsFor.cell === cell ? refsFor.list : undefined;
   const { data: lighting } = useQuery(() => (cell ? client?.call('cellLighting', cell) : undefined), [cell]);
-  const { data: terrain } = useQuery(() => (cell && info && !info.interior ? client?.call('terrain', cell) : undefined), [cell, info?.interior]);
+  const { data: singleTerrain } = useQuery(() => (cell && info && !info.interior && !outdoorArea ? client?.call('terrain', cell) : undefined), [cell, info?.interior, outdoorArea]);
+  const terrain = outdoorArea ? area?.terrain : singleTerrain ? [{ cell, ...singleTerrain }] : undefined;
+  /** The loaded cell at a world position (objects dropped there go into it). */
+  const cellAtPoint = (p: { x: number; y: number }) => {
+    const gx = Math.floor(p.x / 4096);
+    const gy = Math.floor(p.y / 4096);
+    return area?.cells.find((c) => c.grid.x === gx && c.grid.y === gy)?.formKey;
+  };
+  const neighbour = (dx: number, dy: number) => (area && info?.grid ? area.cells.find((c) => c.grid.x === info.grid!.x + dx && c.grid.y === info.grid!.y + dy) : undefined);
   const { data: navmeshes } = useQuery(() => (cell ? client?.call('navmeshes', cell) : undefined), [cell]);
   const { data: navStatus } = useQuery(() => (cell && session.activePlugin ? client?.call('navmeshStatus', cell) : undefined), [cell, session.activePlugin]);
 
@@ -101,7 +114,7 @@ export default function SceneView() {
       vpRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client]);
+  }, [client, !!cell]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -159,19 +172,21 @@ export default function SceneView() {
     vp.setRefs(refs ?? []);
     if (refs && cell && framedCell.current !== cell) {
       framedCell.current = cell;
-      vp.frame();
+      if (outdoorArea) vp.frame((refs as { formKey: FormKey; cell?: FormKey }[]).filter((r) => r.cell === cell).map((r) => r.formKey), { cell });
+      else vp.frame();
     }
   }, [refs, cell]);
   useEffect(() => {
     if (info) vpRef.current?.setCellContext(info);
   }, [info?.formKey]);
-  useEffect(() => vpRef.current?.setTerrain(terrain ? [terrain] : []), [terrain]);
+  useEffect(() => vpRef.current?.setTerrain(terrain ?? []), [terrain]);
   useEffect(() => vpRef.current?.setNavmeshes((navmeshes ?? []).map((n) => ({ key: n.formKey, nav: n.geometry, mine: n.source === session.activePlugin }))), [navmeshes, session.activePlugin]);
   useEffect(() => vpRef.current?.setSelection(sceneSelection), [sceneSelection, refs]);
   useEffect(() => vpRef.current?.setTool(tool), [tool]);
   useEffect(() => vpRef.current?.setSnapping(snap), [snap]);
   useEffect(() => vpRef.current?.setKitSnap(settings.kitSnap), [settings.kitSnap]);
   useEffect(() => vpRef.current?.setNavVisible(showNav), [showNav]);
+  useEffect(() => vpRef.current?.setShowActors(settings.actorModels ?? true), [settings.actorModels]);
   useEffect(() => {
     vpRef.current?.setOptions({
       showMarkers: settings.showMarkers,
@@ -200,7 +215,7 @@ export default function SceneView() {
     const key = await engine(
       async (c) => {
         const base = form || (await c.call('baseForMesh', mesh));
-        return c.call('placeReference', cell, base, { position });
+        return c.call('placeReference', cellAtPoint(position) ?? cell, base, { position });
       },
       { busy: mesh ? 'Creating base object…' : undefined },
     );
@@ -227,7 +242,26 @@ export default function SceneView() {
         <strong className="ellipsis" style={{ maxWidth: 180 }} title={`${info?.editorId ?? cell}${info?.name ? ` “${info.name}”` : ''} · ${cell}`}>
           {info?.editorId ?? cell}
         </strong>
-        {info && !info.interior && info.grid && <span className="chip">{`${info.grid.x}, ${info.grid.y}`}</span>}
+        {info && !info.interior && info.grid && <span className="chip" title="Grid position of the current cell (new objects are placed in the cell under the cursor)">{`${info.grid.x}, ${info.grid.y}`}</span>}
+        {outdoorArea && (
+          <span className="row" style={{ gap: 0 }} data-testid="cell-steps">
+            {(
+              [
+                ['W', -1, 0, 'west'],
+                ['N', 0, 1, 'north'],
+                ['S', 0, -1, 'south'],
+                ['E', 1, 0, 'east'],
+              ] as const
+            ).map(([l, dx, dy, dir]) => {
+              const n = neighbour(dx, dy);
+              return (
+                <button key={l} className="btn small ghost" disabled={!n} title={n ? `Make the cell to the ${dir} (${n.editorId ?? `${n.grid.x}, ${n.grid.y}`}) the current one` : `No cell to the ${dir} in this worldspace`} onClick={() => n && useStore.getState().setCell(n.formKey)}>
+                  {l}
+                </button>
+              );
+            })}
+          </span>
+        )}
         <span className="sep" />
         {toolBtn('select', 'cube', 'Select', 'click')}
         {toolBtn('move', 'route', 'Move', 'G')}
@@ -280,6 +314,20 @@ export default function SceneView() {
               <MenuItem checked={showNav} onClick={() => setShowNav(!showNav)}>
                 Navmesh
               </MenuItem>
+              <MenuItem checked={settings.actorModels ?? true} title="Draw characters with their body, clothes and head in their rest pose. Off: simple capsules (faster with many characters)." onClick={() => useStore.getState().updateSettings({ actorModels: !(settings.actorModels ?? true) })}>
+                Characters as people
+              </MenuItem>
+              <div className="menu-sep" />
+              <div className="menu-label">Outdoors, also load</div>
+              {[
+                [0, 'Just this cell'],
+                [1, 'The cells around it (3×3)'],
+                [2, 'Two rings around it (5×5)'],
+              ].map(([n, label]) => (
+                <MenuItem key={n} checked={(settings.surroundingCells ?? 1) === n} title="Surrounding cells show their objects and terrain and can be edited too; more cells take longer to load." onClick={() => useStore.getState().updateSettings({ surroundingCells: n as number })}>
+                  {label as string}
+                </MenuItem>
+              ))}
               <div className="menu-sep" />
               <MenuItem onClick={() => (setSnapOpen(true), close())}>Snapping settings…</MenuItem>
               <MenuItem hint="?" onClick={() => (setHelp(true), close())}>
@@ -369,7 +417,7 @@ export default function SceneView() {
               </button>
             </div>
             {dock === 'outliner' ? (
-              <Outliner refs={refs ?? []} hiddenTick={hiddenTick} viewport={vpRef} />
+              <Outliner refs={refs ?? []} hiddenTick={hiddenTick} viewport={vpRef} area={area ? { cells: area.cells.length, current: cell } : undefined} />
             ) : navEdit ? (
               <div className="empty">Leave navmesh edit mode (Tab) to use the world tools.</div>
             ) : (
@@ -534,7 +582,8 @@ function NavEditPanel({ count, selected, drawing, onDraw, onFlag, onDelete, onDo
   );
 }
 
-function Outliner({ refs, hiddenTick, viewport }: { refs: PlacedRef[]; hiddenTick: number; viewport: React.RefObject<Viewport | null> }) {
+function Outliner({ refs, hiddenTick, viewport, area }: { refs: (PlacedRef & { cell?: FormKey })[]; hiddenTick: number; viewport: React.RefObject<Viewport | null>; area?: { cells: number; current: FormKey } }) {
+  const [onlyCurrent, setOnlyCurrent] = useState(true);
   const sel = useStore((s) => s.sceneSelection);
   const setSel = useStore((s) => s.setSceneSelection);
   const [q, setQ] = useState('');
@@ -544,21 +593,23 @@ function Outliner({ refs, hiddenTick, viewport }: { refs: PlacedRef[]; hiddenTic
     const ql = q.toLowerCase();
     return refs
       .filter((r) => !r.deleted)
+      .filter((r) => !area || !onlyCurrent || r.cell === area.current)
       .filter((r) => !onlyMine || r.source === activePlugin)
       .filter((r) => !ql || (r.editorId ?? '').toLowerCase().includes(ql) || (r.baseEditorId ?? '').toLowerCase().includes(ql) || (r.baseName ?? '').toLowerCase().includes(ql))
       .sort((a, b) => (a.baseEditorId ?? '').localeCompare(b.baseEditorId ?? '') || (a.editorId ?? '').localeCompare(b.editorId ?? ''));
-  }, [refs, q, onlyMine, activePlugin]);
+  }, [refs, q, onlyMine, activePlugin, onlyCurrent, area?.current]);
   const hidden = viewport.current?.hidden;
   void hiddenTick;
   return (
     <div className="panel" data-testid="outliner">
       <div className="panel-header">
-        <span className="grow">In this cell</span>
+        <span className="grow">{area && !onlyCurrent ? `In view (${area.cells} cells)` : 'In this cell'}</span>
         <span className="faint small">{list.length}</span>
       </div>
       <div className="searchbox col" style={{ gap: 4 }}>
         <input className="input" placeholder="Filter…" value={q} onChange={(e) => setQ(e.target.value)} />
         <Checkbox checked={onlyMine} onChange={setOnlyMine} label="Only my changes" />
+        {area && <Checkbox checked={onlyCurrent} onChange={setOnlyCurrent} label="Only the current cell" help="Untick to list everything loaded around it too (persistent objects such as doors and characters count where they stand)." />}
       </div>
       <ul className="list scroll" style={{ flex: 1 }}>
         {list.slice(0, 1500).map((r) => {

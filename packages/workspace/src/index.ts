@@ -31,3 +31,5 @@ export * from './facegen';
 export * from './facekit';
 export * from './newrecord';
 export * from './catalog';
+export * from './terrain';
+export * from './actormodel';

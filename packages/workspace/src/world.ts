@@ -27,6 +27,28 @@ export interface CellSummary {
   grid?: { x: number; y: number };
   owner: string;
   inActive: boolean;
+  /** The worldspace's persistent cell: holds persistent outdoor references (doors, actors, markers) wherever they stand. */
+  persistentCell?: boolean;
+}
+
+/** Terrain of one exterior cell. */
+export interface CellTerrain {
+  cell: FormKey;
+  origin: { x: number; y: number };
+  heights: Float32Array;
+  colors?: Uint8Array;
+}
+
+/** An outdoor area: a cell and the ones around it, as loaded together in the 3D view. */
+export interface ExteriorArea {
+  center: FormKey;
+  worldspace?: FormKey;
+  /** Grid bounds (inclusive) of the area. */
+  min: { x: number; y: number };
+  max: { x: number; y: number };
+  cells: { formKey: FormKey; grid: { x: number; y: number }; editorId?: string; name?: string }[];
+  refs: (PlacedRef & { cell: FormKey })[];
+  terrain: CellTerrain[];
 }
 
 export interface PlacedRef {
@@ -83,6 +105,8 @@ function readModel(rec: PluginRecord): string | undefined {
   return p || undefined;
 }
 
+const cellCache = new WeakMap<Workspace, { revision: number; cells: CellSummary[] }>();
+
 export class WorldService {
   constructor(readonly ws: Workspace) {}
 
@@ -90,8 +114,14 @@ export class WorldService {
     return this.ws.search({ sigs: ['WRLD'], limit: 10_000 }).items.map((i) => ({ formKey: i.formKey, editorId: i.editorId, name: i.name }));
   }
 
-  /** All cells (winning versions), optionally only those of a worldspace or interiors. */
+  /** All cells (winning versions), optionally only those of a worldspace or interiors. Cached until the data changes. */
   cells(filter: { worldspace?: FormKey; interiorOnly?: boolean } = {}): CellSummary[] {
+    let cached = cellCache.get(this.ws);
+    if (!cached || cached.revision !== this.ws.revision) cellCache.set(this.ws, (cached = { revision: this.ws.revision, cells: this.readCells() }));
+    return cached.cells.filter((c) => (!filter.interiorOnly || c.interior) && (!filter.worldspace || c.worldspace === filter.worldspace));
+  }
+
+  private readCells(filter: { worldspace?: FormKey; interiorOnly?: boolean } = {}): CellSummary[] {
     const out = new Map<FormKey, CellSummary>();
     const activeIdx = this.ws.activeName ? this.ws.slots.findIndex((s) => s.name === this.ws.activeName) : -1;
     for (let i = this.ws.slots.length - 1; i >= 0; i--) {
@@ -118,6 +148,7 @@ export class WorldService {
           grid: interior ? undefined : readCellGrid(loc.record),
           owner: parseFormKey(key).plugin,
           inActive: i === activeIdx,
+          persistentCell: !interior && (loc.record.flags & RecordFlags.Persistent) !== 0 ? true : undefined,
         });
       }
     }
@@ -150,12 +181,55 @@ export class WorldService {
   }
 
   /**
+   * An exterior cell with the cells around it (`radius` rings: 1 = 3×3, 2 = 5×5),
+   * their references and terrain. Persistent references (kept in the
+   * worldspace's persistent cell) are included where they stand in the area.
+   */
+  area(center: FormKey, radius = 1): ExteriorArea {
+    const all = this.cells();
+    const c = all.find((x) => x.formKey === center);
+    if (!c?.grid || c.interior) throw new WorkspaceError('Surrounding cells only exist outdoors');
+    const r = Math.max(0, Math.min(3, Math.floor(radius)));
+    const min = { x: c.grid.x - r, y: c.grid.y - r };
+    const max = { x: c.grid.x + r, y: c.grid.y + r };
+    const inWorld = all.filter((x) => x.worldspace === c.worldspace && !x.interior);
+    const cells = inWorld
+      .filter((x) => !x.persistentCell && x.grid && x.grid.x >= min.x && x.grid.x <= max.x && x.grid.y >= min.y && x.grid.y <= max.y)
+      .map((x) => ({ formKey: x.formKey, grid: x.grid!, editorId: x.editorId, name: x.name }));
+    const refs: (PlacedRef & { cell: FormKey })[] = [];
+    const terrain: CellTerrain[] = [];
+    for (const cell of cells) {
+      for (const ref of this.references(cell.formKey)) refs.push({ ...ref, cell: cell.formKey });
+      const t = this.terrain(cell.formKey, cell.grid);
+      if (t) terrain.push({ cell: cell.formKey, ...t });
+    }
+    // Persistent references standing inside the area.
+    const x0 = min.x * 4096;
+    const x1 = (max.x + 1) * 4096;
+    const y0 = min.y * 4096;
+    const y1 = (max.y + 1) * 4096;
+    for (const p of inWorld.filter((x) => x.persistentCell)) {
+      for (const ref of this.references(p.formKey)) {
+        const { x, y } = ref.transform.position;
+        if (x >= x0 && x < x1 && y >= y0 && y < y1) refs.push({ ...ref, cell: p.formKey, persistent: true });
+      }
+    }
+    return { center, worldspace: c.worldspace, min, max, cells, refs, terrain };
+  }
+
+  /** The exterior cell at a grid position in a worldspace, if it exists. */
+  cellAt(worldspace: FormKey | undefined, grid: { x: number; y: number }): FormKey | undefined {
+    return this.cells().find((x) => x.worldspace === worldspace && !x.interior && !x.persistentCell && x.grid?.x === grid.x && x.grid?.y === grid.y)?.formKey;
+  }
+
+  /**
    * Terrain of an exterior cell (winning LAND): 33×33 heights in game units,
    * rows south→north, columns west→east, 128 units apart; optional vertex colours.
    */
-  terrain(cell: FormKey): { origin: { x: number; y: number }; heights: Float32Array; colors?: Uint8Array } | undefined {
-    const info = this.cells().find((c) => c.formKey === cell);
-    if (!info?.grid) return undefined;
+  terrain(cell: FormKey, knownGrid?: { x: number; y: number }): { origin: { x: number; y: number }; heights: Float32Array; colors?: Uint8Array } | undefined {
+    const grid = knownGrid ?? this.cells().find((c) => c.formKey === cell)?.grid;
+    if (!grid) return undefined;
+    const info = { grid };
     for (let i = this.ws.slots.length - 1; i >= 0; i--) {
       const s = this.ws.slots[i]!;
       const local = s.plugin && s.mapper?.toLocal(cell);
