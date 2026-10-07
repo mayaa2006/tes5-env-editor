@@ -16,6 +16,7 @@ import {
   parseTri,
   writeBsa,
   writeNif,
+  writeBc3Dds,
   writeRgbaDds,
   writeTri,
   xxh32,
@@ -132,6 +133,48 @@ describe('NIF', () => {
 });
 
 describe('DDS', () => {
+  it('writes BC3 with mipmaps laid out like the CK face tints', () => {
+    const size = 512;
+    const rgba = new Uint8Array(size * size * 4);
+    for (let y = 0; y < size; y++)
+      for (let x = 0; x < size; x++) {
+        const o = (y * size + x) * 4;
+        // A skin-like gradient with a darker painted blob, like a face tint.
+        const blob = Math.max(0, 1 - Math.hypot(x - 300, y - 200) / 80);
+        rgba[o] = Math.round(200 - x / 8 - blob * 90);
+        rgba[o + 1] = Math.round(150 - y / 10 - blob * 60);
+        rgba[o + 2] = Math.round(120 + ((x + y) % 7) - blob * 40);
+        rgba[o + 3] = 255;
+      }
+    const bytes = writeBc3Dds(size, size, rgba, { minSize: 2 });
+    expect(bytes.length).toBe(349664);
+    const img = parseDds(bytes);
+    expect(img.format).toBe('bc3');
+    expect(img.mipmaps.map((m) => m.width)).toEqual([512, 256, 128, 64, 32, 16, 8, 4, 2]);
+    const back = decodeToRgba(img.mipmaps[0]!, img.format)!;
+    let err = 0;
+    let worst = 0;
+    for (let i = 0; i < rgba.length; i++) {
+      const d = Math.abs(back[i]! - rgba[i]!);
+      err += d;
+      worst = Math.max(worst, d);
+    }
+    expect(err / rgba.length).toBeLessThan(2);
+    expect(worst).toBeLessThan(16);
+    // A smaller level is the average of the one above.
+    const m1 = decodeToRgba(img.mipmaps[1]!, img.format)!;
+    expect(Math.abs(m1[0]! - (rgba[0]! + rgba[4]! + rgba[size * 4]! + rgba[size * 4 + 4]!) / 4)).toBeLessThan(8);
+  });
+
+  it('encodes flat and tiny images', () => {
+    for (const [w, h] of [[1, 1], [3, 5], [4, 4]] as const) {
+      const rgba = new Uint8Array(w * h * 4).fill(0).map((_, i) => (i % 4 === 3 ? 128 : 77));
+      const img = parseDds(writeBc3Dds(w, h, rgba));
+      const back = decodeToRgba(img.mipmaps[0]!, img.format)!;
+      for (let i = 0; i < back.length; i++) expect(Math.abs(back[i]! - rgba[i]!)).toBeLessThan(5);
+    }
+  });
+
   it('parses uncompressed textures', () => {
     const rgba = new Uint8Array(4 * 4 * 4).map((_, i) => i);
     const img = parseDds(writeRgbaDds(4, 4, rgba));

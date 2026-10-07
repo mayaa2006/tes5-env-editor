@@ -4,10 +4,10 @@
  * a stage flow graph and the voice file list. Bookkeeping (fragment scripts,
  * alias properties, INFO ordering, topic counts, SEQ files) is automatic.
  */
-import { lazy, Suspense, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { EMOTIONS, QUEST_TYPES, QuestFlag, type FormKey } from '@tes5/esp';
 import type { InfoModel, QuestModel, TopicModel } from '@tes5/workspace';
-import { Checkbox, DragNumber, Field, FormLink, FormPicker, Icon, Modal, Select, Tabs, TextInput, useDebounced, useQuery, useSummaries, useUniqueEditorId } from '../../components/ui';
+import { Checkbox, DragNumber, EmptyState, Field, FormLink, FormPicker, Icon, Modal, Select, Tabs, TextInput, useDebounced, useQuery, useSummaries, useUniqueEditorId } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 import { ConditionList } from '../record/ConditionEditor';
 import { TriggersSection } from '../record/TriggersEditor';
@@ -58,17 +58,30 @@ export default function QuestDesigner() {
 function NoQuest() {
   const [writing, setWriting] = useState(false);
   return (
-    <div className="empty grow col" style={{ gap: 10 }}>
-      <span>Choose a quest on the left, or create one.</span>
-      <button className="btn" onClick={() => setWriting(true)}>
-        <Icon name="wand" size={13} /> Describe a quest and let Claude build it
-      </button>
+    <>
+      <EmptyState
+      icon="quest"
+      title="Pick a quest to work on"
+      testId="quest-empty"
+      actions={
+        <>
+          <button className="btn primary" onClick={() => useStore.getState().requestNew('quest')} title="Start an empty quest and add stages, objectives and characters yourself">
+            <Icon name="plus" /> New quest
+          </button>
+          <button className="btn" onClick={() => setWriting(true)} title="Paste a design document or a conversation; Claude plans the whole quest, you check it, and it's built for you">
+            <Icon name="wand" size={13} /> Describe a quest and let Claude build it
+          </button>
+        </>
+      }
+    >
+      Choose a quest in the list on the left to see its map of stages, or start a new one.
+    </EmptyState>
       {writing && (
         <Suspense fallback={null}>
           <QuestFromText onClose={() => setWriting(false)} />
         </Suspense>
       )}
-    </div>
+    </>
   );
 }
 
@@ -80,7 +93,13 @@ function QuestList() {
   const dq = useDebounced(q);
   const [creating, setCreating] = useState(false);
   const [writing, setWriting] = useState(false);
-  const { data } = useQuery(() => client?.call('search', { sigs: ['QUST'], query: dq, limit: 500 }), [dq]);
+  const newRequest = useStore((s) => s.newRequest);
+  useEffect(() => {
+    if (newRequest && useStore.getState().takeNew('quest')) setCreating(true);
+  }, [newRequest]);
+  const [mine, setMine] = useState(false);
+  const activePlugin = useStore((s) => s.session.activePlugin);
+  const { data } = useQuery(() => client?.call('search', { sigs: ['QUST'], query: dq, limit: 500, plugin: mine ? activePlugin : undefined }), [dq, mine, activePlugin]);
   return (
     <div className="panel" style={{ width: 260, flex: 'none', borderRight: '1px solid var(--border)', background: 'var(--panel)' }}>
       <div className="panel-header">
@@ -94,6 +113,11 @@ function QuestList() {
       </div>
       <div className="searchbox">
         <input className="input" placeholder="Find quest…" value={q} onChange={(e) => setQ(e.target.value)} />
+        {activePlugin && (
+          <div style={{ marginTop: 4 }}>
+            <Checkbox checked={mine} onChange={setMine} label={`Only ones in ${activePlugin}`} help="Show only the quests your plugin adds or changes." />
+          </div>
+        )}
       </div>
       <ul className="list scroll" style={{ flex: 1 }} data-testid="quest-list">
         {data?.items.map((i) => (
@@ -103,6 +127,8 @@ function QuestList() {
             <span className="meta">{i.name ?? ''}</span>
           </li>
         ))}
+        {data && data.total > data.items.length && <li className="list-item dim small" style={{ cursor: 'default' }}>Showing {data.items.length} of {data.total}. Type a name to find the rest.</li>}
+        {data && !data.items.length && <li className="dim small" style={{ padding: '8px 10px', whiteSpace: 'normal' }}>{mine ? 'Your plugin has no quests yet. Click New to start one, or untick the box to see them all.' : 'No quest matches.'}</li>}
       </ul>
       {creating && <NewQuestDialog onClose={() => setCreating(false)} />}
       {writing && (

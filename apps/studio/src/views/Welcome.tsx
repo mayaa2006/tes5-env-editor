@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { DEMO_GAME_DIR } from '../engine/constants';
-import { Checkbox, Icon, TextInput } from '../components/ui';
+import { Checkbox, Help, Icon, TextInput } from '../components/ui';
 import { engine, useStore } from '../state/store';
 
 export function Welcome() {
@@ -36,6 +36,14 @@ export function Welcome() {
     await engine((c) => c.call('open', { kind: 'mo2', path, profile: profile || undefined }), { busy: 'Reading MO2 profile…' });
   };
 
+  // Look for the game in the usual places, so most people never have to browse for it.
+  const [found, setFound] = useState<{ game: string; gameDir?: string; dataDir: string }[]>([]);
+  useEffect(() => {
+    if (!client || client.mode === 'demo') return;
+    client.call('findInstalls').then(setFound, () => setFound([]));
+  }, [client]);
+  const openFound = (path: string) => engine((c) => c.call('open', { kind: 'folder', path }), { busy: 'Reading plugins…' });
+
   if (session.open) return <LoadOrderPicker />;
 
   return (
@@ -44,6 +52,25 @@ export function Welcome() {
       <div className="lead">
         A cleaner, automation-first editor for Skyrim plugins: build environments, characters, quests and scripts; clean plugins; and let the boring parts happen automatically.
       </div>
+      {found.length > 0 && (
+        <div className="card" style={{ marginBottom: 12 }} data-testid="found-installs">
+          <div className="card-title">Found on this computer</div>
+          {found.map((f) => (
+            <div key={f.dataDir} className="row" style={{ gap: 10, marginTop: 4 }}>
+              <div className="grow" style={{ minWidth: 0 }}>
+                <div>{f.game === 'SkyrimSE' ? 'Skyrim Special Edition' : 'Skyrim (original)'}</div>
+                <div className="dim small" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={f.gameDir ?? f.dataDir}>
+                  {f.gameDir ?? f.dataDir}
+                </div>
+              </div>
+              <button className="btn primary" onClick={() => void openFound(f.gameDir ?? f.dataDir)} title="Open this game's Data folder and choose which plugins to load">
+                Open
+              </button>
+            </div>
+          ))}
+          <div className="dim small" style={{ marginTop: 6 }}>Using Mod Organizer 2? Open your MO2 instance below instead, so your mods are included.</div>
+        </div>
+      )}
       <div className="welcome-grid">
         <button className="welcome-card" onClick={openMo2} disabled={client?.mode === 'demo' && !mo2Path}>
           <h3>
@@ -103,9 +130,19 @@ function LoadOrderPicker() {
     if (on) {
       next.add(name);
       for (const m of session.loadOrder.find((p) => p.name === name)?.masters ?? []) next.add(m);
-    } else next.delete(name);
+    } else {
+      // Plugins that need this one as a master can't load without it.
+      const drop = [name];
+      while (drop.length) {
+        const n = drop.pop()!;
+        next.delete(n);
+        for (const p of session.loadOrder) if (next.has(p.name) && p.masters.some((m) => m.toLowerCase() === n.toLowerCase())) drop.push(p.name);
+      }
+    }
     setActive(next);
   };
+  const [filter, setFilter] = useState('');
+  const shown = session.loadOrder.filter((p) => !filter.trim() || p.name.toLowerCase().includes(filter.trim().toLowerCase()));
   const editable = session.loadOrder.filter((p) => !p.isMaster && active.has(p.name));
   const [edit, setEdit] = useState<string>('__new__');
   const [newName, setNewName] = useState('MyMod.esp');
@@ -122,7 +159,22 @@ function LoadOrderPicker() {
     <div className="welcome">
       <h1>Choose plugins to load</h1>
       <div className="lead">{session.source}</div>
-      <div className="card" style={{ maxHeight: '55vh', overflow: 'auto', padding: 0 }}>
+      <p className="dim" style={{ marginTop: 0 }}>
+        Tick the plugins you want to see and work with. Their masters are ticked for you. Fewer plugins load faster; the official masters are always enough to get started.
+      </p>
+      <div className="row wrap" style={{ gap: 6, marginBottom: 8 }}>
+        <input className="input" style={{ width: 220 }} placeholder="Find plugin…" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Find plugin" data-testid="plugin-filter" />
+        <button className="btn small" onClick={() => setActive(new Set(session.loadOrder.map((p) => p.name)))} title="Tick every plugin in the load order">
+          All
+        </button>
+        <button className="btn small" onClick={() => setActive(new Set(session.loadOrder.filter((p) => p.isMaster).map((p) => p.name)))} title="Tick only master files (.esm), such as the game and its DLC">
+          Only masters
+        </button>
+        <button className="btn small" onClick={() => setActive(new Set())} title="Untick everything">
+          None
+        </button>
+      </div>
+      <div className="card" style={{ maxHeight: '50vh', overflow: 'auto', padding: 0 }}>
         <table className="grid">
           <thead>
             <tr>
@@ -133,7 +185,14 @@ function LoadOrderPicker() {
             </tr>
           </thead>
           <tbody>
-            {session.loadOrder.map((p) => (
+            {!shown.length && (
+              <tr>
+                <td colSpan={4} className="dim">
+                  No plugin matches "{filter}".
+                </td>
+              </tr>
+            )}
+            {shown.map((p) => (
               <tr key={p.name}>
                 <td>
                   <Checkbox checked={active.has(p.name)} onChange={(v) => toggle(p.name, v)} label="" />
@@ -163,6 +222,7 @@ function LoadOrderPicker() {
         <span className="dim">{active.size} selected</span>
         <span className="spacer grow" />
         <span className="dim">Save my changes to</span>
+        <Help text="Your edits go into one plugin. A new plugin keeps your work separate from everything else (best for a new mod). You can also keep editing a plugin you made before, or choose later on the Plugins tab." />
         <select className="input" style={{ width: 200 }} value={edit} onChange={(e) => setEdit(e.target.value)} data-testid="edit-target">
           <option value="__new__">a new plugin…</option>
           {editable.map((p) => (

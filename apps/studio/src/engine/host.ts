@@ -76,6 +76,7 @@ import {
   compactFormIds,
   computeBounds,
   detectInstall,
+  findInstalls,
   eslReport,
   generateCellNavmesh,
   readMo2Instance,
@@ -187,6 +188,12 @@ export class EngineHost {
   }
 
   // ---------------------------------------------------------------- session
+
+  /** Skyrim installs found in the usual places (Steam libraries, GOG), for the start screen. */
+  findInstalls() {
+    const env = typeof process !== 'undefined' && process.env ? (process.env as Record<string, string | undefined>) : {};
+    return findInstalls(this.fs, env);
+  }
 
   async open(opts: OpenOptions): Promise<SessionInfo> {
     let ws: Workspace;
@@ -662,11 +669,17 @@ export class EngineHost {
     const canBake = this.faces!.headPartsOf(npc).some((p) => p.type === 'Face' && !!p.model);
     const present = this.ws!.vfs.has(paths.mesh) && this.ws!.vfs.has(paths.tint);
     const needing = await this.faces!.needingFaces();
-    return { present, canBake, needed: needing.includes(npc), paths };
+    const template = this.npcs!.looksTemplate(npc);
+    return { present, canBake, needed: needing.includes(npc), paths, template, templateName: template ? (this.ws!.summary(template)?.name ?? this.ws!.summary(template)?.editorId) : undefined };
   }
 
   facesNeeded() {
     return this.faces!.needingFaces();
+  }
+
+  /** Every character in the plugin with the state of its face files (for the export list). */
+  faceFiles() {
+    return this.faces!.faceFiles();
   }
 
   /** Bake and write FaceGen (default: every character that needs it). One undo step. */

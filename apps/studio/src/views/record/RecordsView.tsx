@@ -5,7 +5,7 @@
 import { useMemo, useState } from 'react';
 import type { FormKey } from '@tes5/esp';
 import type { RecordView } from '@tes5/workspace';
-import { Checkbox, Icon, useDebounced, useQuery } from '../../components/ui';
+import { Checkbox, EmptyState, Icon, useDebounced, useQuery } from '../../components/ui';
 import { useStore } from '../../state/store';
 
 export default function RecordsView() {
@@ -13,7 +13,9 @@ export default function RecordsView() {
   return (
     <div className="row" style={{ flex: 1, minHeight: 0, alignItems: 'stretch', gap: 0 }}>
       <Browser />
-      <div className="col" style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{selected ? <Conflicts key={selected} formKey={selected} /> : <div className="empty">Pick a record to compare its versions across plugins.</div>}</div>
+      <div className="col" style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{selected ? <Conflicts key={selected} formKey={selected} /> : <EmptyState icon="records" title="Pick a record">
+            Every form in your load order, the way xEdit shows them. Pick one to compare each plugin's version side by side, with the differences highlighted and the version the game uses on the right. Use the type and plugin filters to narrow the list.
+          </EmptyState>}</div>
     </div>
   );
 }
@@ -56,7 +58,7 @@ function Browser() {
         {data?.items.map((i) => (
           <li key={i.formKey} className={`list-item ${selected === i.formKey ? 'selected' : ''} ${i.deleted ? 'dim' : ''}`} onClick={() => select(i.formKey)} title={i.formKey}>
             <span className="sig">{i.sig}</span>
-            <span className="name">{i.editorId ?? i.formKey}</span>
+            <span className="name">{i.editorId ?? (i.base ? `${i.base} (placed)` : i.formKey)}</span>
             {i.owner !== i.winner && <span className="chip warn" title={`Overridden by ${i.winner}`}>×</span>}
             <span className="meta">{i.name ?? ''}</span>
           </li>

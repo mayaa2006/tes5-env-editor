@@ -269,6 +269,18 @@ export function DragNumber({ value, onCommit, step = 1, precision = 2, min, max,
   );
 }
 
+/** A friendly empty screen: an icon, what this place is for, and the next things to do. */
+export function EmptyState({ icon, title, children, actions, testId }: { icon: string; title: ReactNode; children?: ReactNode; actions?: ReactNode; testId?: string }) {
+  return (
+    <div className="empty-state" data-testid={testId}>
+      <Icon name={icon} size={36} />
+      <div className="empty-state-title">{title}</div>
+      {children && <div className="empty-state-text">{children}</div>}
+      {actions && <div className="row wrap" style={{ gap: 8, justifyContent: 'center' }}>{actions}</div>}
+    </div>
+  );
+}
+
 export function Checkbox({ checked, onChange, label, disabled, help }: { checked: boolean; onChange: (v: boolean) => void; label: ReactNode; disabled?: boolean; help?: ReactNode }) {
   return (
     <label className="checkbox">
@@ -321,9 +333,10 @@ export function Select<T extends string | number>({ value, options, onChange, di
 
 export function Modal({ title, children, footer, onClose, width, className }: { title: ReactNode; children: ReactNode; footer?: ReactNode; onClose: () => void; width?: number; className?: string }) {
   useEffect(() => {
+    // Capture phase: text boxes stop key events from bubbling, but Escape should still close the dialog.
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [onClose]);
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>

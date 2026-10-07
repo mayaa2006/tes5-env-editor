@@ -5,7 +5,7 @@
  * leaves a half-saved script.
  */
 import { useEffect, useState } from 'react';
-import { Help, Icon, Modal, useQuery } from '../../components/ui';
+import { EmptyState, Help, Icon, Modal, useQuery } from '../../components/ui';
 import { CompilerSettings } from './CompilerSettings';
 import { engine, useStore } from '../../state/store';
 import { CodeEditor } from './CodeEditor';
@@ -38,7 +38,21 @@ export default function ScriptEditor() {
     setCompile(null);
   }, [name]);
 
-  if (!name) return <div className="empty" style={{ flex: 1 }}>Pick a script on the left, or create a new one.</div>;
+  if (!name)
+    return (
+      <EmptyState
+        icon="script"
+        title="Pick a script to edit"
+        testId="script-empty"
+        actions={
+          <button className="btn primary" onClick={() => useStore.getState().requestNew('script')} title="Start a new Papyrus script with the events it needs already filled in">
+            <Icon name="plus" /> New script
+          </button>
+        }
+      >
+        Your scripts are listed on the left. Scripts from the game and other mods are under "Game & other mods" if you want to read them. Most things (triggers, quest steps, dialogue results) don't need a script written by hand.
+      </EmptyState>
+    );
   if (list && !info) return <div className="empty" style={{ flex: 1 }}>Script “{name}” wasn't found in the load order.</div>;
   if (source === undefined) return <div className="empty" style={{ flex: 1 }}>Loading…</div>;
 

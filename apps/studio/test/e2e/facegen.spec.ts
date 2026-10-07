@@ -89,19 +89,42 @@ test('paint layers by name with a preview of the baked tint', async ({ page }) =
   expect(errors).toEqual([]);
 });
 
-test('the Release tab generates every face that needs it', async ({ page }) => {
-  const errors: string[] = [];
-  page.on('pageerror', (e) => errors.push(e.message));
-  await openKeeper(page);
-  await page.getByRole('tab', { name: 'Face' }).click();
-  await page.getByRole('button', { name: 'Randomize' }).click();
-  await expect(page.getByTestId('face-files')).toBeVisible();
-  await page.locator('.workspace-tab', { hasText: 'Release' }).click();
-  const faces = page.getByTestId('release-faces');
-  await expect(faces).toContainText('1 need faces');
-  await expect(faces).toContainText('Brynja');
-  await faces.getByTestId('generate-faces').click();
-  await expect(page.locator('.toast').filter({ hasText: 'Generated 1 face(s)' })).toBeVisible();
-  await expect(faces).toContainText('Every edited face has up-to-date face files.');
-  expect(errors).toEqual([]);
-});
+for (const size of [
+  { width: 1280, height: 800 },
+  { width: 1920, height: 1080 },
+]) {
+  test(`the Release tab lists every face, generates the changed ones and exports ticked ones (${size.width}×${size.height})`, async ({ page }) => {
+    await page.setViewportSize(size);
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await openKeeper(page);
+    await page.getByRole('tab', { name: 'Face' }).click();
+    await page.getByRole('button', { name: 'Randomize' }).click();
+    await expect(page.getByTestId('face-files')).toBeVisible();
+    await page.locator('.workspace-tab', { hasText: 'Release' }).click();
+    const faces = page.getByTestId('release-faces');
+    await expect(faces).toContainText('1 need attention');
+    const row = faces.getByTestId('face-row').filter({ hasText: 'Brynja' });
+    await expect(row).toContainText('No face files');
+    await expect(faces.getByTestId('export-faces')).toBeDisabled();
+    await faces.getByTestId('generate-faces').click();
+    await expect(page.locator('.toast').filter({ hasText: 'Wrote face files for 1 character' })).toBeVisible();
+    await expect(faces).toContainText('Every changed face has up-to-date face files.');
+    await expect(row).toContainText('Up to date');
+    // The pre-release check updates on its own.
+    await expect(page.getByTestId('release-check')).not.toContainText('has no FaceGen files');
+
+    // Tick a face that's already up to date and write it again (the CK's Ctrl+F4).
+    await row.locator('input[type=checkbox]').check();
+    await expect(faces.getByTestId('export-faces')).toHaveText('Export ticked (1)');
+    if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/release-faces-${size.width}.png` });
+    await faces.getByTestId('export-faces').click();
+    await expect(page.locator('.toast').filter({ hasText: 'Wrote face files for 1 character' }).last()).toBeVisible();
+    await expect(faces.getByTestId('export-faces')).toBeDisabled();
+
+    // The search narrows the list.
+    await faces.getByLabel('Find character').fill('nobody here');
+    await expect(faces).toContainText('No character matches');
+    expect(errors).toEqual([]);
+  });
+}

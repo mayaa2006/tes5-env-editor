@@ -2,6 +2,22 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.5.0
+
+- **Face files (FaceGen export) like the CK's Ctrl+F4, as a list:** Release → Character faces lists every character in your plugin and whether its face files are up to date, out of date or missing.
+  - **Generate faces** makes every changed one; tick any others and **Export ticked** to write them again.
+  - Face tints are now written like the Creation Kit's: compressed (BC3) with mipmaps, about a third of the size.
+  - Characters that take their looks from a template no longer show as needing face files (the game uses the template's face). Their page says so and opens the template.
+  - A character whose files are up to date has **Write again**.
+- **Easier to find Skyrim:** the start screen finds it in your Steam libraries and GOG folders, so you usually just click **Open**.
+- **Plugin list:** search, **All / Only masters / None**, and unticking a master unticks the plugins that need it.
+- **Empty screens say what to do next**, with a button for it, on the Characters, Quests, Scripts and Records tabs.
+- **Only mine:** the Characters and Quests lists can show only what your plugin adds or changes, and say when there are more than they show.
+- **Conditions show names:** skills and stats ("One-handed", "Health"), crime types, hands and alignment are picked from a list instead of typed as numbers.
+- **Records** names placed objects after what they place.
+- **World toolbar** stays on one row on small windows (icons with tooltips).
+- **Fixes:** the pre-release check no longer shows problems you've already fixed (it updates itself); Escape now closes dialogs while you're typing in them.
+
 ## 0.4.0
 
 - **Outdoors:** an outdoor cell now opens with its neighbours, so you see the surrounding landscape and everything on it.
