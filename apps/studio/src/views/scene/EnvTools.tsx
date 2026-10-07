@@ -18,9 +18,10 @@ export interface ToolHandlers {
   cancelled?: () => void;
 }
 
-type Tab = 'place' | 'paint' | 'path' | 'light' | 'clutter' | 'room' | 'doors';
+type Tab = 'place' | 'terrain' | 'paint' | 'path' | 'light' | 'clutter' | 'room' | 'doors';
 const TABS: { id: Tab; label: string; icon: string; title: string }[] = [
   { id: 'place', label: 'Place', icon: 'cube', title: 'Drop to surface, arrays' },
+  { id: 'terrain', label: 'Terrain', icon: 'scene', title: 'Sculpt the ground outdoors: raise, lower, smooth, flatten' },
   { id: 'paint', label: 'Paint', icon: 'palette', title: 'Scatter brush for plants, rocks and clutter' },
   { id: 'path', label: 'Path', icon: 'route', title: 'Roads, fences and rows of objects along a line' },
   { id: 'light', label: 'Light', icon: 'light', title: 'Lights for candles and fires, cell mood' },
@@ -57,6 +58,7 @@ export function EnvTools({ cell, interior, viewport, handlers, refs }: { cell: F
       </div>
       <div className="env-body">
         {tab === 'place' && <PlaceTab />}
+        {tab === 'terrain' && <TerrainTab cell={cell} interior={interior} viewport={viewport} handlers={handlers} refs={refs} />}
         {tab === 'paint' && <PaintTab cell={cell} viewport={viewport} handlers={handlers} />}
         {tab === 'path' && <PathTab cell={cell} viewport={viewport} handlers={handlers} />}
         {tab === 'light' && <LightTab cell={cell} interior={interior} />}
@@ -123,6 +125,100 @@ function PlaceTab() {
       </button>
       <p className="dim small" style={{ margin: 0 }}>
         Tip: with <b>Kit</b> snapping on (the toolbar button), press G and slide a wall or floor piece next to another: their edges meet exactly. Hold Alt to move freely.
+      </p>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ terrain
+
+type SculptMode = 'raise' | 'lower' | 'smooth' | 'flatten';
+const SCULPT_MODES: { id: SculptMode; label: string; help: string }[] = [
+  { id: 'raise', label: 'Raise', help: 'Push the ground up under the brush (Ctrl+drag lowers).' },
+  { id: 'lower', label: 'Lower', help: 'Dig the ground down under the brush (Ctrl+drag raises).' },
+  { id: 'smooth', label: 'Smooth', help: 'Even out bumps and sharp edges.' },
+  { id: 'flatten', label: 'Flatten', help: 'Level the ground to the height where the stroke starts: for building plots, roads and camps.' },
+];
+
+function TerrainTab({ cell, interior, viewport, handlers, refs }: { cell: FormKey; interior: boolean; viewport: React.RefObject<Viewport | null>; handlers: React.RefObject<ToolHandlers>; refs: PlacedRef[] }) {
+  const [mode, setMode] = useState<SculptMode>('raise');
+  const [radius, setRadius] = useState(512);
+  const [strength, setStrength] = useState(0.5);
+  const [on, setOn] = useState(false);
+  const [lastStroke, setLastStroke] = useState<{ points: Vec[]; radius: number } | null>(null);
+  const live = useRef({ mode, radius, strength });
+  live.current = { mode, radius, strength };
+
+  useEffect(() => {
+    handlers.current.brushStroke = async (points, erase) => {
+      const o = live.current;
+      const m: SculptMode = erase && o.mode === 'raise' ? 'lower' : erase && o.mode === 'lower' ? 'raise' : o.mode;
+      const changed = await engine((c) => c.call('sculptTerrain', cell, points, { mode: m, radius: o.radius, strength: o.strength }));
+      if (changed?.length) setLastStroke({ points, radius: o.radius });
+      else if (changed) toast('info', 'No terrain under the brush (only loaded outdoor cells can be sculpted).');
+    };
+    handlers.current.brushRadius = setRadius;
+    handlers.current.cancelled = () => setOn(false);
+    return () => {
+      handlers.current.brushStroke = undefined;
+      handlers.current.brushRadius = undefined;
+      handlers.current.cancelled = undefined;
+    };
+  }, [cell, handlers]);
+  useEffect(() => viewport.current?.setBrushRadius(radius), [radius, viewport]);
+  useEffect(() => viewport.current?.setSculpt({ mode, strength }), [mode, strength, viewport]);
+
+  if (interior) return <div className="dim small">Terrain only exists outdoors. Open an outdoor cell to sculpt it.</div>;
+  const toggle = () => {
+    const next = !on;
+    viewport.current?.setBrush(next ? { radius, sculpt: { mode, strength } } : null);
+    setOn(next);
+  };
+  // Objects standing in the last stroke's area may now float or be buried.
+  const nearStroke = lastStroke
+    ? refs.filter((r) => !r.marker && !r.deleted && lastStroke.points.some((p) => Math.hypot(r.transform.position.x - p.x, r.transform.position.y - p.y) < lastStroke.radius)).map((r) => r.formKey)
+    : [];
+  return (
+    <div className="col" style={{ gap: 8 }}>
+      <div className="row wrap" style={{ gap: 4 }}>
+        {SCULPT_MODES.map((m) => (
+          <button key={m.id} className={`btn small ${mode === m.id ? 'active' : 'ghost'}`} title={m.help} aria-pressed={mode === m.id} onClick={() => setMode(m.id)} data-testid={`sculpt-${m.id}`}>
+            {m.label}
+          </button>
+        ))}
+      </div>
+      <Field label="Brush size" title="Radius in game units (a cell is 4096 across). [ and ] change it while sculpting.">
+        <DragNumber value={radius} min={128} max={8192} precision={0} onCommit={setRadius} suffix="u" />
+      </Field>
+      <Field label="Strength" title="How much each pass of the brush changes the ground.">
+        <Slider value={strength} min={0.05} max={1} step={0.05} onCommit={setStrength} />
+      </Field>
+      <button className={`btn small ${on ? 'active' : 'primary'}`} onClick={toggle} data-testid="sculpt-toggle" title="Then drag over the ground in the view. Each stroke is one undo step.">
+        {on ? 'Stop sculpting' : 'Start sculpting'}
+      </button>
+      {nearStroke.length > 0 && (
+        <div className="card small" style={{ padding: 8 }}>
+          {nearStroke.length} object{nearStroke.length === 1 ? '' : 's'} stood where you sculpted and may now float or sink.
+          <div className="row wrap" style={{ gap: 4, marginTop: 6 }}>
+            <button
+              className="btn small"
+              onClick={async () => {
+                const r = await engine((c) => c.call('envDrop', nearStroke, false));
+                if (r) toast('success', `Dropped ${r.moved.length} onto the new ground`);
+                setLastStroke(null);
+              }}
+              title="Move each of them straight down (or up) onto the ground. Ctrl+Z undoes it."
+            >
+              Put them on the ground
+            </button>
+            <button className="btn small ghost" onClick={() => useStore.getState().setSceneSelection(nearStroke)}>
+              Select them
+            </button>
+          </div>
+        </div>
+      )}
+      <p className="dim small" style={{ margin: 0 }}>
+        Edges between cells stay joined. Characters walk on the navmesh, not the ground: after big changes, generate it again (Navmesh menu). Navmeshes made here show as out of date automatically.
       </p>
     </div>
   );

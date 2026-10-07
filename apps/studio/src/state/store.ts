@@ -35,6 +35,10 @@ export interface Settings {
   snapRotateDeg: number;
   snapScale: number;
   showMarkers: boolean;
+  /** Rings of cells loaded around an outdoor cell: 0 = just the cell, 1 = 3×3, 2 = 5×5. */
+  surroundingCells: number;
+  /** Draw characters with their body, clothes and head (off: simple capsules). */
+  actorModels: boolean;
   /** While moving (G), snap edges flush to nearby pieces. */
   kitSnap: boolean;
   /** Properties panel shown per workspace (designers have their own editors, so it starts hidden there). */
@@ -59,6 +63,8 @@ const DEFAULT_SETTINGS: Settings = {
   snapRotateDeg: 15,
   snapScale: 0.1,
   showMarkers: true,
+  surroundingCells: 1,
+  actorModels: true,
   kitSnap: true,
   inspector: { npc: false, quest: false, items: false, magic: false },
   textured: true,

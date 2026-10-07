@@ -1,6 +1,6 @@
 {
   "name": "@tes5/studio",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "TES5 Env Editor Studio: the desktop editor (Electron + React + three.js)",
   "author": "mayaa2006",

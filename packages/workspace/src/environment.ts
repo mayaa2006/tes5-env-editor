@@ -987,7 +987,7 @@ export class EnvironmentService {
       })
       .sort();
     const land = this.world.terrain(cell);
-    if (land) parts.push(`land:${Array.from(land.heights.subarray(0, 1089).filter((_, i) => i % 37 === 0), Math.round).join(',')}`);
+    if (land) parts.push(`land:${Array.from(land.heights.subarray(0, 1089), Math.round).join(',')}`);
     let h = 2166136261;
     for (const s of parts) for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
     return `${parts.length}:${(h >>> 0).toString(16)}`;

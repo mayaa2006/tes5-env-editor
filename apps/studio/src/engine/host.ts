@@ -59,6 +59,9 @@ import {
   ScriptService,
   WorldService,
   Workspace,
+  TerrainService,
+  ActorModels,
+  type SculptMode,
   CREATABLE_TYPES,
   catalogCounts,
   catalogList,
@@ -149,6 +152,8 @@ type Listener = (e: WorkspaceEvent) => void;
 export class EngineHost {
   ws?: Workspace;
   world?: WorldService;
+  terrainService?: TerrainService;
+  actorModels?: ActorModels;
   npcs?: NpcService;
   faces?: FaceGenService;
   quests?: QuestService;
@@ -216,7 +221,9 @@ export class EngineHost {
   private attach(ws: Workspace): void {
     this.ws = ws;
     this.world = new WorldService(ws);
+    this.terrainService = new TerrainService(ws, this.world);
     this.npcs = new NpcService(ws);
+    this.actorModels = new ActorModels(ws, this.npcs);
     this.faces = new FaceGenService(ws, this.npcs);
     this.scripts = new ScriptService(ws);
     this.scripts.runner = this.runner;
@@ -444,6 +451,21 @@ export class EngineHost {
 
   terrain(cell: FormKey) {
     return this.world!.terrain(cell) ?? null;
+  }
+
+  /** The model files that make up a placed character (body, armor, head), to draw it in the 3D view. */
+  actorModel(base: FormKey) {
+    return this.actorModels?.modelFor(base) ?? null;
+  }
+
+  /** Raise, lower, smooth or flatten the terrain along a brush stroke (one undo step). Returns the cells changed. */
+  sculptTerrain(cell: FormKey, points: { x: number; y: number }[], opts: { mode: SculptMode; radius: number; strength: number }) {
+    return this.terrainService!.sculpt(cell, points, opts);
+  }
+
+  /** An outdoor cell and the ones around it (radius 1 = 3×3, 2 = 5×5), with references and terrain. */
+  area(cell: FormKey, radius: number) {
+    return this.world!.area(cell, radius);
   }
 
   cellLighting(cell: FormKey) {

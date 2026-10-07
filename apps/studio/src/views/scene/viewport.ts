@@ -16,7 +16,7 @@
 import * as THREE from 'three';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import type { FormKey, Navmesh } from '@tes5/esp';
-import type { PlacedRef, Transform } from '@tes5/workspace';
+import { HeightField, sculptDab, type PlacedRef, type SculptOptions, type Transform } from '@tes5/workspace';
 import { AssetCache, placeholder } from './assets3d';
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
@@ -51,6 +51,8 @@ export interface ViewportCallbacks {
 }
 
 export interface TerrainData {
+  /** Cell the terrain belongs to (outdoor areas show several). */
+  cell?: FormKey;
   origin: { x: number; y: number };
   heights: Float32Array;
   colors?: Uint8Array;
@@ -152,13 +154,22 @@ export class Viewport {
   private altHeld = false;
   private kitTargets?: { key: FormKey; box: THREE.Box3 }[];
   private kitStart?: THREE.Box3;
-  private brush?: { radius: number; ring: THREE.Line; painting: boolean; erase: boolean; points: THREE.Vector3[] };
+  private brush?: {
+    radius: number;
+    ring: THREE.Line;
+    painting: boolean;
+    erase: boolean;
+    points: THREE.Vector3[];
+    /** Terrain brush: the ground is reshaped live while dragging (the same calculation the engine saves). */
+    sculpt?: { mode: SculptOptions['mode']; strength: number };
+    live?: { field: HeightField; verts: Map<string, [THREE.Mesh, number][]>; flattenTo?: number; dirty: Set<THREE.Mesh> };
+  };
   private pathDraw?: { points: THREE.Vector3[] };
   private pointPick?: (p: { x: number; y: number; z: number } | null) => void;
 
   constructor(
     private readonly container: HTMLElement,
-    client: import('../../engine/client').EngineClient,
+    private readonly client: import('../../engine/client').EngineClient,
     private readonly cb: ViewportCallbacks,
   ) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true, preserveDrawingBuffer: false });
@@ -317,7 +328,11 @@ export class Viewport {
       e.box?.setFromObject(e.obj);
       this.invalidate(true);
     };
-    if (key === 'actor') set(placeholder('actor'));
+    if (key === 'actor') {
+      // A capsule while the character's body, armor and head load; then the real thing.
+      set(placeholder('actor'));
+      if (e.ref.base && this.showActors) void this.actorObject(e.ref.base).then((o) => o && set(o));
+    }
     else if (key === 'light') set(placeholder('light'));
     else if (key === 'marker') set(placeholder('marker'));
     else {
@@ -328,6 +343,60 @@ export class Viewport {
         else set(tpl.clone());
       });
     }
+  }
+
+  private actorTemplates = new Map<FormKey, Promise<THREE.Group | null>>();
+  /** Draw characters with their real models (off: capsules, faster with many characters). */
+  showActors = true;
+
+  /** One template group per character base: its model pieces in rest pose, scaled to its height. */
+  private actorObject(base: FormKey): Promise<THREE.Group | null> {
+    let p = this.actorTemplates.get(base);
+    if (!p) {
+      p = this.client
+        .call('actorModel', base)
+        .then(async (m) => {
+          if (!m || !m.parts.length) return null;
+          const meshes = await Promise.all(m.parts.map((part) => this.assets.mesh(part.model)));
+          const g = new THREE.Group();
+          for (const t of meshes) if (t && t.children.length) g.add(t.clone());
+          if (!g.children.length) return null;
+          // Skin and clothes ignore their vertex colours in game (they're often black). These meshes are only used by
+          // characters, so the shared materials are changed in place (copies would miss textures that load later).
+          g.traverse((o) => {
+            const mesh = o as THREE.Mesh;
+            if (!mesh.isMesh) return;
+            if (!mesh.geometry.userData.actorNormals) {
+              mesh.geometry.computeVertexNormals();
+              mesh.geometry.userData.actorNormals = true;
+            }
+            for (const mat of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+              if ((mat as THREE.MeshStandardMaterial).vertexColors) {
+                (mat as THREE.MeshStandardMaterial).vertexColors = false;
+                mat.needsUpdate = true;
+              }
+            }
+          });
+          g.scale.setScalar(m.scale);
+          g.userData.actorNotes = m.notes;
+          return g;
+        })
+        .catch(() => null);
+      this.actorTemplates.set(base, p);
+    }
+    return p.then((g) => (g ? g.clone() : null));
+  }
+
+  setShowActors(on: boolean): void {
+    if (this.showActors === on) return;
+    this.showActors = on;
+    this.refreshActors();
+  }
+
+  /** Forget character models (after edits to looks or outfits), so they're rebuilt next time. */
+  refreshActors(): void {
+    this.actorTemplates.clear();
+    for (const e of this.entries.values()) if (e.contentKey === 'actor') this.loadContent(e, 'actor');
   }
 
   private applyVisibility(e: Entry): void {
@@ -379,6 +448,7 @@ export class Viewport {
       g.computeVertexNormals();
       const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 }));
       m.userData.terrain = true;
+      m.userData.cell = land.cell;
       this.terrainGroup.add(m);
     }
     this.invalidate();
@@ -442,7 +512,7 @@ export class Viewport {
   }
 
   /** Paint mode: a circle follows the cursor; drag to paint, Ctrl+drag to erase, [ and ] resize. */
-  setBrush(opts: { radius: number } | null): void {
+  setBrush(opts: { radius: number; sculpt?: { mode: SculptOptions['mode']; strength: number } } | null): void {
     if (this.brush) this.helpers.remove(this.brush.ring);
     this.clearToolHelpers('brushDab');
     this.brush = undefined;
@@ -454,9 +524,69 @@ export class Viewport {
       ring.scale.setScalar(opts.radius);
       ring.visible = false;
       this.helpers.add(ring);
-      this.brush = { radius: opts.radius, ring, painting: false, erase: false, points: [] };
-      this.cb.status('Paint: drag to paint · Ctrl+drag to erase · [ ] brush size · Esc to stop');
+      this.brush = { radius: opts.radius, ring, painting: false, erase: false, points: [], sculpt: opts.sculpt };
+      this.cb.status(
+        opts.sculpt
+          ? `Terrain: drag to ${opts.sculpt.mode}${opts.sculpt.mode === 'raise' ? ' · Ctrl+drag to lower' : opts.sculpt.mode === 'lower' ? ' · Ctrl+drag to raise' : ''} · [ ] brush size · Esc to stop`
+          : 'Paint: drag to paint · Ctrl+drag to erase · [ ] brush size · Esc to stop',
+      );
     } else this.cb.status(null);
+    this.invalidate();
+  }
+
+  /** Change the terrain brush's mode or strength without leaving it. */
+  setSculpt(sculpt: { mode: SculptOptions['mode']; strength: number }): void {
+    if (this.brush?.sculpt) this.brush.sculpt = sculpt;
+  }
+
+  /** Point on the terrain under the cursor (falls back to anything under it). */
+  private pickTerrain(clientX: number, clientY: number): THREE.Vector3 {
+    const ray = this.rayAt(clientX, clientY);
+    const hit = ray.intersectObjects([this.terrainGroup], true).find((h) => (h.object as THREE.Mesh).isMesh);
+    return hit ? hit.point.clone() : this.pickPoint(clientX, clientY);
+  }
+
+  /** Build the live height field from the terrain meshes in view (cells share edge vertices). */
+  private startSculpt(): void {
+    const b = this.brush!;
+    const field = new HeightField();
+    const verts = new Map<string, [THREE.Mesh, number][]>();
+    for (const m of this.terrainGroup.children as THREE.Mesh[]) {
+      const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute;
+      for (let i = 0; i < pos.count; i++) {
+        const gx = Math.round(pos.getX(i) / 128);
+        const gy = Math.round(pos.getY(i) / 128);
+        const k = field.key(gx, gy);
+        field.set(gx, gy, pos.getZ(i));
+        const list = verts.get(k);
+        if (list) list.push([m, i]);
+        else verts.set(k, [[m, i]]);
+      }
+    }
+    b.live = { field, verts, dirty: new Set() };
+  }
+
+  private sculptLive(p: THREE.Vector3): void {
+    const b = this.brush!;
+    if (!b.sculpt || !b.live) return;
+    const mode = b.erase && b.sculpt.mode === 'raise' ? 'lower' : b.erase && b.sculpt.mode === 'lower' ? 'raise' : b.sculpt.mode;
+    if (mode === 'flatten' && b.live.flattenTo === undefined) b.live.flattenTo = b.live.field.heightAt(p.x, p.y);
+    const changed = sculptDab(b.live.field, p, { mode, radius: b.radius, strength: b.sculpt.strength, flattenTo: b.live.flattenTo });
+    for (const k of changed) {
+      const [gx, gy] = k.split(',').map(Number) as [number, number];
+      const h = b.live.field.get(gx, gy)!;
+      for (const [m, i] of b.live.verts.get(k) ?? []) {
+        (m.geometry.getAttribute('position') as THREE.BufferAttribute).setZ(i, h);
+        b.live.dirty.add(m);
+      }
+    }
+    for (const m of b.live.dirty) {
+      m.geometry.getAttribute('position').needsUpdate = true;
+      m.geometry.computeVertexNormals();
+      m.geometry.computeBoundingSphere();
+      m.geometry.computeBoundingBox();
+    }
+    b.live.dirty.clear();
     this.invalidate();
   }
 
@@ -521,6 +651,10 @@ export class Viewport {
   private brushDab(p: THREE.Vector3): void {
     const b = this.brush!;
     b.points.push(p.clone());
+    if (b.sculpt) {
+      this.sculptLive(p);
+      return;
+    }
     const dot = new THREE.Mesh(new THREE.CircleGeometry(b.radius, 32), new THREE.MeshBasicMaterial({ color: b.erase ? 0xff6b6b : 0x6ee7a8, transparent: true, opacity: 0.18, depthTest: false }));
     dot.position.copy(p).setZ(p.z + 2);
     dot.renderOrder = 11;
@@ -535,6 +669,7 @@ export class Viewport {
     b.painting = false;
     const pts = b.points.map((p) => ({ x: p.x, y: p.y, z: p.z }));
     b.points = [];
+    b.live = undefined;
     this.clearToolHelpers('brushDab');
     this.invalidate();
     if (pts.length) this.cb.brushStroke?.(pts, b.erase);
@@ -872,11 +1007,12 @@ export class Viewport {
     return this.useOrtho;
   }
 
-  frame(keys?: FormKey[]): void {
+  frame(keys?: FormKey[], opts: { cell?: FormKey } = {}): void {
     const box = new THREE.Box3();
     const list = keys?.length ? keys.map((k) => this.entries.get(k)).filter((e): e is Entry => !!e) : [...this.entries.values()].filter((e) => e.obj.visible && !e.ref.marker);
     for (const e of list) box.expandByObject(e.obj);
-    if (!keys?.length) for (const t of this.terrainGroup.children) box.expandByObject(t);
+    // Outdoors: frame the current cell's ground (not the whole loaded area).
+    if (!keys?.length || opts.cell) for (const t of this.terrainGroup.children) if (!opts.cell || t.userData.cell === opts.cell) box.expandByObject(t);
     if (box.isEmpty()) return;
     const sphere = box.getBoundingSphere(new THREE.Sphere());
     this.target.copy(sphere.center);
@@ -970,7 +1106,8 @@ export class Viewport {
       b.painting = true;
       b.erase = e.ctrlKey || e.metaKey;
       b.points = [];
-      this.brushDab(this.pickPoint(e.clientX, e.clientY));
+      if (b.sculpt) this.startSculpt();
+      this.brushDab(b.sculpt ? this.pickTerrain(e.clientX, e.clientY) : this.pickPoint(e.clientX, e.clientY));
       this.renderer.domElement.setPointerCapture(e.pointerId);
       return;
     }
@@ -1013,13 +1150,15 @@ export class Viewport {
     }
     if (this.brush) {
       const b = this.brush;
-      const p = this.pickPoint(e.clientX, e.clientY);
+      const p = b.sculpt ? this.pickTerrain(e.clientX, e.clientY) : this.pickPoint(e.clientX, e.clientY);
       b.ring.position.copy(p).setZ(p.z + 3);
       b.ring.visible = true;
       (b.ring.material as THREE.LineBasicMaterial).color.set(e.ctrlKey || e.metaKey || b.erase ? 0xff6b6b : 0x6ee7a8);
       if (b.painting) {
         const last = b.points[b.points.length - 1];
-        if (!last || last.distanceTo(p) > b.radius * 0.6) this.brushDab(p);
+        // Terrain dabs are closer together so the stroke is even; dabs are measured across the ground only.
+        const spacing = b.sculpt ? b.radius * 0.25 : b.radius * 0.6;
+        if (!last || Math.hypot(last.x - p.x, last.y - p.y) > spacing) this.brushDab(p);
       }
       this.invalidate();
       if (!this.drag) return;

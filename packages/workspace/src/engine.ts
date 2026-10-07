@@ -193,8 +193,12 @@ export class Workspace {
     return () => this.listeners.delete(fn);
   }
 
+  /** Goes up on every change to the loaded data (edits, undo, loading); lets services cache derived lists. */
+  revision = 0;
+
   private emit(e: WorkspaceEvent): void {
     if (e.type === 'loaded' || e.type === 'loadOrder' || e.type === 'activeChanged') this.baseIndex = null;
+    if (e.type !== 'warning' && e.type !== 'saved') this.revision++;
     for (const l of this.listeners) l(e);
   }
 

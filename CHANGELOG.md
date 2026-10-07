@@ -2,6 +2,21 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.4.0
+
+- **Outdoors:** an outdoor cell now opens with its neighbours, so you see the surrounding landscape and everything on it.
+  - **W / N / S / E** buttons in the World toolbar step to the next cell.
+  - View → **Outdoors, also load** picks how many cells around (0, 1 or 2).
+  - Objects dropped into the view go into the cell under them.
+  - The outliner lists everything in view, with **Only the current cell** to narrow it.
+- **Terrain sculpting:** World tools → **Terrain** has Raise, Lower, Smooth and Flatten brushes.
+  - Drag on the ground and see the change live; Ctrl swaps raise and lower.
+  - Works across cell borders without seams, and each stroke is one undo step.
+  - Objects that stood where you sculpted are listed afterwards, with **Put them on the ground**.
+- **Characters look like people:** placed characters show their body, outfit and face instead of a capsule (View → **Characters as people** to turn it off).
+- **Faster:** the cell list for a large worldspace loads once instead of on every change.
+- **Fix:** the 3D view stayed blank if you picked a cell after opening the World tab.
+
 ## 0.3.0
 
 - **Items and Magic tabs:** items, crafting, loot lists, spells, perks and the rest now have their own tabs instead of one long list in World → Objects.
