@@ -10,6 +10,7 @@ import { TestLaunchDialog } from './views/TestLaunch';
 
 const SceneView = lazy(() => import('./views/scene/SceneView'));
 const NpcCreator = lazy(() => import('./views/npc/NpcCreator'));
+const BodyView = lazy(() => import('./views/body/BodyView'));
 const QuestDesigner = lazy(() => import('./views/quest/QuestDesigner'));
 const ScriptEditor = lazy(() => import('./views/script/ScriptEditor'));
 const RecordsView = lazy(() => import('./views/record/RecordsView'));
@@ -22,6 +23,7 @@ const ScriptList = lazy(() => import('./views/script/ScriptList'));
 const TABS: { id: WorkspaceTab; label: string; icon: string; key?: string; hint: string }[] = [
   { id: 'scene', label: 'World', icon: 'scene', key: '1', hint: 'Cells, placing objects, navmesh and world tools' },
   { id: 'npc', label: 'Characters', icon: 'npc', key: '2', hint: 'Characters: look, face, outfit, inventory and routine' },
+  { id: 'body', label: 'Body', icon: 'body', hint: 'Shape bodies with BodySlide sliders and presets, and build the meshes' },
   { id: 'items', label: 'Items', icon: 'items', key: '3', hint: 'Weapons, armor, potions, books, loot lists and crafting recipes' },
   { id: 'magic', label: 'Magic', icon: 'magic', key: '4', hint: 'Spells, powers, abilities, enchantments, shouts and perks' },
   { id: 'quest', label: 'Quests', icon: 'quest', key: '5', hint: 'Quest map, dialogue and quests from writing' },
@@ -119,6 +121,7 @@ export function App() {
           <Suspense fallback={<div className="empty">Loading…</div>}>
             {tab === 'scene' && <SceneView />}
             {tab === 'npc' && <NpcCreator />}
+            {tab === 'body' && <BodyView />}
             {tab === 'items' && <CatalogView key="items" tab="items" />}
             {tab === 'magic' && <CatalogView key="magic" tab="magic" />}
             {tab === 'quest' && <QuestDesigner />}
