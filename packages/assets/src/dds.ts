@@ -4,7 +4,7 @@
  * formats in software for thumbnails and fallbacks.
  */
 
-export type DdsFormat = 'bc1' | 'bc2' | 'bc3' | 'bc4' | 'bc5' | 'bc7' | 'rgba8' | 'bgra8' | 'bgrx8' | 'r5g6b5' | 'l8' | 'unknown';
+export type DdsFormat = 'bc1' | 'bc2' | 'bc3' | 'bc4' | 'bc5' | 'bc7' | 'rgba8' | 'bgra8' | 'bgrx8' | 'bgr8' | 'rgb8' | 'r5g6b5' | 'l8' | 'unknown';
 
 export interface DdsLevel {
   width: number;
@@ -56,7 +56,7 @@ export function isCompressed(format: DdsFormat): boolean {
 
 function levelSize(format: DdsFormat, w: number, h: number): number {
   if (isCompressed(format)) return Math.max(1, Math.ceil(w / 4)) * Math.max(1, Math.ceil(h / 4)) * blockBytes(format);
-  const bpp = format === 'r5g6b5' ? 2 : format === 'l8' ? 1 : 4;
+  const bpp = format === 'r5g6b5' ? 2 : format === 'l8' ? 1 : format === 'bgr8' || format === 'rgb8' ? 3 : 4;
   return w * h * bpp;
 }
 
@@ -91,6 +91,7 @@ export function parseDds(bytes: Uint8Array): DdsImage {
     }
   } else if (pfFlags & 0x40) {
     if (rgbBits === 32) format = rMask === 0x000000ff ? 'rgba8' : (pfFlags & 0x1) ? 'bgra8' : 'bgrx8';
+    else if (rgbBits === 24) format = rMask === 0x000000ff ? 'rgb8' : 'bgr8'; // Skyrim's tint masks
     else if (rgbBits === 16) format = 'r5g6b5';
   } else if (pfFlags & 0x20000) {
     format = 'l8';
@@ -196,6 +197,13 @@ export function decodeToRgba(level: DdsLevel, format: DdsFormat): Uint8Array | u
         out[i * 4 + 1] = data[i * 4 + 1]!;
         out[i * 4 + 2] = data[i * 4]!;
         out[i * 4 + 3] = format === 'bgrx8' ? 255 : data[i * 4 + 3]!;
+      }
+      return out;
+    case 'bgr8':
+    case 'rgb8':
+      for (let i = 0; i < w * h; i++) {
+        const [r, b] = format === 'bgr8' ? [data[i * 3 + 2]!, data[i * 3]!] : [data[i * 3]!, data[i * 3 + 2]!];
+        out.set([r, data[i * 3 + 1]!, b, 255], i * 4);
       }
       return out;
     case 'r5g6b5':

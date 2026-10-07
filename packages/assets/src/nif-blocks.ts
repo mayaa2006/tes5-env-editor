@@ -8,7 +8,7 @@
  *
  * Used to bake FaceGen head meshes (see workspace/facegen.ts).
  */
-import { NODE_TYPES, readGeometryBlock, splitNif } from './nif';
+import { NODE_TYPES, parseNif, readGeometryBlock, skinPartitionTriangles, splitNif, type Mat4, type NifNode } from './nif';
 
 export interface NifBlock {
   type: string;
@@ -372,6 +372,18 @@ export interface NifShapeInfo {
   positions: Float32Array;
   indices: Uint16Array | Uint32Array;
   skinned: boolean;
+  /**
+   * Where the vertices really are: for skinned shapes the bind pose (skin
+   * space → file space, from the bones), otherwise the same as `transform`.
+   * Use this to put several parts in one space.
+   */
+  placement: Transform;
+}
+
+/** A column-major 4×4 (rotation with uniform scale + translation) as a Transform. */
+function matToTransform(m: Mat4): Transform {
+  const sc = Math.hypot(m[0]!, m[1]!, m[2]!) || 1;
+  return { translation: [m[12]!, m[13]!, m[14]!], rotation: [m[0]! / sc, m[4]! / sc, m[8]! / sc, m[1]! / sc, m[5]! / sc, m[9]! / sc, m[2]! / sc, m[6]! / sc, m[10]! / sc], scale: sc };
 }
 
 export function nifShapes(doc: NifDoc): NifShapeInfo[] {
@@ -388,12 +400,29 @@ export function nifShapes(doc: NifDoc): NifShapeInfo[] {
     const t = composeTransform(parent, readTransform(b.data, l.av.transform));
     if (SHAPE_TYPES.has(b.type)) {
       const g = geometryOf(doc, i);
-      if (g) out.push({ block: i, type: b.type, name: blockName(doc, i), transform: t, positions: g.positions, indices: g.indices, skinned: g.skinned });
+      if (g) out.push({ block: i, type: b.type, name: blockName(doc, i), transform: t, positions: g.positions, indices: g.indices, skinned: g.skinned, placement: t });
       return;
     }
     for (const k of l.links) if (k.kind === 'child') walk(i32(b.data, k.offset), t);
   };
   for (const r of doc.roots) walk(r, IDENTITY_TRANSFORM);
+  // Bind poses come from the full reader (it resolves skin instances, skin data and bones).
+  if (out.some((x) => x.skinned)) {
+    const binds = new Map<number, Mat4>();
+    const visit = (n: NifNode) => {
+      if (n.mesh?.bindMatrix) binds.set(n.blockIndex, n.mesh.bindMatrix);
+      n.children.forEach(visit);
+    };
+    try {
+      parseNif(writeNifDoc(doc)).roots.forEach(visit);
+    } catch {
+      // fall back to node transforms
+    }
+    for (const x of out) {
+      const b = binds.get(x.block);
+      if (b) x.placement = matToTransform(b);
+    }
+  }
   return out;
 }
 
@@ -434,7 +463,20 @@ function geometryOf(doc: NifDoc, shape: number) {
     const g = db ? readGeometryBlock(db.type, db.data, doc.bsVersion, doc.strings) : undefined;
     return g ? { ...g, skinned: skinOf(doc, shape) >= 0 } : undefined;
   }
-  return readGeometryBlock(b.type, b.data, doc.bsVersion, doc.strings);
+  const g = readGeometryBlock(b.type, b.data, doc.bsVersion, doc.strings);
+  // SE skinned shapes keep their triangles in the skin partition.
+  if (g && !g.indices.length) {
+    const skin = skinOf(doc, shape);
+    const part = skin >= 0 && doc.blocks[skin] ? linkTarget(doc, skin, 'ref', 1) : -1;
+    if (part >= 0 && doc.blocks[part]?.type === 'NiSkinPartition') {
+      try {
+        return { ...g, indices: skinPartitionTriangles(doc.blocks[part]!.data, doc.bsVersion) };
+      } catch {
+        // leave without triangles
+      }
+    }
+  }
+  return g;
 }
 
 /** Area-weighted vertex normals. */
@@ -639,6 +681,24 @@ export function setShapePositions(doc: NifDoc, shape: number, positions: Float32
   }
 }
 
+/** The texture paths of a shape's texture set ([] when it has none). */
+export function shapeTextures(doc: NifDoc, shape: number): string[] {
+  const sh = shaderOf(doc, shape);
+  const sl = sh >= 0 ? blockLayout(doc, sh)?.shader : undefined;
+  if (!sl) return [];
+  const tb = doc.blocks[i32(doc.blocks[sh]!.data, sl.textureSet)];
+  if (!tb || tb.type !== 'BSShaderTextureSet') return [];
+  const c = new Cursor(tb.data);
+  const n = c.u32();
+  const out: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const len = c.u32();
+    out.push(String.fromCharCode(...tb.data.subarray(c.pos, c.pos + len)));
+    c.skip(len);
+  }
+  return out;
+}
+
 /** Set texture slot `slot` of a shape's texture set (adding empty slots as needed). */
 export function setShapeTexture(doc: NifDoc, shape: number, slot: number, path: string): boolean {
   const sh = shaderOf(doc, shape);
@@ -701,7 +761,21 @@ export interface MergePart {
  * position; links to anything else are cut. This is the layout of a FaceGen
  * head (`BSFaceGenNiNodeSkinned`).
  */
-export function mergeShapes(parts: MergePart[], opts: { rootName: string; bsVersion: number; userVersion: number }): NifDoc {
+export function mergeShapes(
+  parts: MergePart[],
+  opts: {
+    rootName: string;
+    bsVersion: number;
+    userVersion: number;
+    /**
+     * 'facegen': the Creation Kit's FaceGen layout — a BSFadeNode root, then the
+     * bones (position only, no rotation), then a "BSFaceGenNiNodeSkinned" node
+     * holding the shapes. Default: shapes and bones straight under one NiNode.
+     */
+    layout?: 'flat' | 'facegen';
+  },
+): NifDoc {
+  const facegen = opts.layout === 'facegen';
   const out: NifDoc = { userVersion: opts.userVersion, bsVersion: opts.bsVersion, strings: [], blocks: [], roots: [0] };
   const str = (s: string) => {
     let i = out.strings.indexOf(s);
@@ -742,7 +816,8 @@ export function mergeShapes(parts: MergePart[], opts: { rootName: string; bsVers
       dv.setUint32(4, 0, true);
       dv.setInt32(8, -1, true);
       dv.setUint32(12, new DataView(b.data.buffer, b.data.byteOffset).getUint32(l.av!.transform - 4, true), true);
-      writeTransform(data, 16, world.get(src) ?? IDENTITY_TRANSFORM);
+      const w = world.get(src) ?? IDENTITY_TRANSFORM;
+      writeTransform(data, 16, facegen ? { ...IDENTITY_TRANSFORM, translation: w.translation } : w);
       dv.setInt32(68, -1, true);
       const idx = out.blocks.push({ type: 'NiNode', data }) - 1;
       bones.set(name, idx);
@@ -779,18 +854,26 @@ export function mergeShapes(parts: MergePart[], opts: { rootName: string; bsVers
     }
   }
 
-  const all = [...children, ...bones.values()];
-  const root = new Uint8Array(4 + 4 + 4 + 4 + 52 + 4 + 4 + all.length * 4 + 4);
-  const dv = new DataView(root.buffer);
-  dv.setInt32(0, str(opts.rootName), true);
-  dv.setUint32(4, 0, true);
-  dv.setInt32(8, -1, true);
-  dv.setUint32(12, 14, true);
-  writeTransform(root, 16, IDENTITY_TRANSFORM);
-  dv.setInt32(68, -1, true);
-  dv.setUint32(72, all.length, true);
-  all.forEach((c, k) => dv.setInt32(76 + k * 4, c, true));
-  dv.setUint32(76 + all.length * 4, 0, true);
+  const node = (name: string, kids: number[]) => {
+    const d = new Uint8Array(4 + 4 + 4 + 4 + 52 + 4 + 4 + kids.length * 4 + 4);
+    const dv = new DataView(d.buffer);
+    dv.setInt32(0, str(name), true);
+    dv.setUint32(4, 0, true);
+    dv.setInt32(8, -1, true);
+    dv.setUint32(12, 14, true);
+    writeTransform(d, 16, IDENTITY_TRANSFORM);
+    dv.setInt32(68, -1, true);
+    dv.setUint32(72, kids.length, true);
+    kids.forEach((c, k) => dv.setInt32(76 + k * 4, c, true));
+    dv.setUint32(76 + kids.length * 4, 0, true);
+    return d;
+  };
+  let root: Uint8Array;
+  if (facegen) {
+    const faceNode = out.blocks.push({ type: 'NiNode', data: node('BSFaceGenNiNodeSkinned', children) }) - 1;
+    root = node(opts.rootName, [...bones.values(), faceNode]);
+    out.blocks[0]!.type = 'BSFadeNode';
+  } else root = node(opts.rootName, [...children, ...bones.values()]);
   out.blocks[0]!.data = root;
   return out;
 }

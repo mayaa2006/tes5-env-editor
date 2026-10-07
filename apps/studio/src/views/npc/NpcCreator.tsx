@@ -4,7 +4,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FACE_MORPHS, type FormKey } from '@tes5/esp';
-import { CONTROL_HELP, REGION_CONTROLS_FOR, REGION_LABELS, emptySculpt, slidersWithExtended, type FaceRegion, type FaceSculpt, type HeadPartInfo, type NpcAppearance, type RegionControl } from '@tes5/workspace';
+import { CONTROL_HELP, REGION_CONTROLS_FOR, REGION_LABELS, emptySculpt, faceLookFor, type FaceRegion, type FaceSculpt, type HeadPartInfo, type NpcAppearance, type RegionControl } from '@tes5/workspace';
 import { Checkbox, Field, FormPicker, Help, Icon, Modal, Select, Slider, Tabs, TextInput, useDebounced, useQuery, DragNumber, useUniqueEditorId } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 import { HeadPreview, type PreviewPart } from './headPreview';
@@ -158,9 +158,10 @@ function Creator({ npc }: { npc: FormKey }) {
   };
 
   // The race's default head, eyes and mouth are part of the face too (vanilla characters list only what differs).
+  const { data: race } = useQuery(() => client?.call('raceHeadData', a?.race ?? null, a?.female ?? false), [a?.race, a?.female]);
   const { data: faceParts } = useQuery(() => client?.call('npcFaceParts', npc), [npc, a?.headParts.join(','), a?.race, a?.female]);
   const previewParts = useMemo<PreviewPart[]>(
-    () => (faceParts ?? []).map((p) => ({ key: p.formKey, type: p.type, model: p.model, tris: p.tris.filter((t) => t.type !== 1 && t.file).map((t) => t.file) })),
+    () => (faceParts ?? []).map((p) => ({ key: p.formKey, type: p.type, model: p.model, tris: p.tris.filter((t) => t.file) })),
     [faceParts],
   );
 
@@ -182,10 +183,15 @@ function Creator({ npc }: { npc: FormKey }) {
       p.frame();
     });
   }, [previewParts]);
-  const lookKey = a ? JSON.stringify([a.morphs, sculpt]) : '';
+  const lookKey = a ? JSON.stringify([a.morphs, a.weight, a.faceParts, sculpt, race]) : '';
   useEffect(() => {
-    if (a) preview.current?.setLook({ sliders: slidersWithExtended(a.morphs, sculpt), sculpt });
+    // The same look the face files are baked from: race shape, weight, presets, vampire morph, sliders and sculpt.
+    if (a && race) preview.current?.setLook(faceLookFor(a, race, sculpt));
   }, [lookKey, shapeInfo]);
+  // The head as the game colours it: its texture times the baked face tint (skin tone and paint).
+  const faceTexKey = a ? JSON.stringify([a.tints, a.skinTone, a.race, a.female, faceParts?.map((p) => p.formKey)]) : '';
+  const { data: faceTex } = useQuery(() => (a && faceParts ? client?.call('previewFaceTexture', npc, a) : undefined), [faceTexKey], { revision: false });
+  useEffect(() => preview.current?.setFaceTexture(faceTex ?? null), [faceTex, previewParts]);
   const hair = colors?.find((c) => c.formKey === a?.hairColor)?.color ?? null;
   useEffect(() => preview.current?.setColors(hair, a?.skinTone ?? null), [hair?.r, hair?.g, hair?.b, a?.skinTone.r, a?.skinTone.g, a?.skinTone.b, previewParts]);
 

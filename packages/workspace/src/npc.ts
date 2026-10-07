@@ -37,6 +37,8 @@ export interface NpcAppearance {
   morphs: Record<FaceMorphKey, number>;
   faceParts: { nose: number; unknown: number; eyes: number; mouth: number };
   tints: TintLayer[];
+  /** Sliders the CK left unset (FLT_MAX in the record), shown as 0. */
+  unsetSliders?: FaceMorphKey[];
 }
 
 export interface HeadPartInfo {
@@ -52,6 +54,8 @@ export interface HeadPartInfo {
   extraParts: FormKey[];
   /** TRI files: race morph, expression tri, chargen morph. */
   tris: { type: number; file: string }[];
+  /** Texture set (TNAM) that replaces the mesh's textures, e.g. an eye colour. */
+  textureSet?: FormKey | null;
 }
 
 export const FEMALE_FLAG = 0x1;
@@ -72,7 +76,13 @@ export class NpcService {
     const d = v.data as Record<string, any>;
     const morphs = emptyMorphs();
     // The CK stores FLT_MAX for sliders it never set (always the vampire morph on vanilla NPCs): read those as 0.
-    for (const [k] of FACE_MORPHS) if (typeof d.faceMorph?.[k] === 'number' && isSliderValue(d.faceMorph[k])) morphs[k] = d.faceMorph[k];
+    const unsetSliders: FaceMorphKey[] = [];
+    for (const [k] of FACE_MORPHS) {
+      const v = d.faceMorph?.[k];
+      // No slider data at all counts as unset too.
+      if (typeof v === 'number' && isSliderValue(v)) morphs[k] = v;
+      else unsetSliders.push(k);
+    }
     return {
       race: d.race ?? null,
       female: ((d.config?.flags ?? 0) & FEMALE_FLAG) !== 0,
@@ -83,6 +93,7 @@ export class NpcService {
       headTexture: d.headTexture ?? null,
       skinTone: d.textureLighting ? { r: d.textureLighting.r, g: d.textureLighting.g, b: d.textureLighting.b } : { r: 0, g: 0, b: 0 },
       morphs,
+      unsetSliders,
       faceParts: d.faceParts ? { nose: d.faceParts.nose, unknown: d.faceParts.unknown, eyes: d.faceParts.eyes, mouth: d.faceParts.mouth } : { nose: 0, unknown: 0, eyes: 0, mouth: 0 },
       tints: (d.tintLayers ?? []).map((t: any) => ({ index: t.index, color: { ...(t.color ?? { r: 0, g: 0, b: 0, a: 0 }) }, value: t.value ?? 100, preset: t.preset ?? 0 })),
     };
@@ -160,6 +171,7 @@ export class NpcService {
       validRaces: d.validRaces ?? null,
       extraParts: d.extraParts ?? [],
       tris: (d.parts ?? []).map((p: any) => ({ type: p.type ?? 0, file: p.file })),
+      textureSet: d.textureSet ?? null,
     };
   }
 
@@ -169,15 +181,27 @@ export class NpcService {
    * Vanilla characters only list what differs from these — usually not even
    * the head itself.
    */
-  raceHeadData(race: FormKey | null, female: boolean): { parts: FormKey[]; faceTexture: FormKey | null } {
-    const out = { parts: [] as FormKey[], faceTexture: null as FormKey | null };
+  raceHeadData(race: FormKey | null, female: boolean): { parts: FormKey[]; faceTexture: FormKey | null; hairColor: FormKey | null; vampire: boolean; editorId?: string; morphRace?: string } {
+    const out = { parts: [] as FormKey[], faceTexture: null as FormKey | null, hairColor: null as FormKey | null, vampire: false, editorId: undefined as string | undefined, morphRace: undefined as string | undefined };
     if (!race) return out;
     const versions = this.ws.versions(race);
     const v = versions[versions.length - 1];
     if (!v) return out;
+    out.editorId = this.ws.summary(race)?.editorId;
+    // A race can borrow another's head shape ("morph race", NAM8): vampire and special races do.
+    const nam8 = v.record.subrecords.find((s) => s.sig === 'NAM8' && s.data.byteLength >= 4);
+    const morphRace = nam8 ? this.ws.keyOf(v.slot, new DataView(nam8.data.buffer, nam8.data.byteOffset).getUint32(0, true)) : undefined;
+    out.morphRace = morphRace ? this.ws.summary(morphRace)?.editorId : undefined;
+    const kw = ((this.ws.view(race)?.data as any)?.keywords ?? []) as FormKey[];
+    out.vampire = /vampire/i.test(out.editorId ?? '') || kw.some((k) => this.ws.summary(k)?.editorId === 'Vampire');
     let inHead = false;
     let sex: 'm' | 'f' | undefined;
     for (const s of v.record.subrecords) {
+      // Default hair colours (male, female), outside the head data.
+      if (s.sig === 'HCLF' && !inHead && s.data.byteLength >= 8) {
+        const id = new DataView(s.data.buffer, s.data.byteOffset, s.data.byteLength).getUint32(female ? 4 : 0, true);
+        out.hairColor = id ? (this.ws.keyOf(v.slot, id) ?? null) : null;
+      }
       if (s.sig === 'NAM0') inHead = true;
       else if (inHead && s.sig === 'MNAM') sex = 'm';
       else if (inHead && s.sig === 'FNAM') sex = 'f';

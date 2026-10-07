@@ -162,6 +162,8 @@ export class AssetCache {
         opacity: m.alpha,
       });
       const std = mat as THREE.MeshStandardMaterial;
+      // The lighting shader type (4 face, 5 skin tint, 6 hair tint…) for previews that colour by it.
+      std.userData.shaderType = m.shaderType;
       if (m.emissiveMultiple > 0 && (m.emissive[0] || m.emissive[1] || m.emissive[2]) && m.shaderType === 2) {
         std.emissive = new THREE.Color(m.emissive[0], m.emissive[1], m.emissive[2]);
         std.emissiveIntensity = Math.min(2, m.emissiveMultiple);
