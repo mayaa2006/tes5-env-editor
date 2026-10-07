@@ -2,6 +2,23 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.3.0
+
+- **Items and Magic tabs:** items, crafting, loot lists, spells, perks and the rest now have their own tabs instead of one long list in World → Objects.
+  - Categories are in plain words: Weapons, Potions & food, Crafting recipes, Spells, Powers, Abilities, Perks…
+  - Every record in a list shows a one-line summary, like "One-handed sword · 7 damage · 25 gold".
+- **Simple editors** for weapons, armor, potions, ingredients, books, loot lists, recipes, spells, magic effects, enchantments, shouts and perks.
+  - Labels are plain, and every field has a (?) explaining it.
+  - Effects show as cards with a sentence ("Fire Damage, strength 25, for 1 s").
+  - Perk effects read like "Mod Attack Damage: multiply by 1.2".
+  - **Show every field** still gives the full form.
+- **New records start with useful values:** a new power is a greater power cast on yourself, a new ability is always on, a new recipe makes 1.
+- **Search finds recipes by what they make:** "iron sword" finds both the forge recipe and the grindstone one.
+- **Pickers show names first:** "Restore Health" instead of "AlchRestoreHealth".
+- **World → Objects** only lists what you place in the world.
+- **Records tab:** records with a simpler editor get an **Open in Items/Magic** button.
+- **Fix:** spell tomes now store the spell they teach as a real link, so it stays correct when masters change.
+
 ## 0.2.0
 
 - **Spells, perks and more get proper forms:**

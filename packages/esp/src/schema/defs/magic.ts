@@ -62,7 +62,7 @@ export const EFFECTS: MemberDef = rarray(
   { prominent: true, help: 'What the item or spell does. Each effect has a strength (magnitude), an area and a duration, and can have conditions.' },
 );
 
-const ARCHETYPES = enumList(
+export const ARCHETYPES = enumList(
   'Value Modifier', 'Script', 'Dispel', 'Cure Disease', 'Absorb', 'Dual Value Modifier', 'Calm', 'Demoralize', 'Frenzy', 'Disarm',
   'Command Summoned', 'Invisibility', 'Light', 'Unknown 13', 'Unknown 14', 'Lock', 'Open', 'Bound Weapon', 'Summon Creature',
   'Detect Life', 'Telekinesis', 'Paralysis', 'Reanimate', 'Soul Trap', 'Turn Undead', 'Guide', 'Werewolf Feed', 'Cure Paralysis',
@@ -71,7 +71,7 @@ const ARCHETYPES = enumList(
   'Disguise', 'Grab Actor', 'Vampire Lord',
 );
 
-const MGEF_FLAGS = flagList(
+export const MGEF_FLAGS = flagList(
   'Hostile', 'Recover', 'Detrimental', 'Snap to Navmesh', 'No Hit Event', null, null, null, 'Dispel with Keywords', 'No Duration',
   'No Magnitude', 'No Area', 'FX Persist', null, 'Gory Visuals', 'Hide in UI', null, 'No Recast', null, null, null,
   'Power Affects Magnitude', 'Power Affects Duration', null, null, null, 'Painless', 'No Hit Effect', 'No Death Dispel',
@@ -151,7 +151,7 @@ export const MGEF: RecordDef = record(
   { category: 'Magic' },
 );
 
-const SPELL_TYPES = { 0: 'Spell', 1: 'Disease', 2: 'Power', 3: 'Lesser Power', 4: 'Ability', 5: 'Poison', 10: 'Addiction', 11: 'Voice' };
+export const SPELL_TYPES = { 0: 'Spell', 1: 'Disease', 2: 'Power', 3: 'Lesser Power', 4: 'Ability', 5: 'Poison', 10: 'Addiction', 11: 'Voice' };
 
 const SPIT = sub(
   'SPIT',
@@ -306,7 +306,7 @@ export const LVSP: RecordDef = record(
 
 // ------------------------------------------------------------------ perks
 
-const ENTRY_POINTS = enumList(
+export const ENTRY_POINTS = enumList(
   'Calculate Weapon Damage', 'Calculate My Critical Hit Chance', 'Calculate My Critical Hit Damage', 'Calculate Mine Explode Chance',
   'Adjust Limb Damage', 'Adjust Book Skill Points', 'Mod Recovered Health', 'Get Should Attack', 'Mod Buy Prices', 'Add Leveled List On Death',
   'Get Max Carry Weight', 'Mod Addiction Chance', 'Mod Addiction Duration', 'Mod Positive Chem Duration', 'Activate', 'Ignore Running During Detection',
@@ -326,7 +326,7 @@ const ENTRY_POINTS = enumList(
   'Mod Lockpicking Key Reward Chance', 'Allow Mount Actor',
 );
 
-const ENTRY_FUNCTIONS = enumList(
+export const ENTRY_FUNCTIONS = enumList(
   'Unknown 0', 'Set Value', 'Add Value', 'Multiply Value', 'Add Range To Value', 'Add Actor Value Mult', 'Absolute Value', 'Negative Absolute Value',
   'Add Leveled List', 'Add Activate Choice', 'Select Spell', 'Select Text', 'Set to Actor Value Mult', 'Multiply Actor Value Mult',
   'Multiply 1 + Actor Value Mult', 'Set Text',

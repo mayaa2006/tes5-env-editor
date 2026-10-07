@@ -60,6 +60,13 @@ import {
   WorldService,
   Workspace,
   CREATABLE_TYPES,
+  catalogCounts,
+  catalogList,
+  categoryFor,
+  createInCategory,
+  perkEntryPointTabs,
+  WORKBENCHES,
+  type CatalogTab,
   createBlankRecord,
   isCreatable,
   allUiSchemas,
@@ -358,6 +365,46 @@ export class EngineHost {
 
   createRecord(sig: string, data: Record<string, unknown>, where: { cell?: FormKey; topic?: FormKey; worldspace?: FormKey; persistent?: boolean } = {}) {
     return this.requireWs().createRecord(sig, data, where);
+  }
+
+  // ---------------------------------------------------------------- Items & Magic workspaces
+
+  catalogCounts(tab: CatalogTab) {
+    return catalogCounts(this.requireWs(), tab);
+  }
+
+  catalogList(category: string, query = '', limit = 300) {
+    return catalogList(this.requireWs(), category, query, limit);
+  }
+
+  createInCategory(category: string) {
+    return createInCategory(this.requireWs(), category);
+  }
+
+  /** Which Items/Magic category a form belongs to (null if it has none). */
+  categoryOf(key: FormKey) {
+    const v = this.requireWs().view(key);
+    const c = v ? categoryFor(v.sig, v.data) : undefined;
+    return c ? { id: c.id, tab: c.tab } : null;
+  }
+
+  /** Crafting stations: keyword FormKey and friendly name, for the recipe editor. */
+  workbenches() {
+    const ws = this.requireWs();
+    return Object.entries(WORKBENCHES)
+      .map(([edid, label]) => ({ key: ws.byEditorId(edid), label }))
+      .filter((w): w is { key: FormKey; label: string } => !!w.key);
+  }
+
+  /** Condition tab count per perk entry point, as vanilla uses them. */
+  perkEntryPointTabs() {
+    return perkEntryPointTabs(this.requireWs());
+  }
+
+  /** FormKeys for Editor IDs (missing ones are left out). */
+  formsByEditorId(ids: string[]) {
+    const ws = this.requireWs();
+    return Object.fromEntries(ids.map((id) => [id, ws.byEditorId(id) ?? null]));
   }
 
   /** A new record of the given type with sensible defaults (spell, perk, leveled list, recipe…). */
