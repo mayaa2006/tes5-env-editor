@@ -2,6 +2,14 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.5.0
+
+- **Body tab (BodySlide):** shape bodies with the sliders and presets mods already ship for BodySlide.
+  - Finds slider sets and presets in your Data and mod folders (`CalienteTools\BodySlide`); **Rescan** looks again.
+  - Sliders can have one value, or a different one at weight 0 and weight 100. A **preview weight** slider shows the blend, and the 3D view turns.
+  - **Build body** writes the `_0` and `_1` meshes into your mod, as BodySlide does. **Save preset** writes a preset BodySlide can use too. Each is one undo step.
+  - Not checked against real body mods yet; see the ROADMAP.
+
 ## 0.4.0
 
 - **Outdoors:** an outdoor cell now opens with its neighbours, so you see the surrounding landscape and everything on it.

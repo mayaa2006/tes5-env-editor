@@ -3,7 +3,7 @@
  * demo of the Studio and by tests. It contains no Bethesda content: meshes,
  * textures and records are generated here.
  */
-import { CHARGEN_SLIDER_MORPHS, writeNif, writeRgbaDds, writeTri } from '@tes5/assets';
+import { CHARGEN_SLIDER_MORPHS, writeNif, writeOsd, writeRgbaDds, writeTri, type ShapeDiff } from '@tes5/assets';
 import {
   Plugin,
   PluginRecord,
@@ -597,6 +597,76 @@ function buildDirtyPatch(master: Plugin): Plugin {
   return p;
 }
 
+/** A small BodySlide set (mesh, sliders, morphs and presets) so the Body tab has something to show. */
+function demoBodySlide(): Record<string, Uint8Array> {
+  const enc = (t: string) => new TextEncoder().encode(t);
+  const body = ellipsoid(18, 11, 45, 90, 16, 24);
+  const count = body.positions.length / 3;
+  /** A sparse morph: `move` gives the offset for the vertices it touches. */
+  const morph = (move: (x: number, y: number, z: number) => [number, number, number] | null): ShapeDiff => {
+    const indices: number[] = [];
+    const deltas: number[] = [];
+    for (let v = 0; v < count; v++) {
+      const d = move(body.positions[v * 3]!, body.positions[v * 3 + 1]!, body.positions[v * 3 + 2]!);
+      if (d && (d[0] || d[1] || d[2])) {
+        indices.push(v);
+        deltas.push(...d);
+      }
+    }
+    return { indices: Uint32Array.from(indices), deltas: Float32Array.from(deltas) };
+  };
+  const bump = (z: number, c: number, r: number) => Math.max(0, 1 - Math.abs(z - c) / r);
+  const osd = writeOsd({
+    Breasts: morph((x, y, z) => {
+      const k = bump(z, 118, 14);
+      return y > 0 && k ? [Math.sign(x) * 1.5 * k, 5 * k, 0] : null;
+    }),
+    Waist: morph((x, y, z) => {
+      const k = bump(z, 96, 16);
+      return k ? [-x * 0.3 * k, -y * 0.3 * k, 0] : null;
+    }),
+    Hips: morph((x, y, z) => {
+      const k = bump(z, 74, 18);
+      return k ? [x * 0.35 * k, y * 0.2 * k, 0] : null;
+    }),
+    Height: morph((_x, _y, z) => [0, 0, (z - 45) * 0.08]),
+  });
+  const osp = `<?xml version="1.0" encoding="UTF-8"?>
+<SliderSetInfo version="1">
+\t<SliderSet name="Demo Body">
+\t\t<DataFolder>DemoBody</DataFolder>
+\t\t<SourceFile>meshes\\demo\\bodyslide\\demobody_1.nif</SourceFile>
+\t\t<OutputPath>meshes\\demo\\bodyslide</OutputPath>
+\t\t<OutputFile>demobody</OutputFile>
+\t\t<Shape target="DemoBody">DemoBody</Shape>
+\t\t<Slider name="Breasts" invert="false" small="0" big="40"><Data name="Breasts" target="DemoBody" local="true"/></Slider>
+\t\t<Slider name="Waist" invert="false" small="0" big="0"><Data name="Waist" target="DemoBody" local="true"/></Slider>
+\t\t<Slider name="Hips" invert="false" small="0" big="0"><Data name="Hips" target="DemoBody" local="true"/></Slider>
+\t\t<Slider name="Height" invert="false" small="0" big="0"><Data name="Height" target="DemoBody" local="true"/></Slider>
+\t</SliderSet>
+</SliderSetInfo>
+`;
+  const presets = `<?xml version="1.0" encoding="UTF-8"?>
+<SliderPresets>
+\t<Preset name="Demo Slim" set="Demo Body">
+\t\t<SetSlider name="Waist" size="small" value="60"/><SetSlider name="Waist" size="big" value="60"/>
+\t\t<SetSlider name="Hips" size="small" value="10"/><SetSlider name="Hips" size="big" value="20"/>
+\t</Preset>
+\t<Preset name="Demo Curvy" set="Demo Body">
+\t\t<SetSlider name="Breasts" size="small" value="30"/><SetSlider name="Breasts" size="big" value="100"/>
+\t\t<SetSlider name="Hips" size="small" value="50"/><SetSlider name="Hips" size="big" value="100"/>
+\t\t<SetSlider name="Waist" size="small" value="30"/><SetSlider name="Waist" size="big" value="40"/>
+\t</Preset>
+</SliderPresets>
+`;
+  return {
+    'meshes\\demo\\bodyslide\\demobody_1.nif': nif(['DemoBody', body, [T('skin')]]),
+    'CalienteTools\\BodySlide\\SliderSets\\DemoBody.osp': enc(osp),
+    'CalienteTools\\BodySlide\\SliderPresets\\Demo.xml': enc(presets),
+    'CalienteTools\\BodySlide\\ShapeData\\DemoBody\\DemoBody.osd': osd,
+  };
+}
+
 /** Write the demo game folder into a memory file system. */
 export function createDemoData(fs: MemoryFileSystem, root = '/Demo/Skyrim Special Edition'): DemoPaths {
   const dataDir = `${root}/Data`;
@@ -605,7 +675,7 @@ export function createDemoData(fs: MemoryFileSystem, root = '/Demo/Skyrim Specia
   master.updateHeaderBookkeeping();
   fs.writeFileSync(`${dataDir}/DemoWorld.esm`, master.serialize());
   fs.writeFileSync(`${dataDir}/DirtyPatch.esp`, buildDirtyPatch(master).serialize());
-  for (const [path, bytes] of Object.entries(meshesAndTextures())) fs.writeFileSync(`${dataDir}/${path.replace(/\\/g, '/')}`, bytes);
+  for (const [path, bytes] of Object.entries({ ...meshesAndTextures(), ...demoBodySlide() })) fs.writeFileSync(`${dataDir}/${path.replace(/\\/g, '/')}`, bytes);
   for (const [name, src] of Object.entries(SCRIPTS)) fs.writeFileSync(`${dataDir}/Source/Scripts/${name}.psc`, src.replace(/\n/g, '\r\n'));
   fs.writeFileSync(`${dataDir}/Source/Scripts/TESV_Papyrus_Flags.flg`, 'Flag hidden 0\r\nFlag conditional 1\r\n');
   return { gameDir: root, dataDir, plugins: ['DemoWorld.esm', 'DirtyPatch.esp'] };

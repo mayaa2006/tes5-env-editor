@@ -43,6 +43,7 @@ export function useDebounced<T>(value: T, ms = 200): T {
 const ICONS: Record<string, string> = {
   scene: 'M3 17l6-10 4 6 3-4 5 8z',
   npc: 'M12 12a4 4 0 100-8 4 4 0 000 8zm-7 9a7 7 0 0114 0z',
+  body: 'M12 7a2.5 2.5 0 100-5 2.5 2.5 0 000 5zM9 9h6l1 6-1.5 1L14 22h-4l-.5-6L8 15z',
   items: 'M4 8l8-4 8 4v9l-8 4-8-4zM4 8l8 4 8-4M12 12v9',
   magic: 'M12 3l2.2 5.8L20 9.5l-4.5 3.8L17 19l-5-3.2L7 19l1.5-5.7L4 9.5l5.8-.7z',
   quest: 'M6 3h10l3 3v15H6zM9 9h7M9 13h7M9 17h4',
