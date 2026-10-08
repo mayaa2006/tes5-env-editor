@@ -539,9 +539,31 @@ export function useHotkeys(map: Record<string, (e: KeyboardEvent) => void>, deps
   }, [cb]);
 }
 
-/** State for a new form's Editor ID, pre-filled with the first free variant of `base`. */
-export function useUniqueEditorId(base: string): [string, (v: string) => void] {
-  const [v, setV] = useState(base);
+const drafts = new Map<string, unknown>();
+
+/** Like useState, but remembered by `key` while the app is open, so closing a dialog and reopening it keeps what was typed. Call clearDraft(prefix) once the work is done. */
+export function useDraft<T>(key: string | undefined, initial: T): [T, (v: T | ((prev: T) => T)) => void] {
+  const [v, setV] = useState<T>(() => (key !== undefined && drafts.has(key) ? (drafts.get(key) as T) : initial));
+  const set = useCallback(
+    (n: T | ((prev: T) => T)) =>
+      setV((prev) => {
+        const next = typeof n === 'function' ? (n as (p: T) => T)(prev) : n;
+        if (key !== undefined) drafts.set(key, next);
+        return next;
+      }),
+    [key],
+  );
+  return [v, set];
+}
+
+/** Forget every remembered draft whose key starts with `prefix`. */
+export function clearDraft(prefix: string) {
+  for (const k of [...drafts.keys()]) if (k.startsWith(prefix)) drafts.delete(k);
+}
+
+/** State for a new form's Editor ID, pre-filled with the first free variant of `base`. Pass `draftKey` to remember it. */
+export function useUniqueEditorId(base: string, draftKey?: string): [string, (v: string) => void] {
+  const [v, setV] = useDraft(draftKey, base);
   useEffect(() => {
     let alive = true;
     void useStore

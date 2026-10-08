@@ -7,7 +7,7 @@
 import { useEffect, useState } from 'react';
 import type { FormKey } from '@tes5/esp';
 import type { PlanIssue, PlanResolution, PlannerMode, QuestBuildReport, QuestPlan } from '@tes5/workspace';
-import { Field, Help, Icon, Modal, Select, TextInput } from '../../components/ui';
+import { clearDraft, Field, Help, Icon, Modal, Select, TextInput, useDraft } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 
 type Review = { plan: QuestPlan; issues: PlanIssue[]; resolution: PlanResolution[] };
@@ -31,8 +31,9 @@ const MODES: { id: PlannerMode; title: string; text: string; placeholder: string
 export default function QuestFromText({ onClose, existing }: { onClose: () => void; existing?: FormKey }) {
   const [step, setStep] = useState<'write' | 'review' | 'done'>(existing ? 'review' : 'write');
   const [fromRecord, setFromRecord] = useState(true);
-  const [mode, setMode] = useState<PlannerMode>('document');
-  const [source, setSource] = useState('');
+  // What was written is remembered if the box is closed before the quest is built.
+  const [mode, setMode] = useDraft<PlannerMode>(existing ? undefined : 'questFromText:mode', 'document');
+  const [source, setSource] = useDraft(existing ? undefined : 'questFromText:source', '');
   const [review, setReview] = useState<Review>();
   const [report, setReport] = useState<QuestBuildReport>();
   // Changing an existing quest: start from it as a plan.
@@ -86,6 +87,7 @@ export default function QuestFromText({ onClose, existing }: { onClose: () => vo
           source={source}
           onBack={existing ? onClose : () => setStep('write')}
           onBuilt={(r) => {
+            clearDraft('questFromText:');
             setReport(r);
             setStep('done');
           }}

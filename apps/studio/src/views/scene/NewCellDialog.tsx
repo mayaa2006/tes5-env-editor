@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { FormKey } from '@tes5/esp';
-import { Checkbox, DragNumber, Field, Modal, TextInput, useQuery, useUniqueEditorId } from '../../components/ui';
+import { Checkbox, clearDraft, DragNumber, Field, Modal, TextInput, useDraft, useQuery, useUniqueEditorId } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 import { GroundTexturePicker } from './EnvTools';
 
@@ -22,31 +22,32 @@ export function cellLabel(c: { formKey: FormKey; editorId?: string; grid?: { x: 
 }
 
 /** Create a cell: indoors, outdoors in a worldspace, or a whole new worldspace. */
-export function NewCellDialog({ onClose, kind: initialKind = 'interior', worldspace: initialWorld }: { onClose: () => void; kind?: NewCellKind; worldspace?: FormKey }) {
+export function NewCellDialog({ onClose, kind: kindProp, worldspace: initialWorld }: { onClose: () => void; kind?: NewCellKind; worldspace?: FormKey }) {
   const client = useStore((s) => s.client);
   const current = useStore((s) => s.cell);
-  const [kind, setKind] = useState<NewCellKind>(initialKind);
+  // A dialog opened for a specific kind or world (e.g. from + Cell) starts there; otherwise it picks up where it was left.
+  const [kind, setKind] = useDraft<NewCellKind>(kindProp ? undefined : 'newCell:kind', kindProp ?? 'interior');
   const { data: worlds } = useQuery(() => client?.call('worldspaces'), [client]);
   const { data: cells } = useQuery(() => client?.call('cells', {}), [client]);
   const here = cells?.find((c) => c.formKey === current);
 
   // Indoors
-  const [interiorEdid, setInteriorEdid] = useUniqueEditorId('MyNewInterior');
-  const [worldEdid, setWorldEdid] = useUniqueEditorId('MyNewWorld');
+  const [interiorEdid, setInteriorEdid] = useUniqueEditorId('MyNewInterior', 'newCell:interiorEdid');
+  const [worldEdid, setWorldEdid] = useUniqueEditorId('MyNewWorld', 'newCell:worldEdid');
   const [edid, setEdid] = kind === 'world' ? [worldEdid, setWorldEdid] : [interiorEdid, setInteriorEdid];
-  const [name, setName] = useState('');
+  const [name, setName] = useDraft('newCell:name', '');
   // Outdoors (also the ground of a new worldspace)
-  const [world, setWorld] = useState<FormKey | ''>(initialWorld ?? '');
+  const [world, setWorld] = useDraft<FormKey | ''>(initialWorld ? undefined : 'newCell:world', initialWorld ?? '');
   const [grid, setGrid] = useState<{ x: number; y: number } | null>(null);
-  const [cellEdid, setCellEdid] = useState('');
-  const [texture, setTexture] = useState<FormKey | null>(null);
+  const [cellEdid, setCellEdid] = useDraft('newCell:cellEdid', '');
+  const [texture, setTexture] = useDraft<FormKey | null>('newCell:texture', null);
   // New worldspace
-  const [size, setSize] = useState(3);
-  const [ground, setGround] = useState(0);
-  const [water, setWater] = useState(false);
-  const [waterHeight, setWaterHeight] = useState(-200);
-  const [like, setLike] = useState<FormKey | ''>('');
-  const [noFastTravel, setNoFastTravel] = useState(false);
+  const [size, setSize] = useDraft('newCell:size', 3);
+  const [ground, setGround] = useDraft('newCell:ground', 0);
+  const [water, setWater] = useDraft('newCell:water', false);
+  const [waterHeight, setWaterHeight] = useDraft('newCell:waterHeight', -200);
+  const [like, setLike] = useDraft<FormKey | ''>('newCell:like', '');
+  const [noFastTravel, setNoFastTravel] = useDraft('newCell:noFastTravel', false);
 
   // Sensible defaults once the worldspaces are known: the current cell's world, and Tamriel's weather if it's there.
   useEffect(() => {
@@ -100,7 +101,10 @@ export function NewCellDialog({ onClose, kind: initialKind = 'interior', worldsp
             data-testid="create-cell"
             title={kind === 'world' ? `Make the worldspace and ${size * size} outdoor cell(s), then open the middle one. Undo removes it all.` : 'Make the cell and open it. Undo removes it.'}
             onClick={async () => {
-              if (await create()) onClose();
+              if (await create()) {
+                clearDraft('newCell:');
+                onClose();
+              }
             }}
           >
             Create

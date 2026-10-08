@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Field, Icon, Modal, Select, TextInput, useQuery } from '../../components/ui';
+import { clearDraft, Field, Icon, Modal, Select, TextInput, useDraft, useQuery } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 
 const BASES = ['ObjectReference', 'Actor', 'Quest', 'ReferenceAlias', 'ActiveMagicEffect', 'Form', 'TopicInfo'];
@@ -58,13 +58,13 @@ function NewScriptDialog({ onClose }: { onClose: () => void }) {
   const client = useStore((s) => s.client);
   const { data: existing } = useQuery(() => client?.call('scriptList'), [client]);
   const taken = (n: string) => !!existing?.some((s) => s.name.toLowerCase() === n.toLowerCase());
-  const [name, setName] = useState('MyScript');
+  const [name, setName] = useDraft('newScript:name', 'MyScript');
   useEffect(() => {
     if (!existing || !taken(name)) return;
     for (let i = 2; ; i++) if (!taken(`MyScript${i}`)) return setName(`MyScript${i}`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [existing]);
-  const [ext, setExt] = useState('ObjectReference');
+  const [ext, setExt] = useDraft('newScript:ext', 'ObjectReference');
   return (
     <Modal
       title="New script"
@@ -81,6 +81,7 @@ function NewScriptDialog({ onClose }: { onClose: () => void }) {
               const src = `ScriptName ${name} extends ${ext}\n{Describe what this script does.}\n\n${template(ext)}`;
               const ok = await engine((c) => c.call('scriptWrite', name, src), { success: `Created ${name}.psc` });
               if (ok) {
+                clearDraft('newScript:');
                 useStore.getState().setScript(name);
                 useStore.getState().bump();
                 onClose();

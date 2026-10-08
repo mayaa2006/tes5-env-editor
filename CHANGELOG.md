@@ -2,6 +2,10 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.13.3
+
+- **Closing a dialog no longer loses what you typed.** New quest, New character, New script, New cell / worldspace and the quest-from-text box keep their fields when you cancel, press Esc or click outside, and are filled in again next time you open them. They start fresh once the thing is created.
+
 ## 0.13.2
 
 - **Quests list shows only quests with names by default.** A new **Only quests with names** checkbox above the list is ticked at the start; untick it to see unnamed quests too.
