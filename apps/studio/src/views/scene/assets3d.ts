@@ -191,9 +191,11 @@ export class AssetCache {
         std.emissiveIntensity = Math.min(2, m.emissiveMultiple);
       }
     }
+    // Textures arrive later; `userData.ready` settles once they're on the material (characters wait for it).
+    const loading: Promise<unknown>[] = [];
     const diffuse = editorMarker || m.water ? undefined : m.textures[0];
     if (diffuse) {
-      void this.texture(diffuse).then((t) => {
+      loading.push(this.texture(diffuse).then((t) => {
         if (!t) return;
         const tex = t.clone();
         tex.offset.set(m.uvOffset[0], m.uvOffset[1]);
@@ -202,13 +204,13 @@ export class AssetCache {
         (mat as THREE.MeshStandardMaterial).map = tex;
         mat.needsUpdate = true;
         this.onLoad?.();
-      });
+      }));
     }
     // Normal map (texture slot 1): bumps and folds, and on skin the whole shading (skin meshes carry no vertex normals).
     const normalPath = m.shader === 'lighting' && !editorMarker && !m.water ? m.textures[1] : undefined;
     if (normalPath && mat instanceof THREE.MeshStandardMaterial) {
       const std = mat;
-      void this.texture(normalPath, false).then((t) => {
+      loading.push(this.texture(normalPath, false).then((t) => {
         if (!t) return;
         const tex = t.clone();
         tex.offset.set(m.uvOffset[0], m.uvOffset[1]);
@@ -228,14 +230,14 @@ export class AssetCache {
           });
         std.needsUpdate = true;
         this.onLoad?.();
-      });
+      }));
     }
     // FaceGen faces (shader type 4): the head texture times the character's face tint (slot 6), doubled in gamma
     // space as the game does: (2·t)^2.2 = 4.59·t in the linear space lighting happens in.
     const tintPath = this.faceTint && m.shader === 'lighting' && m.shaderType === 4 ? m.textures[6] : undefined;
     if (tintPath && mat instanceof THREE.MeshStandardMaterial) {
       const std = mat;
-      void this.texture(tintPath.replace(/^data\\/i, '')).then((t) => {
+      loading.push(this.texture(tintPath.replace(/^data\\/i, '')).then((t) => {
         if (!t) return;
         const uniform = { value: t };
         addShaderPatch(std, 'facetint', (shader) => {
@@ -245,8 +247,9 @@ export class AssetCache {
             .replace('#include <map_fragment>', '#include <map_fragment>\n#ifdef USE_MAP\ndiffuseColor.rgb *= 4.59 * texture2D( faceTint, vMapUv ).rgb;\n#endif');
         });
         this.onLoad?.();
-      });
+      }));
     }
+    if (loading.length) mat.userData.ready = Promise.all(loading);
     const mesh = new THREE.Mesh(geo, mat);
     mesh.name = s.name;
     if (editorMarker) mesh.userData.editorMarker = true;

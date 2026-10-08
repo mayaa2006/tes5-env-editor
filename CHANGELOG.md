@@ -2,6 +2,11 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.13.1
+
+- **Fix: characters in the World view no longer show white skin and black clothes while loading.** A character stays a simple placeholder until all its textures are in, then appears complete.
+- **Fix: hair, beards and brows in the World view take the character's hair colour** (their own, else their race's), as in game and in the character creator. Before, they showed the grey texture underneath.
+
 ## 0.13.0
 
 - **New worldspaces:** Cells → **New worldspace**. Start with a square of flat ground (1×1 up to 7×7 cells), pick a ground texture, water, and weather and music like another worldspace (Tamriel by default). Its persistent cell is made too.

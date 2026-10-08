@@ -381,9 +381,18 @@ export class Viewport {
           const g = new THREE.Group();
           for (const t of meshes) if (t && t.children.length) g.add(t);
           if (!g.children.length) return null;
-          // Skin takes this character's skin tone (texture × tone × 2 in gamma space, as in game): a per-character copy
-          // of the skin material that follows the shared one as its textures arrive.
+          // Keep the placeholder until the textures are on (half-loaded characters show white skin and black clothes).
+          const ready: Promise<unknown>[] = [];
+          g.traverse((o) => {
+            const mat = (o as THREE.Mesh).material as THREE.Material | undefined;
+            if ((o as THREE.Mesh).isMesh && mat && !Array.isArray(mat) && mat.userData.ready) ready.push(mat.userData.ready as Promise<unknown>);
+          });
+          await Promise.race([Promise.all(ready).catch(() => undefined), new Promise((r) => setTimeout(r, 20000))]);
+          // Skin takes this character's skin tone (texture × tone × 2 in gamma space, as in game), and hair, beards and
+          // brows take their hair colour (as in the character creator): per-character copies of the shared materials
+          // that follow them as their textures arrive.
           const tone = m.skinTone ? [m.skinTone.r, m.skinTone.g, m.skinTone.b].map((v) => Math.pow(2 * v, 2.2)) : undefined;
+          const hair = m.hairColor ? new THREE.Color().setRGB(m.hairColor.r, m.hairColor.g, m.hairColor.b, THREE.SRGBColorSpace).multiplyScalar(2.2) : undefined;
           const skinCopies = new Map<THREE.Material, THREE.MeshStandardMaterial>();
           // Skin and clothes ignore their vertex colours in game (they're often black). These meshes are only used by
           // characters, so the shared materials are changed in place (copies would miss textures that load later).
@@ -398,11 +407,14 @@ export class Viewport {
               }
             }
             const src = mesh.material as THREE.MeshStandardMaterial;
-            if (tone && !Array.isArray(mesh.material) && src.userData.shaderType === 5) {
+            const isSkin = !!tone && src.userData.shaderType === 5;
+            const isHair = !!hair && src.userData.shaderType === 6;
+            if (!Array.isArray(mesh.material) && (isSkin || isHair)) {
               let copy = skinCopies.get(src);
               if (!copy) {
                 copy = src.clone();
-                copy.color.setRGB(tone[0]!, tone[1]!, tone[2]!);
+                if (isSkin) copy.color.setRGB(tone![0]!, tone![1]!, tone![2]!);
+                else copy.color.copy(hair!);
                 skinCopies.set(src, copy);
               }
               const c = copy;

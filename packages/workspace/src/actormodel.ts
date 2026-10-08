@@ -24,6 +24,8 @@ export interface ActorModel {
   weight: number;
   /** Skin tone (0–1, QNAM), for the skin shader; undefined when unset. */
   skinTone?: { r: number; g: number; b: number };
+  /** Hair colour (0–1, sRGB) for hair, beards and brows: the character's own, else its race's default. */
+  hairColor?: { r: number; g: number; b: number };
   /** Why something is missing, for the tooltip. */
   notes: string[];
 }
@@ -178,7 +180,10 @@ export class ActorModels {
     const weight = typeof t.weight === 'number' ? Math.max(0, Math.min(100, t.weight)) : 50;
     const tl = t.textureLighting as { r: number; g: number; b: number } | undefined;
     const skinTone = tl && (tl.r || tl.g || tl.b) ? { r: tl.r, g: tl.g, b: tl.b } : undefined;
-    return { parts, scale, female, weight, skinTone, notes };
+    const hairKey = (t.hairColor as FormKey | undefined) ?? this.npcs.raceHeadData(race, female).hairColor ?? undefined;
+    const hc = hairKey ? (this.data(hairKey)?.color as { r: number; g: number; b: number } | undefined) : undefined;
+    const hairColor = hc ? { r: hc.r / 255, g: hc.g / 255, b: hc.b / 255 } : undefined;
+    return { parts, scale, female, weight, skinTone, hairColor, notes };
   }
 
   /** The race whose armor addons this race uses (RACE RNAM), e.g. vampire races wear Nord armor. */
