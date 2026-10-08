@@ -45,6 +45,8 @@ How to plan:
 - Describe every new character's look (build, height, hair, hair colour, facial hair, eyes, scars) from the text, choosing what fits their role when the text says nothing; for a new character that is "like" someone existing, set basedOn.
 - Clothing, armour and weapons in an outfit or inventory are existing items named as in the load order (e.g. "Fine Clothes", "Iron Sword"). Only add new clothing or weapons to "items" (kind clothing/armor/weapon, basedOn the closest existing item) when the text describes something unique.
 - Say where in a place characters stand and items lie when the text does or it matters ("behind the bar", "by the forge", "in the chest by the bed", "under the table"): characters.spot and items.spot. An item "in" a container is put inside it and can still be picked up for a quest step.
+- Fighting: for characters who fight, fill combat: hostile true for anyone who attacks the player on sight (bandits, a villain), levelScaled so they stay a match for the player, skills (e.g. One-handed 60), spells and perks by name, and a combat style ("Archer", "Mage"). Groups of ordinary enemies (bandits in a cave, draugr in a tomb, wolves) are encounters, not characters: what (an enemy type from the load order, preferably a levelled "Lvl…" one), how many and where. A step of kind "clear" with the encounter key moves the quest on when they're all dead.
+- Roles: roles.follower for someone who can join the player, roles.marriage for someone the player can marry, roles.merchant (what they sell, opening hours) for shopkeepers, roles.trainer (skill and the highest level they teach: 50, 75 or 90) for trainers, roles.innkeeper for innkeepers. relationships say how characters feel about each other or the player (friend, ally, rival, enemy, lover…).
 - Give characters a routine when the text says what they do or when it matters for the quest: new characters usually "sandbox" (go about their business) where they live by day and "sleep" there at night. Quest behaviour uses fromStage/untilStage: "follow" (the player) for companions or escorts, "forcegreet" (walk up to the player and say a line) for someone who should approach the player, "travel" to move someone to a place, "stay" to keep them put.
 - If the text only asks to create or change characters, places or items and describes no quest, leave stages, objectives, steps, conversations, rewards, animations and events empty; nothing but those changes is built.
 - Stages: start at 0 or 10, go up in steps of 10, and end on a stage that completes the quest (often 100 or 200). One stage has startsQuest true. Every stage after the first must be reachable: a step or a conversation line sets it.
@@ -115,6 +117,7 @@ export function planCatalog(ws: Workspace, opts: { limit?: number } = {}): strin
     `Classes:\n${list(['CLAS'])}`,
     `Factions:\n${list(['FACT'])}`,
     `Outfits:\n${list(['OTFT'], (_, e) => !!e)}`,
+    `Enemies (levelled characters for encounters):\n${list(['NPC_'], (_, e) => !!e && /^lvl/i.test(e))}`,
     `Quests in your plugin (for questlines):\n${yours.join('\n') || '(none)'}`,
   ].join('\n\n');
 }

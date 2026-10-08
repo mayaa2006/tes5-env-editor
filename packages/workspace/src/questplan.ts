@@ -12,6 +12,8 @@ import { z } from 'zod';
 import { lintScreenplay } from './dialoguelint';
 import { journalContextFromPlan, lintJournal } from './journal';
 
+export const RELATIONSHIP_RANKS = ['lover', 'ally', 'confidant', 'friend', 'acquaintance', 'rival', 'foe', 'enemy', 'archnemesis'] as const;
+
 /** Short identifiers the plan uses to refer to its own characters, places and items. */
 const Key = z.string().describe('Short identifier used to refer to this entry elsewhere in the plan, e.g. "brynja" or "cellar"');
 
@@ -62,6 +64,38 @@ export const PlanCharacterSchema = z.object({
       }),
     )
     .describe('What they do: their daily routine, and what the quest makes them do (follow the player, come and talk). Empty to leave it'),
+  combat: z
+    .object({
+      hostile: z.boolean().nullable().describe('True: attacks the player on sight (bandits, a villain); false: never starts fights; null to leave'),
+      levelScaled: z.object({ min: z.number().int(), max: z.number().int() }).nullable().describe('Grows with the player between these levels instead of a fixed level; null to leave'),
+      skills: z.array(z.object({ skill: z.string().describe('e.g. "One-handed", "Destruction", "Sneak"'), value: z.number().int() })).describe('Skill values to set'),
+      spells: z.array(z.string()).describe('Spells or shouts they know, by name or Editor ID (e.g. "Firebolt", "Healing")'),
+      perks: z.array(z.string()).describe('Perks, by name or Editor ID'),
+      combatStyle: z.string().nullable().describe('How they fight: a combat style name or Editor ID (e.g. "Archer", "Mage", "Berserker"); null to leave'),
+    })
+    .nullable()
+    .describe('How they fight; null to leave it'),
+  roles: z
+    .object({
+      follower: z.boolean().describe('Can be asked to follow the player'),
+      marriage: z.boolean().describe('Can be married'),
+      innkeeper: z.boolean().describe('Runs an inn (sells food and drink, rents rooms)'),
+      merchant: z.object({ sells: z.string().describe('What they sell: "general goods", "weapons", "armor", "potions", "food", "spells", "jewelry"…'), hours: z.object({ from: z.number().int(), to: z.number().int() }).nullable() }).nullable().describe('Buys and sells; null if not a merchant'),
+      trainer: z.object({ skill: z.string(), maxLevel: z.number().int().describe('Highest level they train to: 50 (apprentice), 75 (expert), 90 (master)') }).nullable().describe('Trains a skill for gold; null if not a trainer'),
+    })
+    .nullable()
+    .describe('Services and roles; null for none'),
+  relationships: z
+    .array(z.object({ with: z.string().describe('Character key from this plan, Editor ID of an existing character, or "player"'), rank: z.enum(RELATIONSHIP_RANKS) }))
+    .describe('How they feel about other characters or the player'),
+});
+
+export const PlanEncounterSchema = z.object({
+  key: Key,
+  what: z.string().describe('The enemies: a type like "bandit", "draugr", "wolf", "skeever" or an Editor ID from the load order'),
+  count: z.number().int().describe('How many (1–12)'),
+  locationKey: z.string().describe('Location key from this plan or Editor ID of an existing interior where they wait'),
+  spot: z.string().nullable().describe('Where in that place, e.g. "by the fire"; null for spread around'),
 });
 
 export const PlanLocationSchema = z.object({
@@ -104,8 +138,8 @@ export const PlanObjectiveSchema = z.object({
 export const PlanStepSchema = z.object({
   from: z.number().int().nullable().describe('Stage the player must be at (null = any time)'),
   to: z.number().int().describe('Stage this step sets'),
-  kind: z.enum(['talk', 'pickup', 'activate', 'death', 'arrive', 'read', 'equip', 'drop', 'script']),
-  targetKey: z.string().nullable().describe('Item key (pickup/drop/read/equip/activate), character key (death/activate) or location key (arrive); null for talk and script'),
+  kind: z.enum(['talk', 'pickup', 'activate', 'death', 'arrive', 'read', 'equip', 'drop', 'script', 'clear']),
+  targetKey: z.string().nullable().describe('Item key (pickup/drop/read/equip/activate), character key (death/activate), location key (arrive) or encounter key (clear: every enemy in the group is dead); null for talk and script'),
   note: z.string().describe('What happens, in a few words'),
 });
 
@@ -170,6 +204,7 @@ export const QuestPlanSchema = z.object({
   characters: z.array(PlanCharacterSchema),
   locations: z.array(PlanLocationSchema),
   items: z.array(PlanItemSchema),
+  encounters: z.array(PlanEncounterSchema).describe('Groups of enemies waiting somewhere (bandits in a cave, draugr in a tomb), taken from the load order'),
   stages: z.array(PlanStageSchema),
   objectives: z.array(PlanObjectiveSchema),
   steps: z.array(PlanStepSchema),
@@ -191,11 +226,18 @@ export type PlanStep = z.infer<typeof PlanStepSchema>;
 export type PlanEvent = z.infer<typeof PlanEventSchema>;
 export type PlanStart = z.infer<typeof PlanStartSchema>;
 export type PlanFailure = z.infer<typeof PlanFailureSchema>;
+export type PlanEncounter = z.infer<typeof PlanEncounterSchema>;
 
 /** Fill in lists added to the plan format later, so plans saved by older versions still load. */
 export function normalizePlan(plan: QuestPlan): QuestPlan {
   plan.events ??= [];
   plan.failures ??= [];
+  plan.encounters ??= [];
+  for (const c of plan.characters ?? []) {
+    if (c.combat === undefined) c.combat = null;
+    if (c.roles === undefined) c.roles = null;
+    c.relationships ??= [];
+  }
   for (const l of plan.locations ?? []) {
     if (l.layoutLike === undefined) l.layoutLike = null;
     if (l.doorFrom === undefined) l.doorFrom = null;
@@ -224,6 +266,7 @@ export function emptyPlan(): QuestPlan {
     characters: [],
     locations: [],
     items: [],
+    encounters: [],
     stages: [
       { index: 0, journal: '', startsQuest: true, completesQuest: false, failsQuest: false },
       { index: 100, journal: '', startsQuest: false, completesQuest: true, failsQuest: false },
@@ -241,7 +284,9 @@ export function emptyPlan(): QuestPlan {
 }
 
 /** Problems that would stop (errors) or weaken (warnings) a build. */
-export function validatePlan(plan: QuestPlan): PlanIssue[] {
+export function validatePlan(input: QuestPlan): PlanIssue[] {
+  // Plans written before a field existed are checked as if it were empty.
+  const plan = normalizePlan(structuredClone(input));
   const issues: PlanIssue[] = [];
   const err = (message: string) => issues.push({ severity: 'error', message });
   const warn = (message: string) => issues.push({ severity: 'warning', message });
@@ -253,6 +298,7 @@ export function validatePlan(plan: QuestPlan): PlanIssue[] {
     ['character', plan.characters],
     ['location', plan.locations],
     ['item', plan.items],
+    ['encounter', plan.encounters ?? []],
   ] as const)
     for (const e of list ?? []) {
       if (!e.key) err(`A ${kind} has no key`);
@@ -289,7 +335,19 @@ export function validatePlan(plan: QuestPlan): PlanIssue[] {
     if (o.completedAtStage !== null && !stages.has(o.completedAtStage)) err(`Objective ${o.index} is completed at stage ${o.completedAtStage}, which doesn't exist`);
     if (o.targetKey && !keys.has(o.targetKey)) warn(`Objective ${o.index} points at "${o.targetKey}", which isn't in the plan`);
   }
-  const need: Record<PlanStep['kind'], string[]> = { talk: [], script: [], pickup: ['item'], drop: ['item'], read: ['item'], equip: ['item'], activate: ['item', 'character'], death: ['character'], arrive: ['location'] };
+  for (const c of plan.characters ?? []) {
+    const ls = c.combat?.levelScaled;
+    if (ls && (ls.min < 1 || ls.max < ls.min)) err(`${c.name} levels with the player from ${ls.min} to ${ls.max}; the lowest must be at least 1 and not above the highest`);
+    if (c.combat?.levelScaled && c.level !== null) warn(`${c.name} has both a fixed level and levels with the player; levelling with the player wins`);
+    if (c.roles?.trainer && (c.roles.trainer.maxLevel < 1 || c.roles.trainer.maxLevel > 100)) err(`${c.name} trains up to level ${c.roles.trainer.maxLevel}; use 1 to 100`);
+    if (c.roles?.merchant && !c.roles.merchant.sells.trim()) err(`${c.name} is a merchant but doesn't say what they sell`);
+    for (const r of c.relationships ?? []) if (r.with === c.key) err(`${c.name} has a relationship with themselves`);
+  }
+  for (const e of plan.encounters ?? []) {
+    if (e.count < 1 || e.count > 12) err(`${e.count} ${e.what}: use 1 to 12 enemies in a group`);
+    if (!e.what.trim()) err(`An enemy group doesn't say what the enemies are`);
+  }
+  const need: Record<PlanStep['kind'], string[]> = { clear: ['encounter'], talk: [], script: [], pickup: ['item'], drop: ['item'], read: ['item'], equip: ['item'], activate: ['item', 'character'], death: ['character'], arrive: ['location'] };
   for (const s of plan.steps ?? []) {
     if (!stages.has(s.to)) err(`A step sets stage ${s.to}, which doesn't exist`);
     if (s.from !== null && !stages.has(s.from)) err(`A step starts from stage ${s.from}, which doesn't exist`);

@@ -20,7 +20,7 @@ export function exampleQuestPlan(): QuestPlan {
     startsWithGame: true,
     startsWhen: null,
     characters: [
-      { key: 'brynja', name: 'Brynja', existing: 'DemoInnkeeper', basedOn: null, sex: 'female', race: null, role: 'Innkeeper who lost the ring and gives the quest', appearance: 'As she is', look: null, voice: null, locationKey: null, spot: null, essential: null, className: null, level: null, outfit: null, factions: [], inventory: [], routine: [] },
+      { key: 'brynja', name: 'Brynja', existing: 'DemoInnkeeper', basedOn: null, sex: 'female', race: null, role: 'Innkeeper who lost the ring and gives the quest', appearance: 'As she is', look: null, voice: null, locationKey: null, spot: null, essential: null, className: null, level: null, outfit: null, factions: [], inventory: [], routine: [], combat: null, roles: null, relationships: [] },
       {
         key: 'eirik',
         name: 'Eirik',
@@ -44,9 +44,13 @@ export function exampleQuestPlan(): QuestPlan {
           { activity: 'sandbox', where: 'tavern', hours: { from: 8, to: 22 }, fromStage: null, untilStage: null, line: null },
           { activity: 'sleep', where: 'tavern', hours: { from: 22, to: 8 }, fromStage: null, untilStage: null, line: null },
         ],
+        combat: null,
+        roles: null,
+        relationships: [],
       },
     ],
     locations: [{ key: 'tavern', name: 'The Demo Tavern', existing: 'DemoTavern', description: 'The tavern Brynja runs', layoutLike: null, doorFrom: null }],
+    encounters: [],
     items: [{ key: 'ring', name: "Brynja's Ring", kind: 'misc', existing: null, basedOn: null, value: 50, startsWith: 'location', startsAtKey: 'tavern', spot: 'on a table' }],
     stages: [
       { index: 0, journal: '', startsQuest: true, completesQuest: false, failsQuest: false },
