@@ -340,6 +340,7 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
         <div className="card dim small">No quest: only the characters, places and items above are created or changed.</div>
       ) : (
         <>
+      <StartCard plan={draft} edit={edit} />
       <div className="card" data-testid="plan-stages">
         <div className="card-title row" style={{ gap: 6 }}>
           Stages and journal
@@ -461,6 +462,75 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
           <Icon name="check" size={13} /> {existing ? 'See what will change' : draft.stages.length ? 'Build the quest' : 'Make the changes'}
         </button>
       </div>
+    </div>
+  );
+}
+
+type StartKind = 'game' | NonNullable<QuestPlan['startsWhen']>['kind'];
+const START_KINDS: { kind: StartKind; label: string; hint: string; target?: string }[] = [
+  { kind: 'game', label: 'With the game', hint: 'Running from the moment the game loads. Use this when it begins by talking to someone, so their lines are there.' },
+  { kind: 'arrive', label: 'When the player enters a place', hint: 'A hidden marker in the place starts the quest the first time the player arrives.', target: 'Place' },
+  { kind: 'read', label: 'When the player reads something', hint: 'Reading the note or book starts the quest. It must lie somewhere in the world, not in a container.', target: 'Note or book' },
+  { kind: 'pickup', label: 'When the player picks something up', hint: 'Picking it up starts the quest. It must lie somewhere in the world, not in a container.', target: 'Item' },
+  { kind: 'activate', label: 'When the player uses something', hint: 'Using (pressing E on) the object starts the quest.', target: 'Object' },
+  { kind: 'afterQuest', label: 'After another quest', hint: 'For questlines: this one starts when another quest of yours reaches a stage (its end, unless you pick one).' },
+];
+
+/** How the quest starts: with the game, or when something happens. */
+function StartCard({ plan, edit }: { plan: QuestPlan; edit: (fn: (p: QuestPlan) => void) => Promise<void> }) {
+  const sw = plan.startsWhen ?? null;
+  const kind: StartKind = plan.startsWithGame || !sw ? 'game' : sw.kind;
+  const meta = START_KINDS.find((k) => k.kind === kind)!;
+  const setKind = (k: StartKind) =>
+    void edit((p) => {
+      if (k === 'game') {
+        p.startsWithGame = true;
+        p.startsWhen = null;
+      } else {
+        p.startsWithGame = false;
+        p.startsWhen = { kind: k, targetKey: k === 'afterQuest' ? null : (p.startsWhen?.targetKey ?? null), quest: k === 'afterQuest' ? (p.startsWhen?.quest ?? null) : null, stage: null };
+      }
+    });
+  const setField = (k: 'targetKey' | 'quest', v: string) => void edit((p) => void (p.startsWhen = { ...p.startsWhen!, [k]: v.trim() || null }));
+  const keys = [...plan.items.map((i) => ({ key: i.key, name: i.name })), ...plan.locations.map((l) => ({ key: l.key, name: l.name }))];
+  return (
+    <div className="card" data-testid="plan-start">
+      <div className="card-title">
+        How the quest starts
+        <Help text="A quest only does anything while it's running. It can run from the start of the game, or start when something happens." />
+      </div>
+      <div className="row wrap" style={{ gap: 6, alignItems: 'flex-end' }}>
+        <label className="col small" style={{ gap: 2 }} title={meta.hint}>
+          <span className="dim">Starts</span>
+          <Select value={kind} options={START_KINDS.map((k) => ({ value: k.kind, label: k.label }))} onChange={setKind} />
+        </label>
+        {meta.target && (
+          <label className="col small" style={{ gap: 2, flex: '1 1 160px' }}>
+            <span className="dim">{meta.target}</span>
+            <input className="input" list="plan-start-keys" placeholder="A name from the plan, or an Editor ID" defaultValue={sw?.targetKey ?? ''} key={`t-${sw?.targetKey}`} onBlur={(e) => e.target.value !== (sw?.targetKey ?? '') && setField('targetKey', e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); e.stopPropagation(); }} data-testid="start-target" />
+            <datalist id="plan-start-keys">
+              {keys.map((k) => (
+                <option key={k.key} value={k.key}>
+                  {k.name}
+                </option>
+              ))}
+            </datalist>
+          </label>
+        )}
+        {kind === 'afterQuest' && (
+          <>
+            <label className="col small" style={{ gap: 2, flex: '1 1 160px' }}>
+              <span className="dim">Quest before it (Editor ID)</span>
+              <input className="input" placeholder="e.g. MyQuestPartOne" defaultValue={sw?.quest ?? ''} key={`q-${sw?.quest}`} onBlur={(e) => e.target.value !== (sw?.quest ?? '') && setField('quest', e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); e.stopPropagation(); }} data-testid="start-quest" />
+            </label>
+            <label className="col small" style={{ gap: 2, width: 110 }} title="Leave empty for the stage that completes it">
+              <span className="dim">At its stage</span>
+              <input className="input" type="number" placeholder="its end" defaultValue={sw?.stage ?? ''} key={`s-${sw?.stage}`} onBlur={(e) => { const v = e.target.value === '' ? null : Math.round(Number(e.target.value)); if (v !== (sw?.stage ?? null)) void edit((p) => void (p.startsWhen = { ...p.startsWhen!, stage: v })); }} data-testid="start-stage" />
+            </label>
+          </>
+        )}
+      </div>
+      <span className="dim small">{meta.hint}</span>
     </div>
   );
 }

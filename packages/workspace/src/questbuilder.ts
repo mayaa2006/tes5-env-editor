@@ -79,7 +79,11 @@ export interface BuildRecord {
   stageLines: { stage: number; line: string; why: string }[];
   /** Character key → packages made for their routine (and forcegreet topics). */
   packages: Record<string, { base: FormKey[]; alias: FormKey[] }>;
+  /** What was added to start the quest (a trigger on a placed object, or a line in another quest's stage). */
+  starts?: StartPlace[];
 }
+
+type StartPlace = { ref: FormKey } | { quest: FormKey; stage: number; line: string };
 
 interface BuildSession {
   plan: QuestPlan;
@@ -98,6 +102,7 @@ interface BuildSession {
   conversations: Map<string, FormKey[]>;
   stageLines: BuildRecord['stageLines'];
   packages: Map<string, { base: FormKey[]; alias: FormKey[] }>;
+  starts: StartPlace[];
   report: QuestBuildReport;
 }
 
@@ -159,6 +164,7 @@ export function describeDiff(old: QuestPlan, next: QuestPlan, fromRecord: boolea
   if (!same(old.rewards, next.rewards)) out.push('Update the rewards');
   if (!same(old.animations, next.animations)) out.push('Update the animations at quest stages');
   if (!same(old.events ?? [], next.events ?? [])) out.push('Update the events at quest stages');
+  if (!same(old.startsWhen ?? null, next.startsWhen ?? null)) out.push(next.startsWhen && next.startsWhen.kind !== 'game' ? 'Change what starts the quest' : 'Remove what starts the quest');
   return out.length ? out : ['Nothing needs changing'];
 }
 
@@ -333,6 +339,7 @@ export class QuestBuilder {
       conversations: new Map(Object.entries(record?.conversations ?? {})),
       stageLines: [...(record?.stageLines ?? [])],
       packages: new Map(Object.entries(record?.packages ?? {})),
+      starts: [...(record?.starts ?? [])],
       report: { quest: record?.quest ?? null, editorId: record ? (this.ws.view(record.quest)?.editorId ?? plan.editorId) : '', created: [], changed: [], reused: [], updated: [], dialogue: { topics: 0, responses: 0, greetings: 0, scenes: 0 }, notes: [...plan.assumptions.map((a) => `Assumed: ${a}`)], warnings: [], problems: [] },
     };
   }
@@ -373,12 +380,13 @@ export class QuestBuilder {
     await this.buildObjectives(s);
     for (const conv of plan.conversations) await this.buildConversation(s, conv);
     for (const st of plan.steps) await this.buildStep(s, st);
+    await this.buildStart(s);
     await this.buildRoutines(s, plan.characters);
     await this.buildStageLines(s, 'gesture');
     await this.buildStageLines(s, 'reward');
     await this.buildStageLines(s, 'event');
     this.finishNotes(report);
-    if (!plan.startsWithGame) report.notes.push('The quest doesn’t start with the game; start it from another quest or a trigger (Start Quest).');
+    if (!plan.startsWithGame && !s.starts.length) report.notes.push('The quest doesn’t start with the game; start it from another quest or a trigger (Start Quest).');
     await this.finishChecks(s, quest);
   }
 
@@ -798,6 +806,35 @@ export class QuestBuilder {
     return ref && parseFormKey(ref).plugin === this.ws.activeName ? ref : undefined;
   }
 
+  /** What starts the quest when it doesn't start with the game. */
+  private async buildStart(s: BuildSession): Promise<void> {
+    const sw = s.plan.startsWhen;
+    if (!sw || sw.kind === 'game') return;
+    const quest = s.quest!;
+    if (s.plan.startsWithGame) {
+      s.report.notes.push('The quest starts with the game, so “starts when…” was left out.');
+      return;
+    }
+    if (sw.kind === 'afterQuest') {
+      const other = this.findForm(['QUST'], sw.quest);
+      if (!other) return void s.report.warnings.push(`The quest should start after “${sw.quest}”, but there's no quest called that. Start it from a trigger or another quest instead.`);
+      if (parseFormKey(other).plugin !== this.ws.activeName) return void s.report.warnings.push(`${this.label(other)} comes from ${parseFormKey(other).plugin}; starting this quest from its stage would mean rewriting that quest's script, so it was left out. Start it from something in your plugin instead (a place, an item, or a quest of yours).`);
+      const stages = this.quests.quest(other).stages;
+      const stage = sw.stage ?? stages.find((x) => x.logEntries.some((l) => (l.flags & 1) !== 0))?.index ?? Math.max(...stages.map((x) => x.index));
+      if (!stages.some((x) => x.index === stage)) return void s.report.warnings.push(`${this.label(other)} has no stage ${stage}, so nothing starts this quest yet.`);
+      s.starts.push(await this.graphs.addStart(quest, { kind: 'afterQuest', quest: other, stage }));
+      s.report.notes.push(`The quest starts when ${this.label(other)} reaches stage ${stage}.`);
+      return;
+    }
+    const key = sw.targetKey ?? '';
+    if (s.inContainer.has(key)) return void s.report.warnings.push(`${key} is inside a container, so picking it up or reading it can't start the quest (the quest that would create it isn't running yet). Put it on furniture instead.`);
+    const target = s.placedItems.get(key) ?? s.cells.get(key) ?? this.findForm(['CELL', 'REFR', 'ACHR'], key);
+    if (!target) return void s.report.warnings.push(`The quest should start when the player ${({ arrive: 'enters', read: 'reads', pickup: 'picks up', activate: 'uses' } as const)[sw.kind]} “${key}”, but it isn't placed anywhere, so nothing starts the quest yet.`);
+    if (this.ws.summary(target)?.sig !== 'CELL' && parseFormKey(target).plugin !== this.ws.activeName) s.report.warnings.push(`The start trigger goes on ${this.label(target)} from ${parseFormKey(target).plugin}, which other mods that change it will conflict with.`);
+    s.starts.push(await this.graphs.addStart(quest, { kind: sw.kind, target }));
+    s.report.notes.push(`The quest starts when the player ${({ arrive: 'enters', read: 'reads', pickup: 'picks up', activate: 'uses' } as const)[sw.kind]} ${this.label(target)}.`);
+  }
+
   /** What moves the quest on: one step. */
   private async buildStep(s: BuildSession, st: QuestPlan['steps'][number]): Promise<void> {
     const quest = s.quest!;
@@ -936,6 +973,7 @@ export class QuestBuilder {
       conversations: obj(s.conversations),
       stageLines: s.stageLines,
       packages: obj(s.packages),
+      starts: s.starts,
     };
     // Written as part of the edit, so undo and redo keep the record in step with the plugin.
     const path = this.recordPath();
@@ -1007,11 +1045,19 @@ export class QuestBuilder {
     const objectives = g.objectives.map((o) => ({ index: o.index, text: o.text, shownAtStage: g.nodes.find((n) => n.shows.includes(o.index))?.stage ?? stages[0]?.index ?? 0, completedAtStage: g.nodes.find((n) => n.completes.includes(o.index))?.stage ?? null, targetKey: null }));
     const steps = g.edges.map((e) => ({ from: e.from, to: e.to, kind: e.kind === 'hit' || e.kind === 'load' ? ('script' as const) : (e.kind as PlanStep['kind']), targetKey: e.target ? (keys.get(e.target) ?? null) : null, note: e.label }));
     const screenplay = this.dialogue.toScreenplay(quest).trim();
+    const first = g.starts.find((x) => x.kind !== 'game');
+    const startsWhen: QuestPlan['startsWhen'] =
+      first?.kind === 'afterQuest'
+        ? { kind: 'afterQuest', targetKey: null, quest: this.ws.summary(first.quest)?.editorId ?? first.quest, stage: first.stage }
+        : first?.kind === 'trigger' && ['arrive', 'read', 'pickup', 'activate'].includes(first.event)
+          ? { kind: first.event as 'arrive', targetKey: this.ws.summary(first.ref)?.editorId ?? first.ref, quest: null, stage: null }
+          : null;
     return {
       title: q.name ?? q.editorId ?? 'Quest',
       editorId: q.editorId ?? 'Quest',
       summary: '',
       startsWithGame: (q.flags & QuestFlag.StartGameEnabled) !== 0,
+      startsWhen,
       characters,
       locations,
       items,
@@ -1066,6 +1112,7 @@ export class QuestBuilder {
       this.graphs.setStartGameEnabled(quest, next.startsWithGame);
       say(next.startsWithGame ? 'The quest now starts with the game' : 'The quest no longer starts with the game');
     }
+    const startChanged = JSON.stringify(old.startsWhen ?? null) !== JSON.stringify(next.startsWhen ?? null) || next.startsWithGame !== old.startsWithGame;
     // Stages: removed ones lose their connections first.
     const oldStages = new Map(old.stages.map((x) => [x.index, x]));
     const newStages = new Map(next.stages.map((x) => [x.index, x]));
@@ -1200,6 +1247,15 @@ export class QuestBuilder {
       if (oldSteps.has(k)) continue;
       await this.buildStep(s, st);
       if (st.kind !== 'talk') say(`Added “${st.note}”`);
+    }
+    if (startChanged) {
+      // A quest made by hand: what starts it is read from the quest.
+      if (!s.starts.length) s.starts = (await this.graphs.graph(quest)).starts.flatMap((x): StartPlace[] => (x.kind === 'trigger' ? [{ ref: x.ref }] : x.kind === 'afterQuest' ? [{ quest: x.quest, stage: x.stage, line: this.graphs.startLine(quest) }] : []));
+      const had = s.starts.length;
+      for (const w of s.starts) await this.graphs.removeStart(quest, w);
+      s.starts = [];
+      await this.buildStart(s);
+      if (had || s.starts.length) say('Changed what starts the quest');
     }
     // Stage-script lines: gestures, rewards and world events.
     const listOf = (p: QuestPlan, why: 'gesture' | 'reward' | 'event') => JSON.stringify(why === 'gesture' ? p.animations : why === 'reward' ? p.rewards : (p.events ?? []));

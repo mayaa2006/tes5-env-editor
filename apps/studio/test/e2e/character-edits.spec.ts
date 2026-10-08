@@ -18,6 +18,7 @@ const PLAN = {
   editorId: 'HalvarDressesUp',
   summary: 'Halvar wears his fine clothes and joins the merchants.',
   startsWithGame: false,
+  startsWhen: null,
   characters: [
     {
       key: 'halvar', name: 'Halvar', existing: 'DemoBlacksmith', basedOn: null, sex: null, race: null, role: 'Smith', appearance: 'Fine clothes and a hood, grey hair',
