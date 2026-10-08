@@ -100,6 +100,24 @@ describe('updating a quest from a revised plan', () => {
     expect(g.nodes.find((n) => n.stage === 20)!.gestures).toEqual([]);
   });
 
+  it('adds and removes events at stages', async () => {
+    const { builder, graphs, ws } = await setup();
+    const quest = (await builder.build(exampleQuestPlan())).quest!;
+    const next = exampleQuestPlan();
+    next.events = [{ atStage: 20, kind: 'hostile', targetKey: 'eirik', toKey: null, what: null, count: null, note: 'Eirik attacks' }];
+    expect(await builder.previewUpdate(quest, next)).toEqual(['Update the events at quest stages']);
+    expect((await builder.update(quest, next)).updated).toEqual(['Updated the events at quest stages']);
+    expect(await graphs.fragmentCode(quest, 20)).toContain('StartCombat(Game.GetPlayer())');
+    next.events = [];
+    await builder.update(quest, next);
+    expect(await graphs.fragmentCode(quest, 20)).not.toContain('StartCombat');
+    // Plans saved before events existed still load.
+    const { plan } = await builder.planFor(quest);
+    expect(plan.events).toEqual([]);
+    ws.undo();
+    expect(await graphs.fragmentCode(quest, 20)).toContain('StartCombat(Game.GetPlayer())');
+  });
+
   it('a quest made by hand: read as a plan, updated without losing its dialogue', async () => {
     const { ws, quests, dialogue, builder, k } = await setup();
     const q = quests.createQuest('HandQuest', 'Made by Hand', { startGameEnabled: true });

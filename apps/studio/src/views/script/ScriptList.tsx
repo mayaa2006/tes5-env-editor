@@ -11,6 +11,10 @@ export default function ScriptList() {
   const [q, setQ] = useState('');
   const [showBase, setShowBase] = useState(false);
   const [creating, setCreating] = useState(false);
+  const newRequest = useStore((s) => s.newRequest);
+  useEffect(() => {
+    if (newRequest && useStore.getState().takeNew('script')) setCreating(true);
+  }, [newRequest]);
   const { data } = useQuery(() => client?.call('scriptList'), [client]);
   const { mine, base } = useMemo(() => {
     const ql = q.toLowerCase();

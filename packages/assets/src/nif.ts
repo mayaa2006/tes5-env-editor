@@ -25,6 +25,25 @@ export interface NifMaterial {
   specularStrength: number;
   /** Lighting shader type (0 default, 1 env map, 5 face tint, 6 hair tint, 7 parallax occ...). */
   shaderType: number;
+  /** Specular highlights on (shader flags 1, bit 0); the normal map's alpha masks them. */
+  specular?: boolean;
+  /** Blends by adding to what's behind (NiAlphaProperty destination ONE): glows, sparks, mist. */
+  additive?: boolean;
+  /** Drawn with the water shader (rivers, troughs); no texture set of its own. */
+  water?: boolean;
+}
+
+/**
+ * The texture path the game actually loads: vanilla meshes sometimes keep the
+ * artist's absolute path ("skyrimhd\build\pc\data\textures\plants\x.dds");
+ * the engine uses what follows "textures\".
+ */
+export function gameTexturePath(p: string): string {
+  const n = p.trim().replace(/\//g, '\\').toLowerCase().replace(/^\\+/, '');
+  if (n.startsWith('textures\\')) return n;
+  const i = n.indexOf('\\textures\\');
+  if (i >= 0) return n.slice(i + 1);
+  return n.startsWith('data\\') ? gameTexturePath(n.slice(5)) : `textures\\${n}`;
 }
 
 export interface NifMesh {
@@ -249,7 +268,7 @@ interface ParsedBlock {
   // skinning
   skin?: { dataRef: number; partitionRef: number; bones: number[] };
   partitionData?: Uint8Array;
-  skinData?: { bones: { rotation: number[]; translation: [number, number, number]; scale: number }[] };
+  skinData?: { bones: { rotation: number[]; translation: [number, number, number]; scale: number; vertices: number }[] };
   mesh?: Omit<NifMesh, 'material' | 'name' | 'blockIndex'>;
   // shader/texture/alpha
   material?: Partial<NifMaterial> & { textureSetRef?: number };
@@ -472,6 +491,7 @@ function readLightingShader(r: Reader, h: Header): ParsedBlock {
       twoSided: (f2 & 0x10) !== 0,
       vertexColors: (f2 & 0x20) !== 0,
       modelSpaceNormals: (f1 & 0x1000) !== 0,
+      specular: (f1 & 0x1) !== 0,
       uvOffset,
       uvScale,
       textureSetRef,
@@ -656,6 +676,8 @@ export function parseNif(bytes: Uint8Array): NifFile {
         blocks.push(readLightingShader(r, h));
       } else if (type === 'BSEffectShaderProperty') {
         blocks.push(readEffectShader(r, h));
+      } else if (type === 'BSWaterShaderProperty') {
+        blocks.push({ type, material: { water: true, twoSided: true } });
       } else if (type === 'BSShaderTextureSet') {
         const n = r.u32();
         const textures: string[] = [];
@@ -675,7 +697,7 @@ export function parseNif(bytes: Uint8Array): NifFile {
         r.pos += 52; // overall skin transform
         const n = r.count(r.u32(), 52);
         const hasWeights = r.u8() !== 0;
-        const bones: { rotation: number[]; translation: [number, number, number]; scale: number }[] = [];
+        const bones: { rotation: number[]; translation: [number, number, number]; scale: number; vertices: number }[] = [];
         for (let k = 0; k < n; k++) {
           const rotation = [r.f32(), r.f32(), r.f32(), r.f32(), r.f32(), r.f32(), r.f32(), r.f32(), r.f32()];
           const translation = r.vec3();
@@ -683,7 +705,7 @@ export function parseNif(bytes: Uint8Array): NifFile {
           r.pos += 16; // bounding sphere
           const nv = r.u16();
           if (hasWeights) r.pos += nv * 6;
-          bones.push({ rotation, translation, scale });
+          bones.push({ rotation, translation, scale, vertices: hasWeights ? nv : 0 });
         }
         blocks.push({ type, skinData: { bones } });
       } else if (type === 'NiAlphaProperty') {
@@ -720,6 +742,8 @@ export function parseNif(bytes: Uint8Array): NifFile {
     const alpha = b.alphaRef !== undefined && b.alphaRef >= 0 ? blocks[b.alphaRef] : undefined;
     if (alpha?.alphaFlags !== undefined) {
       m.alphaBlend = (alpha.alphaFlags & 0x1) !== 0;
+      // Destination blend factor (bits 5–8): 0 is ONE, i.e. added on top of what's behind.
+      m.additive = m.alphaBlend && ((alpha.alphaFlags >> 5) & 0xf) === 0;
       m.alphaTest = (alpha.alphaFlags & 0x200) !== 0;
       m.alphaThreshold = alpha.alphaThreshold ?? 128;
     }
@@ -758,15 +782,17 @@ export function parseNif(bytes: Uint8Array): NifFile {
         if (part) {
           try {
             const sp = readSkinPartition(part, h.bsVersion);
-            const n = geom.positions.length / 3;
+            // A shape with no vertex data of its own (numVertices 0) uses the partition's buffer for everything.
+            const own = geom.positions.length / 3;
+            const n = own || (sp.positions ? sp.positions.length / 3 : 0);
             const fits = (a: Float32Array | undefined, w: number) => (a && a.length === n * w ? a : undefined);
             geom = {
               ...geom,
               indices: sp.triangles,
               // The partition's buffer is the real one; the shape's own may be a zero-filled stub.
-              uvs: fits(sp.uvs, 2) ?? geom.uvs,
-              normals: fits(sp.normals, 3) ?? geom.normals,
-              positions: n ? geom.positions : (sp.positions ?? geom.positions),
+              uvs: fits(sp.uvs, 2) ?? (geom.uvs?.length ? geom.uvs : undefined),
+              normals: fits(sp.normals, 3) ?? (geom.normals?.length ? geom.normals : undefined),
+              positions: own ? geom.positions : (sp.positions ?? geom.positions),
             };
           } catch (e) {
             warnings.push(`Block ${index}: skin partition triangles: ${(e as Error).message}`);
@@ -790,16 +816,26 @@ export function parseNif(bytes: Uint8Array): NifFile {
     for (const c of b.children ?? []) if (c >= 0) walkWorld(c, m, seen);
   };
   for (const ri of roots) walkWorld(ri, identity, new Set());
+  /**
+   * Where a skinned shape sits in its rest pose: a bone's world transform times its skin offset. In a proper
+   * bind pose every bone gives the same answer, but FaceGen heads store some bones (NPC Spine2) in another
+   * pose, so the bone that moves the most vertices wins, then the head bone, then the first.
+   */
   const bindMatrixOf = (b: ParsedBlock): Mat4 | undefined => {
     const skin = b.skinRef !== undefined && b.skinRef >= 0 ? blocks[b.skinRef]?.skin : undefined;
     const data = skin ? blocks[skin.dataRef]?.skinData : undefined;
     if (!skin || !data) return undefined;
+    let best: { k: number; score: number } | undefined;
     for (let k = 0; k < skin.bones.length; k++) {
-      const bw = world.get(skin.bones[k]!);
-      const bd = data.bones[k];
-      if (bw && bd) return multiply(bw, nodeMatrix({ rotation: bd.rotation as NifNode['rotation'], translation: bd.translation, scale: bd.scale }));
+      if (!world.get(skin.bones[k]!) || !data.bones[k]) continue;
+      const head = /\[head\]/i.test(blocks[skin.bones[k]!]?.av?.name ?? '') ? 0.5 : 0;
+      const score = data.bones[k]!.vertices + head;
+      if (!best || score > best.score) best = { k, score };
     }
-    return undefined;
+    if (!best) return undefined;
+    const bw = world.get(skin.bones[best.k]!)!;
+    const bd = data.bones[best.k]!;
+    return multiply(bw, nodeMatrix({ rotation: bd.rotation as NifNode['rotation'], translation: bd.translation, scale: bd.scale }));
   };
 
   const rootNodes: NifNode[] = [];

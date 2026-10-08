@@ -17,7 +17,7 @@
  * shaping) are kept in the editor's sidecar `TES5EnvEditor/<plugin>.faces.json`
  * and change with undo like everything else.
  */
-import { CHARGEN_SLIDER_MORPHS, SKINNY_MORPH, applyTransform, decodeToRgba, invertTransform, mergeShapes, nifShapes, parseDds, parseTri, readNifDoc, setShapePositions, setShapeTexture, setShapeTint, shapeShaderType, writeNifDoc, writeRgbaDds, type NifDoc, type TriFile } from '@tes5/assets';
+import { CHARGEN_SLIDER_MORPHS, SKINNY_MORPH, applyTransform, decodeToRgba, invertTransform, mergeShapes, nifShapes, parseDds, parseTri, readNifDoc, setShapePositions, setShapeTexture, setShapeTint, shapeShaderType, writeBc3Dds, writeNifDoc, type NifDoc, type TriFile } from '@tes5/assets';
 import { parseFormKey, type FormKey } from '@tes5/esp';
 import { WorkspaceError, type Workspace } from './engine';
 import { FaceShaper, emptySculpt, faceLookFor, sculptIsEmpty, type FaceSculpt, type ShaperTri } from './faceshape';
@@ -32,6 +32,24 @@ export interface RaceTintMask {
   name: string;
   /** TINP mask type (6 = skin tone). */
   type: number;
+}
+
+/** A character's face files, for the export list. */
+export interface FaceFileStatus {
+  npc: FormKey;
+  editorId?: string;
+  name?: string;
+  /**
+   * ok: files match the look · outdated: files are older than the look ·
+   * missing: no files yet · template: looks come from a template (no files needed) ·
+   * noHead: no head mesh, so there's nothing to build.
+   */
+  status: 'ok' | 'outdated' | 'missing' | 'template' | 'noHead';
+  /** True when the plugin changes this face (new characters, or overrides that edit the look). */
+  edited: boolean;
+  template?: FormKey;
+  mesh: string;
+  tint: string;
 }
 
 export interface FaceGenOutput {
@@ -395,7 +413,8 @@ export class FaceGenService {
       for (let ch = 0; ch < 3; ch++) rgba[i * 4 + ch] = Math.round(Math.max(0, Math.min(1, px[i * 3 + ch]!)) * 255);
       rgba[i * 4 + 3] = 255;
     }
-    return writeRgbaDds(size, size, rgba);
+    // Like the CK: BC3 with mipmaps down to 2×2 (about a third of the uncompressed size).
+    return writeBc3Dds(size, size, rgba, { minSize: 2 });
   }
 
   /** A mask texture as 0–1 coverage at `size`² (nearest sampling), or undefined when it can't be read. */
@@ -438,21 +457,43 @@ export class FaceGenService {
 
   /** Characters in the active plugin whose face needs (re)generating: edited face, missing or stale files. */
   async needingFaces(): Promise<FormKey[]> {
+    return (await this.faceFiles()).filter((f) => f.edited && (f.status === 'missing' || f.status === 'outdated')).map((f) => f.npc);
+  }
+
+  /**
+   * Every character in the active plugin with the state of its face files,
+   * like the Creation Kit's character list before Ctrl+F4: edited faces
+   * first, then the rest (which can still be exported on request).
+   */
+  async faceFiles(): Promise<FaceFileStatus[]> {
     const a = this.ws.active;
     if (!a?.plugin) return [];
     const side = await this.readSidecar();
-    const out: FormKey[] = [];
+    const out: FaceFileStatus[] = [];
     for (const r of a.plugin.recordsOfType('NPC_')) {
       const key = this.ws.keyOf(a, r.formId)!;
       const owned = parseFormKey(key).plugin.toLowerCase() === (a.name ?? '').toLowerCase();
       const changesFace = ['PNAM', 'NAM9', 'NAMA', 'QNAM', 'FTST', 'HCLF', 'TINI'].some((sig) => r.has(sig)) || !!side.sculpts[key];
-      if (!changesFace || (!owned && !r.has('PNAM') && !side.sculpts[key])) continue;
-      if (!this.headPartsOf(key).some((p) => p.type === 'Face')) continue;
+      const edited = changesFace && (owned || r.has('PNAM') || !!side.sculpts[key]);
+      const summary = this.ws.summary(key);
       const paths = this.npcs.faceGenPaths(key);
+      const base = { npc: key, editorId: summary?.editorId, name: summary?.name, edited, mesh: paths.mesh, tint: paths.tint };
+      const template = this.npcs.looksTemplate(key);
+      if (template) {
+        out.push({ ...base, edited: false, status: 'template', template });
+        continue;
+      }
+      if (!this.headPartsOf(key).some((p) => p.type === 'Face' && !!p.model)) {
+        out.push({ ...base, status: 'noHead' });
+        continue;
+      }
       const present = this.ws.vfs.has(paths.mesh) && this.ws.vfs.has(paths.tint);
-      if (!present || side.baked[key] !== (await this.inputsHash(key))) out.push(key);
+      // An edited face needs files baked here from its current look (an override's files from the master show the old face).
+      const stale = present && edited && side.baked[key] !== (await this.inputsHash(key));
+      out.push({ ...base, status: !present ? 'missing' : stale ? 'outdated' : 'ok' });
     }
-    return out;
+    const rank = (f: FaceFileStatus) => (f.edited ? 0 : 1) * 10 + ['missing', 'outdated', 'ok', 'noHead', 'template'].indexOf(f.status);
+    return out.sort((x, y) => rank(x) - rank(y) || (x.name ?? x.editorId ?? '').localeCompare(y.name ?? y.editorId ?? ''));
   }
 
   /**

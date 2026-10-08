@@ -284,3 +284,270 @@ export function writeRgbaDds(width: number, height: number, rgba: Uint8Array): U
   out.set(rgba, 128);
   return out;
 }
+
+// ------------------------------------------------------------------ BC3 encoding
+
+const to565 = (r: number, g: number, b: number) => (Math.round((Math.max(0, Math.min(255, r)) * 31) / 255) << 11) | (Math.round((Math.max(0, Math.min(255, g)) * 63) / 255) << 5) | Math.round((Math.max(0, Math.min(255, b)) * 31) / 255);
+
+/** The four colours a BC1/BC3 colour block decodes to (as this module's decoder rounds them). */
+function palette4(c0: number, c1: number): number[][] {
+  const p0 = rgb565(c0);
+  const p1 = rgb565(c1);
+  return [p0, p1, p0.map((v, i) => Math.floor((2 * v + p1[i]!) / 3)), p0.map((v, i) => Math.floor((v + 2 * p1[i]!) / 3))];
+}
+
+function fitIndices(px: Float64Array, c0: number, c1: number): { bits: number; err: number } {
+  const pal = palette4(c0, c1);
+  let bits = 0;
+  let err = 0;
+  for (let i = 0; i < 16; i++) {
+    let best = 0;
+    let bestD = Infinity;
+    for (let k = 0; k < 4; k++) {
+      const p = pal[k]!;
+      const d = (px[i * 3]! - p[0]!) ** 2 + (px[i * 3 + 1]! - p[1]!) ** 2 + (px[i * 3 + 2]! - p[2]!) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = k;
+      }
+    }
+    err += bestD;
+    bits |= best << (2 * i);
+  }
+  return { bits: bits >>> 0, err };
+}
+
+const expand = (q: number, bits: number) => (bits === 5 ? (q << 3) | (q >> 2) : (q << 2) | (q >> 4));
+const singleTables = new Map<number, Uint8Array>();
+/** For each 0–255 value, the endpoint pair (a, b) whose ⅔a + ⅓b comes closest (packed a<<8|b in two bytes). */
+function singleTable(bits: number): Uint8Array {
+  let t = singleTables.get(bits);
+  if (t) return t;
+  t = new Uint8Array(512);
+  const n = 1 << bits;
+  for (let v = 0; v < 256; v++) {
+    let best = Infinity;
+    for (let a = 0; a < n; a++)
+      for (let b = 0; b < n; b++) {
+        const d = Math.abs(Math.floor((2 * expand(a, bits) + expand(b, bits)) / 3) - v);
+        if (d < best) {
+          best = d;
+          t[v * 2] = a;
+          t[v * 2 + 1] = b;
+        }
+      }
+  }
+  singleTables.set(bits, t);
+  return t;
+}
+
+function writeColorBlock(out: Uint8Array, o: number, c0: number, c1: number, bits: number): void {
+  out[o] = c0 & 255;
+  out[o + 1] = c0 >> 8;
+  out[o + 2] = c1 & 255;
+  out[o + 3] = c1 >> 8;
+  out[o + 4] = bits & 255;
+  out[o + 5] = (bits >>> 8) & 255;
+  out[o + 6] = (bits >>> 16) & 255;
+  out[o + 7] = (bits >>> 24) & 255;
+}
+
+/** A block of one colour, matched exactly where possible through the ⅔/⅓ palette entry. */
+function encodeSingleColor(r: number, g: number, b: number, out: Uint8Array, o: number): void {
+  const t5 = singleTable(5);
+  const t6 = singleTable(6);
+  const a = (t5[r * 2]! << 11) | (t6[g * 2]! << 5) | t5[b * 2]!;
+  const z = (t5[r * 2 + 1]! << 11) | (t6[g * 2 + 1]! << 5) | t5[b * 2 + 1]!;
+  if (a > z) writeColorBlock(out, o, a, z, 0xaaaaaaaa); // every pixel uses entry 2 = ⅔a + ⅓z
+  else if (a < z) writeColorBlock(out, o, z, a, 0xffffffff); // swapped: entry 3 = ⅓z + ⅔a
+  else writeColorBlock(out, o, a === 0xffff ? a : a + 1, a === 0xffff ? a - 1 : a, a === 0xffff ? 0 : 0x55555555);
+}
+
+/** Encode 16 RGB pixels (row-major, 0–255) as a 4-colour BC1-style block. */
+function encodeColorBlock(px: Float64Array, out: Uint8Array, o: number): void {
+  let flat = true;
+  for (let i = 1; i < 16 && flat; i++) flat = px[i * 3] === px[0] && px[i * 3 + 1] === px[1] && px[i * 3 + 2] === px[2];
+  if (flat) return encodeSingleColor(Math.round(px[0]!), Math.round(px[1]!), Math.round(px[2]!), out, o);
+  const mean = [0, 0, 0];
+  for (let i = 0; i < 16; i++) for (let c = 0; c < 3; c++) mean[c]! += px[i * 3 + c]! / 16;
+  // Principal axis of the colours (power iteration on the covariance).
+  const cov = [0, 0, 0, 0, 0, 0];
+  for (let i = 0; i < 16; i++) {
+    const r = px[i * 3]! - mean[0]!;
+    const g = px[i * 3 + 1]! - mean[1]!;
+    const b = px[i * 3 + 2]! - mean[2]!;
+    cov[0]! += r * r;
+    cov[1]! += r * g;
+    cov[2]! += r * b;
+    cov[3]! += g * g;
+    cov[4]! += g * b;
+    cov[5]! += b * b;
+  }
+  let axis = [1, 1, 1];
+  for (let it = 0; it < 8; it++) {
+    const n = [cov[0]! * axis[0]! + cov[1]! * axis[1]! + cov[2]! * axis[2]!, cov[1]! * axis[0]! + cov[3]! * axis[1]! + cov[4]! * axis[2]!, cov[2]! * axis[0]! + cov[4]! * axis[1]! + cov[5]! * axis[2]!];
+    const len = Math.hypot(n[0]!, n[1]!, n[2]!);
+    if (len < 1e-9) break;
+    axis = n.map((v) => v / len);
+  }
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (let i = 0; i < 16; i++) {
+    const t = (px[i * 3]! - mean[0]!) * axis[0]! + (px[i * 3 + 1]! - mean[1]!) * axis[1]! + (px[i * 3 + 2]! - mean[2]!) * axis[2]!;
+    lo = Math.min(lo, t);
+    hi = Math.max(hi, t);
+  }
+  const inset = (hi - lo) / 16;
+  const e0 = mean.map((m, c) => m + axis[c]! * (hi - inset));
+  const e1 = mean.map((m, c) => m + axis[c]! * (lo + inset));
+  let c0 = to565(e0[0]!, e0[1]!, e0[2]!);
+  let c1 = to565(e1[0]!, e1[1]!, e1[2]!);
+  let best = { c0, c1, ...fitIndices(px, Math.max(c0, c1), Math.min(c0, c1)) };
+  // Least-squares refinement of the endpoints for the chosen indices.
+  for (let pass = 0; pass < 2 && c0 !== c1; pass++) {
+    const w = [1, 0, 2 / 3, 1 / 3];
+    let aa = 0, bb = 0, ab = 0;
+    const ax = [0, 0, 0], bx = [0, 0, 0];
+    for (let i = 0; i < 16; i++) {
+      const a = w[(best.bits >>> (2 * i)) & 3]!;
+      const b = 1 - a;
+      aa += a * a;
+      bb += b * b;
+      ab += a * b;
+      for (let c = 0; c < 3; c++) {
+        ax[c]! += a * px[i * 3 + c]!;
+        bx[c]! += b * px[i * 3 + c]!;
+      }
+    }
+    const det = aa * bb - ab * ab;
+    if (Math.abs(det) < 1e-9) break;
+    const p = ax.map((v, c) => (v * bb - bx[c]! * ab) / det);
+    const q = bx.map((v, c) => (v * aa - ax[c]! * ab) / det);
+    c0 = to565(p[0]!, p[1]!, p[2]!);
+    c1 = to565(q[0]!, q[1]!, q[2]!);
+    const fit = fitIndices(px, Math.max(c0, c1), Math.min(c0, c1));
+    if (fit.err >= best.err) break;
+    best = { c0, c1, ...fit };
+  }
+  let hiC = Math.max(best.c0, best.c1);
+  let loC = Math.min(best.c0, best.c1);
+  let bits = best.bits;
+  if (hiC === loC) {
+    // One colour: 4-colour mode needs c0 > c1, so nudge c1 down and use index 0 throughout.
+    if (hiC > 0) loC = hiC - 1;
+    else hiC = 1;
+    bits = fitIndices(px, hiC, loC).bits;
+  }
+  writeColorBlock(out, o, hiC, loC, bits);
+}
+
+/** Encode 16 alpha values as a BC3 alpha block (8-value mode). */
+function encodeAlphaBlock(a: Float64Array, out: Uint8Array, o: number): void {
+  let mx = 0;
+  let mn = 255;
+  for (let i = 0; i < 16; i++) {
+    mx = Math.max(mx, Math.round(a[i]!));
+    mn = Math.min(mn, Math.round(a[i]!));
+  }
+  out[o] = mx;
+  out[o + 1] = mn;
+  let lo = 0;
+  let hi = 0;
+  for (let i = 0; i < 16; i++) {
+    let idx = 0;
+    if (mx > mn) {
+      // Palette: 0 → mx, 1 → mn, 2..7 → (7-k)/7 steps from mx to mn.
+      const t = Math.round(((mx - a[i]!) / (mx - mn)) * 7);
+      idx = t <= 0 ? 0 : t >= 7 ? 1 : t + 1;
+    }
+    if (i < 8) lo |= idx << (3 * i);
+    else hi |= idx << (3 * (i - 8));
+  }
+  out[o + 2] = lo & 255;
+  out[o + 3] = (lo >> 8) & 255;
+  out[o + 4] = (lo >> 16) & 255;
+  out[o + 5] = hi & 255;
+  out[o + 6] = (hi >> 8) & 255;
+  out[o + 7] = (hi >> 16) & 255;
+}
+
+function encodeBc3Level(w: number, h: number, rgba: Uint8Array): Uint8Array {
+  const bw = Math.max(1, Math.ceil(w / 4));
+  const bh = Math.max(1, Math.ceil(h / 4));
+  const out = new Uint8Array(bw * bh * 16);
+  const px = new Float64Array(48);
+  const al = new Float64Array(16);
+  for (let by = 0; by < bh; by++)
+    for (let bx = 0; bx < bw; bx++) {
+      for (let i = 0; i < 16; i++) {
+        const x = Math.min(w - 1, bx * 4 + (i % 4));
+        const y = Math.min(h - 1, by * 4 + (i >> 2));
+        const s = (y * w + x) * 4;
+        px[i * 3] = rgba[s]!;
+        px[i * 3 + 1] = rgba[s + 1]!;
+        px[i * 3 + 2] = rgba[s + 2]!;
+        al[i] = rgba[s + 3]!;
+      }
+      const o = (by * bw + bx) * 16;
+      encodeAlphaBlock(al, out, o);
+      encodeColorBlock(px, out, o + 8);
+    }
+  return out;
+}
+
+/** Half-size box filter. */
+function halve(w: number, h: number, rgba: Uint8Array): { w: number; h: number; rgba: Uint8Array } {
+  const nw = Math.max(1, w >> 1);
+  const nh = Math.max(1, h >> 1);
+  const out = new Uint8Array(nw * nh * 4);
+  for (let y = 0; y < nh; y++)
+    for (let x = 0; x < nw; x++)
+      for (let c = 0; c < 4; c++) {
+        let s = 0;
+        let n = 0;
+        for (let dy = 0; dy < 2; dy++)
+          for (let dx = 0; dx < 2; dx++) {
+            const sx = Math.min(w - 1, x * 2 + dx);
+            const sy = Math.min(h - 1, y * 2 + dy);
+            s += rgba[(sy * w + sx) * 4 + c]!;
+            n++;
+          }
+        out[(y * nw + x) * 4 + c] = Math.round(s / n);
+      }
+  return { w: nw, h: nh, rgba: out };
+}
+
+/**
+ * Build a BC3 (DXT5) DDS with mipmaps down to `minSize`, laid out like the
+ * Creation Kit's face tints (512² → 2², 9 levels, legacy DXT5 header).
+ */
+export function writeBc3Dds(width: number, height: number, rgba: Uint8Array, opts: { minSize?: number } = {}): Uint8Array {
+  const minSize = opts.minSize ?? 1;
+  const levels: Uint8Array[] = [];
+  let cur = { w: width, h: height, rgba };
+  for (;;) {
+    levels.push(encodeBc3Level(cur.w, cur.h, cur.rgba));
+    if (cur.w <= minSize || cur.h <= minSize || (cur.w === 1 && cur.h === 1)) break;
+    cur = halve(cur.w, cur.h, cur.rgba);
+  }
+  const total = levels.reduce((s, l) => s + l.length, 0);
+  const out = new Uint8Array(128 + total);
+  const dv = new DataView(out.buffer);
+  dv.setUint32(0, FOURCC('DDS '), true);
+  dv.setUint32(4, 124, true);
+  dv.setUint32(8, 0x1 | 0x2 | 0x4 | 0x1000 | 0x20000 | 0x80000, true);
+  dv.setUint32(12, height, true);
+  dv.setUint32(16, width, true);
+  dv.setUint32(20, levels[0]!.length, true);
+  dv.setUint32(28, levels.length, true);
+  dv.setUint32(76, 32, true);
+  dv.setUint32(80, 0x4, true);
+  dv.setUint32(84, FOURCC('DXT5'), true);
+  dv.setUint32(108, 0x1000 | (levels.length > 1 ? 0x8 | 0x400000 : 0), true);
+  let o = 128;
+  for (const l of levels) {
+    out.set(l, o);
+    o += l.length;
+  }
+  return out;
+}

@@ -2,6 +2,32 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.6.0
+
+- **Things happen at quest stages:** a quest plan can now make enemies appear, turn someone hostile or friendly, unlock or lock a door or chest, make something appear or vanish, move or kill a character, fade to black, play a sound, change the weather, show a message, start another quest or move the player when a stage is reached. Claude adds them from your text ("bandits ambush you", "the door unlocks"); check and change them in the plan's **What happens at stages** card. **Change with a plan** updates them too.
+- **Undo in the plan review:** **Undo edit** takes back your last edit to a plan before you build it.
+- **Face files (FaceGen export) like the CK's Ctrl+F4, as a list:** Release → Character faces lists every character in your plugin and whether its face files are up to date, out of date or missing.
+  - **Generate faces** makes every changed one; tick any others and **Export ticked** to write them again.
+  - Face tints are now written like the Creation Kit's: compressed (BC3) with mipmaps, about a third of the size.
+  - Characters that take their looks from a template no longer show as needing face files (the game uses the template's face). Their page says so and opens the template.
+  - A character whose files are up to date has **Write again**.
+- **Easier to find Skyrim:** the start screen finds it in your Steam libraries and GOG folders, so you usually just click **Open**.
+- **Plugin list:** search, **All / Only masters / None**, and unticking a master unticks the plugins that need it.
+- **Empty screens say what to do next**, with a button for it, on the Characters, Quests, Scripts and Records tabs.
+- **Only mine:** the Characters and Quests lists can show only what your plugin adds or changes, and say when there are more than they show.
+- **Conditions show names:** skills and stats ("One-handed", "Health"), crime types, hands and alignment are picked from a list instead of typed as numbers.
+- **Records** names placed objects after what they place.
+- **World toolbar** stays on one row on small windows (icons with tooltips).
+- **The ground looks like the game's:** outdoor terrain now shows its real textures (dirt, grass, rock, snow), blended the way the game paints them, instead of a flat green.
+- **Characters show their whole body** on the character creator's Body page: body, clothes and armor, not just the head.
+- **Clothes and armor use their real textures and shading** (they were a flat colour): skinned meshes now take their texture coordinates and normals from the right place in the mesh file. Bare skin (neck, arms, hands) uses the character's skin tone the way the game does, so it matches the face.
+- **No more neck seam:** bodies and armor are blended between their thin and heavy versions by the character's weight, as in game, so the neck meets the head.
+- **Normal maps and shine:** surfaces now show their bumps, folds and fur from their normal maps, and shine where the game's specular mask says; skin uses its model-space normal map, which also hides the head–body join.
+- **Heads sit right on their necks in the World view:** FaceGen face files keep some bones in another pose; the head is now placed by the bone that moves most of it.
+- **World view characters** get the same: weight-blended bodies, their own skin tone, and their face tint.
+- **No more white blobs:** the boxes that mist, smoke and other effects carry for the editor are hidden; glows, webs and splashes use their own colour and blending; water is blue. Marker shapes inside furniture and dragon perches are hidden unless View → **Marker shapes on furniture** is on.
+- **Fixes:** the pre-release check no longer shows problems you've already fixed (it updates itself); Escape now closes dialogs while you're typing in them; armor lying in the world (on racks and tables) now shows its ground model instead of nothing.
+
 ## 0.5.0
 
 - **Body tab (BodySlide):** shape bodies with the sliders and presets mods already ship for BodySlide.

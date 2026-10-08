@@ -3,6 +3,7 @@
  * with caching so each file is fetched and uploaded once.
  */
 import * as THREE from 'three';
+import { gameTexturePath } from '@tes5/assets';
 import type { EngineClient } from '../../engine/client';
 import type { MeshPayload, TexturePayload } from '../../engine/host';
 
@@ -34,13 +35,7 @@ const COMPRESSED: Record<string, { format: THREE.CompressedPixelFormat; cap: key
   bc7: { format: THREE.RGBA_BPTC_Format, cap: 'bptc' },
 };
 
-function normalizeTexturePath(p: string): string {
-  return p
-    .replace(/\//g, '\\')
-    .replace(/^.*?\bdata\\/i, '')
-    .replace(/^\\+/, '')
-    .toLowerCase();
-}
+const normalizeTexturePath = gameTexturePath;
 
 export class AssetCache {
   private meshes = new Map<string, Promise<THREE.Group | null>>();
@@ -49,6 +44,8 @@ export class AssetCache {
   /** Called when an asynchronously loaded texture arrives, so the view can redraw. */
   onLoad?: () => void;
   warnings = new Set<string>();
+  /** Apply FaceGen face tints (off where the face texture is composed separately, as in the character creator). */
+  faceTint = true;
 
   constructor(
     private readonly client: EngineClient,
@@ -122,7 +119,13 @@ export class AssetCache {
     const group = new THREE.Group();
     group.name = payload.path;
     for (const w of payload.warnings) this.warnings.add(`${payload.path}: ${w}`);
-    for (const s of payload.shapes) group.add(this.buildShape(s));
+    // Effects (mist, smoke, sparks) are particle systems the editor can't draw; their only shape is an editor box the game never shows.
+    const effect = /^meshes\\effects\\/i.test(payload.path);
+    for (const s of payload.shapes) {
+      const mesh = this.buildShape(s);
+      if (effect && mesh.userData.editorMarker) continue;
+      group.add(mesh);
+    }
     return group;
   }
 
@@ -147,8 +150,27 @@ export class AssetCache {
 
     const m = s.material;
     let mat: THREE.Material;
-    if (m.shader === 'effect') {
-      mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+    // Shapes only the editor shows: the box on effect meshes, furniture and idle markers.
+    const editorMarker = /^(editormarker|marker)/i.test(s.name);
+    if (editorMarker) {
+      mat = MARKER_SHAPE_MAT;
+    } else if (m.water) {
+      mat = WATER_MAT;
+    } else if (m.shader === 'effect') {
+      // Glows, mist, sparks, webs: the texture tinted by the base colour, blended (often additively) over the scene.
+      const base = new THREE.Color(m.emissive[0] || 1, m.emissive[1] || 1, m.emissive[2] || 1).multiplyScalar(Math.max(0.2, Math.min(m.emissiveMultiple || 1, 3)));
+      mat = new THREE.MeshBasicMaterial({
+        color: base,
+        transparent: true,
+        opacity: Math.max(0.05, Math.min(1, m.alpha || 1)),
+        blending: m.additive || !m.alphaBlend ? THREE.AdditiveBlending : THREE.NormalBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        vertexColors: !!geo.getAttribute('color'),
+        alphaTest: m.alphaTest ? Math.max(0.01, m.alphaThreshold / 255) : 0,
+      });
+      // With no texture an effect would be a flat bright sheet; keep it faint.
+      if (!m.textures[0]) (mat as THREE.MeshBasicMaterial).opacity = 0.15;
     } else {
       mat = new THREE.MeshStandardMaterial({
         color: 0xffffff,
@@ -169,7 +191,7 @@ export class AssetCache {
         std.emissiveIntensity = Math.min(2, m.emissiveMultiple);
       }
     }
-    const diffuse = m.textures[0];
+    const diffuse = editorMarker || m.water ? undefined : m.textures[0];
     if (diffuse) {
       void this.texture(diffuse).then((t) => {
         if (!t) return;
@@ -182,8 +204,52 @@ export class AssetCache {
         this.onLoad?.();
       });
     }
+    // Normal map (texture slot 1): bumps and folds, and on skin the whole shading (skin meshes carry no vertex normals).
+    const normalPath = m.shader === 'lighting' && !editorMarker && !m.water ? m.textures[1] : undefined;
+    if (normalPath && mat instanceof THREE.MeshStandardMaterial) {
+      const std = mat;
+      void this.texture(normalPath, false).then((t) => {
+        if (!t) return;
+        const tex = t.clone();
+        tex.offset.set(m.uvOffset[0], m.uvOffset[1]);
+        tex.repeat.set(m.uvScale[0] || 1, m.uvScale[1] || 1);
+        tex.needsUpdate = true;
+        std.normalMap = tex;
+        if (m.modelSpaceNormals) std.normalMapType = THREE.ObjectSpaceNormalMap;
+        // Shine: the normal map's alpha is the game's specular mask, sharpened by the material's glossiness.
+        const spec = !!m.specular && m.specularStrength > 0;
+        std.roughness = spec ? Math.min(0.9, Math.max(0.3, Math.sqrt(2 / (Math.max(1, m.glossiness) + 2)) * 2.2)) : 0.9;
+        // Model-space maps (skin, faces): red = X, blue = Y, green = Z in the shape's own space
+        // (measured against vanilla bodies and heads), so green and blue are swapped when read.
+        if (m.modelSpaceNormals) addShaderPatch(std, 'msn', (shader) => (shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_maps>', MSN_CHUNK)));
+        if (spec)
+          addShaderPatch(std, 'specmask', (shader) => {
+            shader.fragmentShader = shader.fragmentShader.replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix( 1.0, roughnessFactor, texture2D( normalMap, vNormalMapUv ).a );');
+          });
+        std.needsUpdate = true;
+        this.onLoad?.();
+      });
+    }
+    // FaceGen faces (shader type 4): the head texture times the character's face tint (slot 6), doubled in gamma
+    // space as the game does: (2·t)^2.2 = 4.59·t in the linear space lighting happens in.
+    const tintPath = this.faceTint && m.shader === 'lighting' && m.shaderType === 4 ? m.textures[6] : undefined;
+    if (tintPath && mat instanceof THREE.MeshStandardMaterial) {
+      const std = mat;
+      void this.texture(tintPath.replace(/^data\\/i, '')).then((t) => {
+        if (!t) return;
+        const uniform = { value: t };
+        addShaderPatch(std, 'facetint', (shader) => {
+          shader.uniforms.faceTint = uniform;
+          shader.fragmentShader = shader.fragmentShader
+            .replace('void main() {', 'uniform sampler2D faceTint;\nvoid main() {')
+            .replace('#include <map_fragment>', '#include <map_fragment>\n#ifdef USE_MAP\ndiffuseColor.rgb *= 4.59 * texture2D( faceTint, vMapUv ).rgb;\n#endif');
+        });
+        this.onLoad?.();
+      });
+    }
     const mesh = new THREE.Mesh(geo, mat);
     mesh.name = s.name;
+    if (editorMarker) mesh.userData.editorMarker = true;
     mesh.matrixAutoUpdate = false;
     mesh.matrix.fromArray(s.matrix);
     mesh.updateMatrixWorld(true);
@@ -214,7 +280,79 @@ export class AssetCache {
   }
 }
 
+/** Several shader tweaks on one material: each has a key (for the program cache) and an edit. */
+function addShaderPatch(mat: THREE.MeshStandardMaterial, key: string, edit: (shader: THREE.WebGLProgramParametersWithUniforms) => void): void {
+  const patches = ((mat.userData.patches ??= new Map()) as Map<string, typeof edit>);
+  patches.set(key, edit);
+  mat.onBeforeCompile = (shader) => {
+    for (const p of patches.values()) p(shader);
+  };
+  mat.customProgramCacheKey = () => [...patches.keys()].sort().join('|');
+  mat.needsUpdate = true;
+}
+
+/** three.js's normal-map chunk, reading model-space maps with Skyrim's channel order. */
+const MSN_CHUNK = THREE.ShaderChunk.normal_fragment_maps.replace(
+  'normal = texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0;',
+  'normal = texture2D( normalMap, vNormalMapUv ).xzy * 2.0 - 1.0;',
+);
+
+// ------------------------------------------------------------------ body weight
+
+/** The thin (weight 0) version of a body or armor mesh: "…_1.nif" → "…_0.nif". */
+export function lightVariant(model: string): string | undefined {
+  return /_1\.nif$/i.test(model) ? model.replace(/_1\.nif$/i, '_0.nif') : undefined;
+}
+
+/**
+ * A copy of a body or armor mesh at a character's weight (0–100), blending the
+ * heavy (_1) and thin (_0) meshes vertex by vertex the way the game does, so
+ * the neck meets the head (which is shaped for the same weight). Geometry is
+ * copied; materials stay shared. Without a matching thin mesh, the heavy one.
+ */
+export function atWeight(heavy: THREE.Group, light: THREE.Group | null | undefined, weight: number): THREE.Group {
+  const out = heavy.clone();
+  const meshesOf = (g: THREE.Object3D) => {
+    const list: THREE.Mesh[] = [];
+    g.traverse((o) => (o as THREE.Mesh).isMesh && list.push(o as THREE.Mesh));
+    return list;
+  };
+  const target = meshesOf(out);
+  const thin = light ? meshesOf(light) : [];
+  const w = Math.max(0, Math.min(1, weight / 100));
+  target.forEach((m, i) => {
+    m.geometry = m.geometry.clone();
+    const t = thin[i];
+    if (!t || w >= 1) return;
+    for (const name of ['position', 'normal'] as const) {
+      const a = m.geometry.getAttribute(name) as THREE.BufferAttribute | undefined;
+      const b = t.geometry.getAttribute(name) as THREE.BufferAttribute | undefined;
+      if (!a || !b || a.count !== b.count) continue;
+      const arr = a.array as Float32Array;
+      const src = b.array as Float32Array;
+      for (let k = 0; k < arr.length; k++) arr[k] = src[k]! + (arr[k]! - src[k]!) * w;
+      a.needsUpdate = true;
+    }
+    if (m.geometry.getAttribute('normal')) {
+      // Keep normals unit length after blending.
+      const n = m.geometry.getAttribute('normal') as THREE.BufferAttribute;
+      const v = new THREE.Vector3();
+      for (let k = 0; k < n.count; k++) {
+        v.fromBufferAttribute(n, k).normalize();
+        n.setXYZ(k, v.x, v.y, v.z);
+      }
+    }
+    m.geometry.computeBoundingBox();
+    m.geometry.computeBoundingSphere();
+  });
+  return out;
+}
+
 // ------------------------------------------------------------------ editor-only shapes
+
+const MARKER_SHAPE_MAT = new THREE.MeshBasicMaterial({ color: 0xff9a3c, transparent: true, opacity: 0.55, depthWrite: false, wireframe: true });
+/** Water surfaces (rivers, troughs): the game's water shader is out of reach, so a calm translucent blue. */
+const WATER_MAT = new THREE.MeshStandardMaterial({ color: 0x2f5f7a, roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.6, depthWrite: false, side: THREE.DoubleSide });
 
 const markerMats = new Map<number, THREE.Material>();
 function markerMat(color: number): THREE.Material {

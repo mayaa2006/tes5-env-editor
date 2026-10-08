@@ -35,6 +35,8 @@ export interface Settings {
   snapRotateDeg: number;
   snapScale: number;
   showMarkers: boolean;
+  /** Editor-only shapes inside furniture and props (lean, sit and landing markers). */
+  showMarkerShapes: boolean;
   /** Rings of cells loaded around an outdoor cell: 0 = just the cell, 1 = 3×3, 2 = 5×5. */
   surroundingCells: number;
   /** Draw characters with their body, clothes and head (off: simple capsules). */
@@ -63,6 +65,7 @@ const DEFAULT_SETTINGS: Settings = {
   snapRotateDeg: 15,
   snapScale: 0.1,
   showMarkers: true,
+  showMarkerShapes: false,
   surroundingCells: 1,
   actorModels: true,
   kitSnap: true,
@@ -96,6 +99,11 @@ interface Store {
   catalog: { items: CatalogPlace; magic: CatalogPlace };
   /** Bumped whenever the engine reports a change; views re-query on change. */
   revision: number;
+  /** A request (from an empty screen) for a list to open its New dialog; `n` changes on each request. */
+  newRequest?: { kind: 'npc' | 'quest' | 'script'; n: number };
+  requestNew(kind: 'npc' | 'quest' | 'script'): void;
+  /** Take a pending New request for this kind (true if there was one). */
+  takeNew(kind: 'npc' | 'quest' | 'script'): boolean;
   toasts: Toast[];
   log: LogEntry[];
   settings: Settings;
@@ -159,6 +167,12 @@ export const useStore = create<Store>((set, get) => ({
     set({ catalog: { ...get().catalog, [tab]: next } });
   },
   setScript: (script) => set({ script }),
+  requestNew: (kind) => set({ newRequest: { kind, n: (get().newRequest?.n ?? 0) + 1 } }),
+  takeNew: (kind) => {
+    if (get().newRequest?.kind !== kind) return false;
+    set({ newRequest: undefined });
+    return true;
+  },
   bump: () => set({ revision: get().revision + 1 }),
   toast: (kind, text) => {
     const id = toastId++;

@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import type { TriFile } from '@tes5/assets';
 import { FaceShaper, type FaceLook, type ShaperTri } from '@tes5/workspace';
 import type { EngineClient } from '../../engine/client';
-import { AssetCache } from '../scene/assets3d';
+import { AssetCache, atWeight, lightVariant } from '../scene/assets3d';
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 
@@ -47,7 +47,12 @@ export class HeadPreview {
   onShaper?: (info: { regions: string[]; extraMorphs: string[] }) => void;
   private hair = new THREE.Color(0.25, 0.18, 0.12);
   private skin = new THREE.Color(1, 1, 1);
+  /** The character's skin tone as stored (white when unset), for the body's skin shader. */
+  private skinTone = new THREE.Color(0.5, 0.5, 0.5);
   private generation = 0;
+  /** Body and worn armor (rest pose), shown under the head. */
+  private body = new THREE.Group();
+  private bodyKey = '';
 
   constructor(
     private readonly container: HTMLElement,
@@ -59,6 +64,8 @@ export class HeadPreview {
     this.renderer.setClearColor(0x1f2023);
     container.appendChild(this.renderer.domElement);
     this.assets = new AssetCache(client, this.renderer);
+    // The face texture here already includes the tint (it follows edits live).
+    this.assets.faceTint = false;
     // Textures arrive after the meshes: re-apply colours (and the face texture) when they do.
     this.assets.onLoad = () => this.applyColours();
     const key = new THREE.DirectionalLight(0xfff4e8, 3.2);
@@ -69,6 +76,7 @@ export class HeadPreview {
     const rim = new THREE.DirectionalLight(0xffffff, 0.8);
     rim.position.set(0, -1, 0.5);
     this.scene.add(key, fill, rim, new THREE.HemisphereLight(0xffffff, 0x404040, 1.3));
+    this.scene.add(this.body);
     const el = this.renderer.domElement;
     el.addEventListener('pointerdown', (e) => {
       this.drag = { x: e.clientX, y: e.clientY, pan: e.button === 1 || e.button === 2 || e.shiftKey };
@@ -247,6 +255,9 @@ export class HeadPreview {
   setColors(hair: { r: number; g: number; b: number } | null, skin: { r: number; g: number; b: number } | null): void {
     if (hair) this.hair.setRGB(hair.r, hair.g, hair.b, THREE.SRGBColorSpace);
     // QNAM skin tone is a multiplier around mid-grey; keep it subtle for preview purposes.
+    const hasTone = !!skin && (skin.r > 0 || skin.g > 0 || skin.b > 0);
+    if (hasTone) this.skinTone.setRGB(skin!.r, skin!.g, skin!.b);
+    else this.skinTone.setRGB(0.5, 0.5, 0.5);
     this.skin.setRGB(skin && (skin.r || skin.g || skin.b) ? 0.6 + skin.r * 0.4 : 1, skin && (skin.r || skin.g || skin.b) ? 0.6 + skin.g * 0.4 : 1, skin && (skin.r || skin.g || skin.b) ? 0.6 + skin.b * 0.4 : 1);
     this.applyAll();
   }
@@ -257,6 +268,14 @@ export class HeadPreview {
   }
 
   private applyColours(): void {
+    this.body.traverse((o) => {
+      const m = o as THREE.Mesh;
+      const mat = m.isMesh ? (m.material as THREE.MeshStandardMaterial) : undefined;
+      // Skin-tint shader (the bare body, hands, feet): texture × skin tone × 2 in gamma space, as the game's skin
+      // shader does (the same rule the face uses with its tint), so neck and hands match the face. Lighting here is
+      // linear, so the gamma-space factor is raised to 2.2.
+      if (mat?.color && mat.userData.shaderType === 5) mat.color.setRGB(...([this.skinTone.r, this.skinTone.g, this.skinTone.b].map((v) => Math.pow(2 * v, 2.2)) as [number, number, number]));
+    });
     for (const l of this.loaded.values()) {
       const typeHair = l.part.type === 'Hair' || l.part.type === 'Facial Hair' || l.part.type === 'Eyebrows';
       l.group.traverse((o) => {
@@ -280,6 +299,52 @@ export class HeadPreview {
       });
     }
     this.dirty = true;
+  }
+
+  /** Show the body and worn armor (model paths under Data\\meshes); empty to show only the head. */
+  async setBody(models: string[], weight = 50): Promise<void> {
+    const key = `${models.join('|')}@${weight}`;
+    if (key === this.bodyKey) return;
+    this.bodyKey = key;
+    // Bodies and armor come in heavy (_1) and thin (_0) versions, blended by the character's weight.
+    const groups = await Promise.all(
+      models.map(async (m) => {
+        const light = lightVariant(m);
+        const [heavy, thin] = await Promise.all([this.assets.mesh(m), light ? this.assets.mesh(light) : null]);
+        return heavy ? atWeight(heavy, thin, weight) : null;
+      }),
+    );
+    if (key !== this.bodyKey) return;
+    this.body.clear();
+    for (const c of groups) {
+      if (!c) continue;
+      c.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh) return;
+        // Vertex colours aren't used on bodies and clothes: drop them.
+        m.geometry.deleteAttribute('color');
+        const mat = m.material as THREE.MeshStandardMaterial;
+        if (mat.vertexColors) {
+          mat.vertexColors = false;
+          mat.needsUpdate = true;
+        }
+      });
+      this.body.add(c);
+    }
+    this.applyColours();
+  }
+
+  /** Camera on the face, or on the whole figure. */
+  view(mode: 'head' | 'body'): void {
+    if (mode === 'body' && this.body.children.length) {
+      this.scene.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(this.body, true);
+      for (const l of this.loaded.values()) box.expandByObject(l.group);
+      const sp = box.getBoundingSphere(new THREE.Sphere());
+      this.target.copy(sp.center);
+      this.dist = Math.max(200, sp.radius * 4.2);
+      this.dirty = true;
+    } else this.frame();
   }
 
   frame(): void {

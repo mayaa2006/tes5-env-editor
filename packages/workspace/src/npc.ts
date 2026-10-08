@@ -280,6 +280,16 @@ export class NpcService {
     return this.ws.search({ sigs: ['RACE'], limit: 10_000 }).items.map((s) => ({ formKey: s.formKey, editorId: s.editorId, name: s.name }));
   }
 
+  /**
+   * The template this character takes its looks from ("Use Traits"), if any.
+   * The game builds such faces from the template, and vanilla ships no face
+   * files for them, so they never need their own.
+   */
+  looksTemplate(npc: FormKey): FormKey | undefined {
+    const d = this.ws.view(npc)?.data as { template?: FormKey | null; config?: { templateFlags?: number } } | undefined;
+    return d?.template && Number(d.config?.templateFlags ?? 0) & 1 ? d.template : undefined;
+  }
+
   /** Paths of the FaceGen files the game loads for this NPC. */
   faceGenPaths(npc: FormKey): { mesh: string; tint: string } {
     const { objectId, plugin } = parseFormKey(npc);
@@ -304,7 +314,7 @@ export class NpcService {
       const paths = this.faceGenPaths(key);
       // Overrides only need FaceGen if they change the face; detect face subrecords.
       const changesFace = ['PNAM', 'NAM9', 'NAMA', 'QNAM', 'FTST', 'HCLF', 'TINI', 'RNAM'].some((sig) => r.has(sig));
-      if (!changesFace) continue;
+      if (!changesFace || this.looksTemplate(key)) continue;
       if (owner !== a.name && !this.faceDiffersFromMaster(key)) continue;
       const missing = [paths.mesh, paths.tint].filter((p) => !this.ws.vfs.has(p));
       if (missing.length) out.push({ npc: key, editorId: r.editorId, missing });

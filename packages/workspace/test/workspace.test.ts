@@ -18,6 +18,8 @@ import {
   uiSchema,
   voiceFileName,
   detectInstall,
+  findInstalls,
+  parseSteamLibraries,
 } from '../src';
 
 async function openDemo(withActive = true) {
@@ -56,6 +58,19 @@ describe('game detection and load order', () => {
       ['DirtyPatch.esp', true],
     ]);
     expect(ws.vfs.has('meshes\\demo\\crate.nif')).toBe(true);
+  });
+
+  it('finds Skyrim in every Steam library without asking', async () => {
+    expect(parseSteamLibraries('"libraryfolders"\n{\n "0"\n {\n  "path"\t\t"C:\\\\Program Files (x86)\\\\Steam"\n }\n "1"\n {\n  "path"\t\t"D:\\\\Games\\\\Steam"\n }\n}')).toEqual(['C:\\Program Files (x86)\\Steam', 'D:\\Games\\Steam']);
+    const fs = new MemoryFileSystem();
+    const steam = 'C:/Program Files (x86)/Steam';
+    fs.writeFileSync(`${steam}/steamapps/libraryfolders.vdf`, new TextEncoder().encode('"libraryfolders" { "1" { "path" "D:\\\\Games\\\\Steam" } }'));
+    const game = 'D:/Games/Steam/steamapps/common/Skyrim Special Edition';
+    fs.writeFileSync(`${game}/SkyrimSE.exe`, new Uint8Array(1));
+    fs.writeFileSync(`${game}/Data/placeholder.txt`, new Uint8Array(1));
+    const found = await findInstalls(fs, {});
+    expect(found.map((f) => [f.game, f.gameDir?.replace(/\\/g, '/')])).toEqual([['SkyrimSE', game]]);
+    expect(await findInstalls(new MemoryFileSystem(), {})).toEqual([]);
   });
 });
 

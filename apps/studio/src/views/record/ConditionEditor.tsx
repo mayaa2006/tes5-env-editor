@@ -3,7 +3,7 @@
  * with a searchable function list and pickers that know each parameter's type.
  */
 import { useMemo, useState } from 'react';
-import { FORM_PARAM_TYPES, PARAM_REFS, RUN_ON, type Condition, type ConditionFunctionInfo, type ConditionParamType } from '@tes5/esp';
+import { ACTOR_VALUES, FORM_PARAM_TYPES, PARAM_REFS, RUN_ON, type Condition, type ConditionFunctionInfo, type ConditionParamType } from '@tes5/esp';
 import { Checkbox, DragNumber, FormPicker, Icon, Select, useQuery } from '../../components/ui';
 import { useStore } from '../../state/store';
 
@@ -21,7 +21,42 @@ export function useConditionFunctions(): ConditionFunctionInfo[] {
   return data ?? [];
 }
 
+const AV_RENAME: Record<string, string> = { Marksman: 'Archery', Speechcraft: 'Speech', OneHanded: 'One-handed', TwoHanded: 'Two-handed', HeavyArmor: 'Heavy Armor', LightArmor: 'Light Armor' };
+/** "HealRate" → "Heal Rate"; skills get the names the game's menus use. */
+export const actorValueLabel = (n: string) => AV_RENAME[n] ?? n.replace(/([a-z])([A-Z0-9])/g, '$1 $2');
+const FIRST_AVS = ['OneHanded', 'TwoHanded', 'Marksman', 'Block', 'Smithing', 'HeavyArmor', 'LightArmor', 'Pickpocket', 'Lockpicking', 'Sneak', 'Alchemy', 'Speechcraft', 'Alteration', 'Conjuration', 'Destruction', 'Illusion', 'Restoration', 'Enchanting', 'Health', 'Magicka', 'Stamina'];
+const AV_OPTIONS = (() => {
+  const entries = Object.entries(ACTOR_VALUES).filter(([i, n]) => Number(i) >= 0 && !/^Unknown/.test(n));
+  const rank = (n: string) => (FIRST_AVS.includes(n) ? FIRST_AVS.indexOf(n) : 100);
+  return entries.sort((a, b) => rank(a[1]) - rank(b[1]) || actorValueLabel(a[1]).localeCompare(actorValueLabel(b[1]))).map(([i, n]) => ({ value: Number(i), label: actorValueLabel(n) }));
+})();
+
+/** Parameters stored as numbers that mean a choice, with the names the Creation Kit shows. */
+const NUMBER_CHOICES: Partial<Record<ConditionParamType, { value: number; label: string }[]>> = {
+  actorValue: AV_OPTIONS,
+  crimeType: ['Steal', 'Pickpocket', 'Trespass', 'Attack', 'Murder', 'Escape jail', 'Werewolf transformation'].map((label, value) => ({ value, label })),
+  castingSource: ['Left hand', 'Right hand', 'Voice', 'Instant'].map((label, value) => ({ value, label })),
+  alignment: ['Good', 'Neutral', 'Evil', 'Very good', 'Very evil'].map((label, value) => ({ value, label })),
+  criticalStage: ['None', 'Goo start', 'Goo end', 'Disintegrate start', 'Disintegrate end'].map((label, value) => ({ value, label })),
+  wardState: ['None', 'Absorb', 'Break'].map((label, value) => ({ value, label })),
+};
+
+/** A plain-words name for each parameter kind, for tooltips and the function list. */
+const PARAM_LABEL: Partial<Record<ConditionParamType, string>> = {
+  actorValue: 'skill or stat', actor: 'character', actorBase: 'character', baseObject: 'object', inventoryObject: 'item', crimeType: 'crime',
+  castingSource: 'hand', questStage: 'stage', integer: 'number', float: 'number', faction: 'faction', factionNull: 'faction', quest: 'quest',
+  reference: 'placed object', keyword: 'keyword', race: 'race', perk: 'perk', magicEffect: 'magic effect', location: 'location', cell: 'cell',
+  global: 'global', formList: 'list', sex: 'sex', axis: 'axis', alignment: 'alignment', voiceType: 'voice type', worldspace: 'worldspace',
+};
+export const paramLabel = (p: ConditionParamType) => PARAM_LABEL[p] ?? p;
+
 function ParamEditor({ type, value, onChange }: { type: ConditionParamType; value: unknown; onChange: (v: unknown) => void }) {
+  const choices = NUMBER_CHOICES[type];
+  if (choices) {
+    const v = Number(value ?? 0);
+    const opts = choices.some((c) => c.value === v) ? choices : [{ value: v, label: `#${v}` }, ...choices];
+    return <Select value={v} options={opts} onChange={onChange} />;
+  }
   if (FORM_PARAM_TYPES.has(type)) return <FormPicker value={typeof value === 'string' ? value : null} sigs={[...(PARAM_REFS[type] ?? [])]} onChange={onChange} />;
   if (type === 'axis')
     return (
@@ -76,7 +111,7 @@ function FunctionPicker({ value, fns, onChange }: { value: number; fns: Conditio
                 }}
               >
                 <span className="mono">{f.name}</span>
-                <span className="meta">{f.params.join(', ')}</span>
+                <span className="meta">{f.params.filter((p) => p !== 'none').map(paramLabel).join(', ')}</span>
               </li>
             ))}
           </ul>
@@ -107,7 +142,7 @@ export function ConditionRow({ item, fns, onChange, onRemove }: { item: Item; fn
           />
         </div>
         {info?.params.map((p, i) => (
-          <div key={i} style={{ minWidth: 120, flex: 1 }} title={p}>
+          <div key={i} style={{ minWidth: 120, flex: 1 }} title={`Parameter ${i + 1}: ${paramLabel(p)}`}>
             <ParamEditor type={p} value={i === 0 ? c.param1 : c.param2} onChange={(v) => set(i === 0 ? { param1: v } : { param2: v })} />
           </div>
         ))}

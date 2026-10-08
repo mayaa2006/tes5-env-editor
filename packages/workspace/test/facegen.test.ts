@@ -138,8 +138,11 @@ describe('FaceGen', () => {
     // The tint is the skin-tone layer's colour everywhere (its mask is solid).
     const dds = parseDds(await ws.vfs.read(res!.tint));
     expect([dds.width, dds.height]).toEqual([512, 512]);
+    // Compressed like the CK's tints: BC3 with mipmaps down to 2×2.
+    expect(dds.format).toBe('bc3');
+    expect(dds.mipmaps.length).toBe(9);
     const px = decodeToRgba(dds.mipmaps[0]!, dds.format)!;
-    expect(Array.from(px.slice(0, 4))).toEqual([230, 190, 160, 255]);
+    [230, 190, 160, 255].forEach((v, i) => expect(Math.abs(px[i]! - v)).toBeLessThanOrEqual(1));
 
     expect(await faces.needingFaces()).toEqual([]);
     // Undo removes the generated files.
@@ -178,6 +181,42 @@ describe('FaceGen', () => {
     // Editing other sliders keeps the marker in the record.
     npcs.setAppearance(guard, { morphs: { ...npcs.appearance(guard).morphs, noseUpDown: 0.5 } });
     expect((ws.view(guard)!.data as any).faceMorph.vampireMorph).toBeGreaterThan(1e38);
+  });
+
+  it('lists every character with the state of its face files, skips template looks, and re-exports on request', async () => {
+    const { ws, faces, npcs } = await setup();
+    expect(await faces.faceFiles()).toEqual([]);
+    const smith = ws.byEditorId('DemoBlacksmith')!;
+    const guard = ws.byEditorId('DemoGuard')!;
+    await faces.setLook(smith, { morphs: { ...npcs.appearance(smith).morphs, noseLongShort: -0.5 } });
+    // The guard takes its looks from the smith: the game builds that face from the template, so it needs no files.
+    const g = ws.view(guard)!.data as Record<string, any>;
+    ws.updateRecord(guard, { ...g, template: smith, config: { ...g.config, templateFlags: 1 } });
+    npcs.setAppearance(guard, { morphs: { ...npcs.appearance(guard).morphs, noseLongShort: 0.5 } });
+    expect(npcs.looksTemplate(guard)).toBe(smith);
+
+    let list = await faces.faceFiles();
+    expect(list.map((f) => [f.editorId, f.status, f.edited])).toEqual([
+      ['DemoBlacksmith', 'missing', true],
+      ['DemoGuard', 'template', false],
+    ]);
+    expect(list[1]!.template).toBe(smith);
+    expect(await faces.needingFaces()).toEqual([smith]);
+    expect(npcs.faceGenProblems().map((p) => p.npc)).not.toContain(guard);
+
+    await faces.generate();
+    list = await faces.faceFiles();
+    expect(list[0]!.status).toBe('ok');
+    // Changing the look makes the files out of date again.
+    await faces.setLook(smith, { morphs: { ...npcs.appearance(smith).morphs, noseLongShort: 0.25 } });
+    expect((await faces.faceFiles())[0]!.status).toBe('outdated');
+    // Exporting a chosen character always rewrites its files (like the CK's Ctrl+F4), as one undo step.
+    const out = await faces.generate([smith]);
+    expect(out.map((o) => o.npc)).toEqual([smith]);
+    expect((await faces.faceFiles())[0]!.status).toBe('ok');
+    ws.undo();
+    await ws.filesSettled();
+    expect((await faces.faceFiles())[0]!.status).toBe('outdated');
   });
 
   it('explains when there is no head to bake', async () => {

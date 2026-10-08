@@ -190,11 +190,12 @@ export default function SceneView() {
   useEffect(() => {
     vpRef.current?.setOptions({
       showMarkers: settings.showMarkers,
+      showMarkerShapes: settings.showMarkerShapes ?? false,
       cellLighting,
       ambient: lighting?.ambient ? [lighting.ambient.r, lighting.ambient.g, lighting.ambient.b] : null,
       snap: { move: settings.snapMove, rotateDeg: settings.snapRotateDeg, scale: settings.snapScale },
     });
-  }, [settings.showMarkers, settings.snapMove, settings.snapRotateDeg, settings.snapScale, cellLighting, lighting]);
+  }, [settings.showMarkers, settings.showMarkerShapes, settings.snapMove, settings.snapRotateDeg, settings.snapScale, cellLighting, lighting]);
   useEffect(() => {
     if (navEdit) vpRef.current?.setNavEdit(null);
     setNavEdit(null);
@@ -230,14 +231,14 @@ export default function SceneView() {
   const toolBtn = (t: Tool, icon: string, label: string, key: string) => (
     <button className={`btn small ${tool === t ? 'active' : 'ghost'}`} title={`${label} tool: drag the handles in the view. Or press ${key} for a quick ${label.toLowerCase()} without switching tools.`} onClick={() => setTool(t)} aria-pressed={tool === t}>
       <Icon name={icon} size={13} />
-      <span className="hide-narrow">{label}</span>
+      <span className="hide-narrow tb-label">{label}</span>
     </button>
   );
   const openDock = (d: 'outliner' | 'tools') => setDock(dock === d ? null : d);
   const loadingCell = !refs;
 
   return (
-    <div className="col" style={{ flex: 1, minHeight: 0 }}>
+    <div className="col scene-main" style={{ flex: 1, minHeight: 0 }}>
       <div className="viewport-toolbar">
         <strong className="ellipsis" style={{ maxWidth: 180 }} title={`${info?.editorId ?? cell}${info?.name ? ` “${info.name}”` : ''} · ${cell}`}>
           {info?.editorId ?? cell}
@@ -269,7 +270,7 @@ export default function SceneView() {
         {toolBtn('scale', 'frame', 'Scale', 'S')}
         <span className="sep" />
         <button className={`btn small ${snap ? 'active' : 'ghost'}`} aria-pressed={snap} title={`Grid snapping is ${snap ? 'on' : 'off'}: moves in steps of ${settings.snapMove} units, turns in ${settings.snapRotateDeg}° steps. Hold Ctrl while transforming to flip it. Step sizes: View → Snapping settings.`} onClick={() => setSnap(!snap)}>
-          <Icon name="magnet" size={13} /> Grid
+          <Icon name="magnet" size={13} /> <span className="tb-label">Grid</span>
         </button>
         <button
           className={`btn small ${settings.kitSnap ? 'active' : 'ghost'}`}
@@ -278,10 +279,10 @@ export default function SceneView() {
           onClick={() => useStore.getState().updateSettings({ kitSnap: !settings.kitSnap })}
           data-testid="kit-snap"
         >
-          <Icon name="grid" size={13} /> Kit
+          <Icon name="grid" size={13} /> <span className="tb-label">Kit</span>
         </button>
         <span className="sep" />
-        <Menu label={<><Icon name="eye" size={13} /> View</>} title="Camera angles and what's shown" testId="view-menu">
+        <Menu label={<><Icon name="eye" size={13} /> <span className="tb-label">View</span></>} title="Camera angles and what's shown" testId="view-menu">
           {(close) => (
             <>
               <div className="menu-label">Camera</div>
@@ -307,6 +308,14 @@ export default function SceneView() {
               <div className="menu-label">Show</div>
               <MenuItem checked={settings.showMarkers} onClick={() => useStore.getState().updateSettings({ showMarkers: !settings.showMarkers })}>
                 Editor markers
+              </MenuItem>
+              <MenuItem
+                checked={settings.showMarkerShapes ?? false}
+                disabled={!settings.showMarkers}
+                title="The outlines some furniture, perches and props carry for the editor (where to lean, sit or land). The game never shows them."
+                onClick={() => useStore.getState().updateSettings({ showMarkerShapes: !(settings.showMarkerShapes ?? false) })}
+              >
+                Marker shapes on furniture
               </MenuItem>
               <MenuItem checked={cellLighting} onClick={() => setCellLighting(!cellLighting)} title="Preview the cell's own ambient light and light sources">
                 Cell lighting preview
@@ -336,7 +345,7 @@ export default function SceneView() {
             </>
           )}
         </Menu>
-        <Menu label={<><Icon name="navmesh" size={13} /> Navmesh</>} title="Generate or edit this cell's navmesh" active={!!navEdit} testId="navmesh-menu">
+        <Menu label={<><Icon name="navmesh" size={13} /> <span className="tb-label">Navmesh</span></>} title="Generate or edit this cell's navmesh" active={!!navEdit} testId="navmesh-menu">
           {(close) => (
             <>
               <MenuItem onClick={() => (setGenerate(true), close())}>Generate navmesh…</MenuItem>
@@ -356,11 +365,11 @@ export default function SceneView() {
         )}
         <span className="spacer" />
         <button className={`btn small ${dock === 'tools' ? 'active' : 'ghost'}`} title="World tools: paint plants and clutter, lay paths, light candles, dress rooms, build rooms, link doors" onClick={() => openDock('tools')} aria-pressed={dock === 'tools'} data-testid="env-tools-toggle">
-          <Icon name="wand" size={13} /> Tools
+          <Icon name="wand" size={13} /> <span className="tb-label">Tools</span>
         </button>
         <button className={`btn small ${dock === 'outliner' ? 'active' : 'ghost'}`} title="Outliner: everything placed in this cell" onClick={() => openDock('outliner')} aria-pressed={dock === 'outliner'} data-testid="outliner-toggle">
           <Icon name="records" size={13} />
-          <span className="hide-narrow">Outliner</span>
+          <span className="hide-narrow tb-label">Outliner</span>
         </button>
       </div>
       <div className="row" style={{ flex: 1, minHeight: 0, alignItems: 'stretch', gap: 0 }}>

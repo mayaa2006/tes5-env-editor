@@ -55,6 +55,57 @@ export async function detectInstall(fs: FileSystem, path: string): Promise<GameI
   return undefined;
 }
 
+/** Folder names Steam and GOG install Skyrim under. */
+const GAME_FOLDERS = ['Skyrim Special Edition', 'Skyrim Anniversary Edition', 'Skyrim', 'SkyrimVR', 'The Elder Scrolls V Skyrim Special Edition'];
+
+/** Library folders listed in Steam's libraryfolders.vdf ("path" entries, or the old numbered form). */
+export function parseSteamLibraries(vdf: string): string[] {
+  const out: string[] = [];
+  for (const m of vdf.matchAll(/"(?:path|\d+)"\s+"([^"]+)"/g)) {
+    const p = m[1]!.replace(/\\\\/g, '\\');
+    if (/[\\/]/.test(p)) out.push(p);
+  }
+  return out;
+}
+
+/**
+ * Look for Skyrim installs in the usual places: every Steam library
+ * (from Steam's own list), GOG's folders, and common install paths.
+ * Returns each install once, Special Edition first.
+ */
+export async function findInstalls(fs: FileSystem, env: Record<string, string | undefined> = {}): Promise<GameInstall[]> {
+  const pf86 = env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)';
+  const pf = env.ProgramFiles ?? 'C:\\Program Files';
+  const home = env.HOME ?? env.USERPROFILE;
+  const steamRoots = [joinPath(pf86, 'Steam'), joinPath(pf, 'Steam'), ...(home ? [joinPath(home, '.steam', 'steam'), joinPath(home, '.local', 'share', 'Steam')] : [])];
+  const libraries = new Set<string>();
+  for (const root of steamRoots) {
+    if (!(await fs.exists(root).catch(() => false))) continue;
+    libraries.add(root);
+    for (const vdf of [joinPath(root, 'steamapps', 'libraryfolders.vdf'), joinPath(root, 'config', 'libraryfolders.vdf')]) {
+      try {
+        for (const lib of parseSteamLibraries(new TextDecoder().decode(await fs.readFile(vdf)))) libraries.add(lib);
+      } catch {
+        // no list here
+      }
+    }
+  }
+  for (const drive of ['C:', 'D:', 'E:', 'F:']) libraries.add(`${drive}\\SteamLibrary`);
+  const candidates: string[] = [];
+  for (const lib of libraries) for (const g of GAME_FOLDERS) candidates.push(joinPath(lib, 'steamapps', 'common', g));
+  for (const base of ['C:\\GOG Games', joinPath(pf86, 'GOG Galaxy', 'Games'), joinPath(pf86, 'GOG Games')]) for (const g of GAME_FOLDERS) candidates.push(joinPath(base, g));
+  const found: GameInstall[] = [];
+  const seen = new Set<string>();
+  for (const dir of candidates) {
+    if (seen.has(dir.toLowerCase())) continue;
+    seen.add(dir.toLowerCase());
+    if (!(await fs.exists(dir).catch(() => false))) continue;
+    const install = await detectInstall(fs, dir).catch(() => undefined);
+    if (install && !found.some((f) => f.dataDir.toLowerCase() === install.dataDir.toLowerCase())) found.push(install);
+  }
+  return found.sort((a, b) => (a.game === b.game ? 0 : a.game === 'SkyrimSE' ? -1 : 1));
+}
+
 // ------------------------------------------------------------------ load order
 
 export interface LoadOrderEntry {

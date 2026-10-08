@@ -76,6 +76,8 @@ export interface WorkspaceOptions {
   backups?: number;
 }
 
+const PLACED_SIGS = new Set(['REFR', 'ACHR', 'PGRE', 'PMIS', 'PHZD', 'PARW', 'PBAR', 'PBEA', 'PCON', 'PFLA']);
+
 export interface RecordSummary {
   formKey: FormKey;
   sig: string;
@@ -88,6 +90,8 @@ export interface RecordSummary {
   /** True if the active plugin contains (overrides or defines) it. */
   inActive: boolean;
   deleted: boolean;
+  /** For placed objects (references): the name or EditorID of what's placed. */
+  base?: string;
 }
 
 export interface RecordView extends RecordSummary {
@@ -671,6 +675,16 @@ export class Workspace {
     return e.name ?? undefined;
   }
 
+  /** "Barrel" for a reference that places a barrel (its base's name, else EditorID). */
+  private placedBaseLabel(e: WinnerEntry): string | undefined {
+    if (!PLACED_SIGS.has(e.record.sig)) return undefined;
+    const sub = e.record.get('NAME');
+    if (!sub || sub.data.byteLength < 4) return undefined;
+    const key = this.keyOf(e.slot, new DataView(sub.data.buffer, sub.data.byteOffset, 4).getUint32(0, true));
+    const b = key ? this.getBaseIndex().byKey.get(key) : undefined;
+    return b ? (this.nameOf(b) ?? this.edidOf(b)) : undefined;
+  }
+
   /** Search winning records by EditorID / name / FormID text. */
   search(opts: { sigs?: readonly string[]; query?: string; plugin?: string; limit?: number; offset?: number } = {}): { total: number; items: RecordSummary[] } {
     const q = opts.query?.trim().toLowerCase() ?? '';
@@ -697,6 +711,7 @@ export class Workspace {
       winner: e.slot.name,
       inActive: e.slot.name === this.activeName,
       deleted: e.record.isDeleted,
+      base: this.placedBaseLabel(e),
     }));
     return { total: matches.length, items };
   }

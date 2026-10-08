@@ -5,7 +5,7 @@
  * aliases), the conversations (through the screenplay importer) and the
  * rewards. It's one undo step; if anything fails, nothing is left behind.
  */
-import { FACE_MORPHS, QuestFlag, parseFormKey, type FormKey } from '@tes5/esp';
+import { FACE_MORPHS, QuestFlag, RecordFlags, parseFormKey, type FormKey } from '@tes5/esp';
 import { joinPath } from './fs';
 import { WorkspaceError, type Workspace } from './engine';
 import { CharacterEditor } from './characteredit';
@@ -17,7 +17,7 @@ import type { NewQuestEdge, QuestGraphService } from './questgraph';
 import { lintQuestDialogue } from './dialoguelint';
 import { Placer } from './placement';
 import { createPackage, stageConditions, type PackageSpec } from './routines';
-import { validatePlan, type PlanCharacter, type PlanItem, type PlanLocation, type PlanStep, type QuestPlan } from './questplan';
+import { normalizePlan, validatePlan, type PlanCharacter, type PlanEvent, type PlanItem, type PlanLocation, type PlanStep, type QuestPlan } from './questplan';
 import { WorldService } from './world';
 
 const ESSENTIAL = 0x2;
@@ -158,6 +158,7 @@ export function describeDiff(old: QuestPlan, next: QuestPlan, fromRecord: boolea
   for (const c of old.conversations) if (!next.conversations.some((x) => x.title === c.title)) out.push(fromRecord ? `Remove the conversation “${c.title}”` : `“${c.title}” is kept (it wasn't made from a plan)`);
   if (!same(old.rewards, next.rewards)) out.push('Update the rewards');
   if (!same(old.animations, next.animations)) out.push('Update the animations at quest stages');
+  if (!same(old.events ?? [], next.events ?? [])) out.push('Update the events at quest stages');
   return out.length ? out : ['Nothing needs changing'];
 }
 
@@ -313,6 +314,7 @@ export class QuestBuilder {
   }
 
   private session(plan: QuestPlan, resolution: PlanResolution[], seed: number, record?: BuildRecord): BuildSession {
+    normalizePlan(plan);
     const random = rng(seed);
     return {
       plan,
@@ -374,6 +376,7 @@ export class QuestBuilder {
     await this.buildRoutines(s, plan.characters);
     await this.buildStageLines(s, 'gesture');
     await this.buildStageLines(s, 'reward');
+    await this.buildStageLines(s, 'event');
     this.finishNotes(report);
     if (!plan.startsWithGame) report.notes.push('The quest doesn’t start with the game; start it from another quest or a trigger (Start Quest).');
     await this.finishChecks(s, quest);
@@ -623,9 +626,32 @@ export class QuestBuilder {
     for (const line of lines) s.stageLines.push({ stage, line: line.trim(), why });
   }
 
-  /** Gestures at quest events, or rewards: lines in stage scripts. */
-  private async buildStageLines(s: BuildSession, why: 'gesture' | 'reward'): Promise<void> {
+  /** Gestures at quest events, rewards, or world events: lines in stage scripts. */
+  private async buildStageLines(s: BuildSession, why: 'gesture' | 'reward' | 'event'): Promise<void> {
     const quest = s.quest!;
+    if (why === 'event') {
+      const byStage = new Map<number, PlanEvent[]>();
+      for (const e of s.plan.events) byStage.set(e.atStage, [...(byStage.get(e.atStage) ?? []), e]);
+      for (const [stage, events] of byStage) {
+        // A fade goes to black first, everything else happens in the dark, then it fades back.
+        const before: string[] = [];
+        const lines: string[] = [];
+        const after: string[] = [];
+        for (const e of events) {
+          if (e.kind === 'fade') {
+            const secs = Math.max(0, Math.min(30, e.count ?? 2));
+            if (!before.length) before.push('Game.FadeOutGame(True, True, 0.0, 1.0)', `Utility.Wait(${(1 + secs).toFixed(1)})`);
+            if (!after.length) after.push('Game.FadeOutGame(False, True, 0.0, 1.0)');
+            continue;
+          }
+          const made = this.eventLines(s, e);
+          if (made) lines.push(...made);
+        }
+        await this.addStageLines(s, stage, [...before, ...lines, ...after], why);
+      }
+      this.hideUntilShown(s);
+      return;
+    }
     if (why === 'gesture') {
       for (const a of s.plan.animations) {
         const before = await this.stageCode(quest);
@@ -642,6 +668,134 @@ export class QuestBuilder {
       byStage.set(r.atStage, lines);
     }
     for (const [stage, lines] of byStage) await this.addStageLines(s, stage, lines, why);
+  }
+
+  /**
+   * A reference to a plan key (character, item, place) or something already in
+   * the world, as a quest alias expression; null when it can't be found.
+   */
+  private refExpr(s: BuildSession, key: string | null, wantActor: boolean): { expr: string; target: FormKey } | null {
+    const quest = s.quest!;
+    if (!key?.trim()) return null;
+    let alias = this.aliasOf(s, key);
+    let target: FormKey | undefined = s.npcs.get(key) ?? s.placedItems.get(key) ?? s.cells.get(key);
+    if (alias === undefined) {
+      target = this.findForm(['ACHR', 'REFR', 'NPC_', 'CELL'], key);
+      if (!target) return null;
+      alias = this.ws.summary(target)?.sig === 'CELL' ? this.graphs.aliasFor(quest, this.graphs.markerIn(quest, target)) : this.graphs.aliasFor(quest, target);
+    }
+    const sig = target ? this.ws.summary(target)?.sig : undefined;
+    const isActor = sig === 'NPC_' || sig === 'ACHR';
+    if (wantActor && !isActor) return null;
+    const name = this.quests.quest(quest).aliases.find((a) => a.id === alias)!.name;
+    return { expr: `Alias_${name}.${isActor ? 'GetActorReference' : 'GetReference'}()`, target: target! };
+  }
+
+  /** A form by Editor ID or name, or failing that the closest match (leveled characters first, for enemies). */
+  private findLoose(sigs: readonly string[], text: string | null): FormKey | undefined {
+    const exact = this.findForm(sigs, text);
+    if (exact || !text?.trim()) return exact;
+    const words = text.trim().toLowerCase().replace(/s$/, '').split(/\s+/);
+    const hits = this.ws
+      .search({ sigs, query: words[0], limit: 2000 })
+      .items.filter((i) => !i.deleted && words.every((w) => `${i.editorId ?? ''} ${i.name ?? ''}`.toLowerCase().includes(w)));
+    const score = (i: (typeof hits)[number]) => (/^lvl/i.test(i.editorId ?? '') ? 0 : 1000) + (i.editorId?.length ?? 999);
+    return hits.sort((a, b) => score(a) - score(b))[0]?.formKey;
+  }
+
+  /** The stage-script lines for one world event (null, with a warning, when it can't be made). */
+  private eventLines(s: BuildSession, e: PlanEvent): string[] | null {
+    const what = `“${e.note || e.kind}” (stage ${e.atStage})`;
+    const skip = (why: string) => (s.report.warnings.push(`${what} was left out: ${why}.`), null);
+    const actor = () => this.refExpr(s, e.targetKey, true);
+    const thing = () => this.refExpr(s, e.targetKey, false);
+    const quoted = (t: string) => `"${t.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\r?\n/g, ' ')}"`;
+    switch (e.kind) {
+      case 'spawn': {
+        const enemy = this.findLoose(['NPC_'], e.what);
+        if (!enemy) return skip(`no character like “${e.what}” in the load order`);
+        const at = e.targetKey ? thing() : null;
+        if (e.targetKey && !at) return skip(`can't find “${e.targetKey}” to spawn them at`);
+        const n = Math.max(1, Math.min(10, e.count ?? 1));
+        s.report.notes.push(`${what}: ${n} × ${this.label(enemy)} appear ${at ? `at ${e.targetKey}` : 'near the player'}.`);
+        return Array.from({ length: n }, () => `${at?.expr ?? 'Game.GetPlayer()'}.PlaceActorAtMe(${formExpression(enemy)} as ActorBase)`);
+      }
+      case 'hostile':
+      case 'friendly':
+      case 'kill': {
+        const a = actor();
+        if (!a) return skip(`“${e.targetKey}” isn't a character in the plan or the world`);
+        if (e.kind === 'kill') return [`${a.expr}.Kill()`];
+        if (e.kind === 'hostile') return [`${a.expr}.SetRelationshipRank(Game.GetPlayer(), -4)`, `${a.expr}.SetActorValue("Aggression", 1)`, `${a.expr}.StartCombat(Game.GetPlayer())`];
+        return [`${a.expr}.StopCombat()`, `${a.expr}.SetActorValue("Aggression", 0)`, `${a.expr}.SetRelationshipRank(Game.GetPlayer(), 0)`, 'Game.GetPlayer().StopCombatAlarm()'];
+      }
+      case 'unlock':
+      case 'lock':
+      case 'show':
+      case 'hide': {
+        const r = thing();
+        if (!r) return skip(`can't find “${e.targetKey}”`);
+        return [`${r.expr}.${{ unlock: 'Lock(False)', lock: 'Lock(True)', show: 'Enable()', hide: 'Disable()' }[e.kind]}`];
+      }
+      case 'moveTo':
+      case 'movePlayer': {
+        const dest = this.refExpr(s, e.toKey, false);
+        if (!dest) return skip(`can't find “${e.toKey}” to go to`);
+        if (e.kind === 'movePlayer') return [`Game.GetPlayer().MoveTo(${dest.expr})`];
+        const a = actor();
+        if (!a) return skip(`“${e.targetKey}” isn't a character in the plan or the world`);
+        return [`${a.expr}.MoveTo(${dest.expr})`];
+      }
+      case 'sound': {
+        const snd = this.findLoose(['SNDR'], e.what);
+        if (!snd) return skip(`no sound like “${e.what}” in the load order`);
+        const at = e.targetKey ? thing() : null;
+        return [`(${formExpression(snd)} as Sound).Play(${at?.expr ?? 'Game.GetPlayer()'})`];
+      }
+      case 'weather': {
+        if (/^(clear|normal|reset|default|none)$/i.test(e.what?.trim() ?? '')) return ['Weather.ReleaseOverride()'];
+        const w = this.findLoose(['WTHR'], e.what);
+        if (!w) return skip(`no weather like “${e.what}” in the load order`);
+        return [`(${formExpression(w)} as Weather).ForceActive(True)`];
+      }
+      case 'message':
+        return [`Debug.Notification(${quoted(e.what ?? '')})`];
+      case 'startQuest': {
+        const q = this.findForm(['QUST'], e.what);
+        if (!q) return skip(`no quest called “${e.what}”`);
+        return [`(${formExpression(q)} as Quest).Start()`];
+      }
+      case 'fade':
+        return null;
+    }
+  }
+
+  /** Things a plan first shows (rather than hides) start out hidden, so showing them means something. */
+  private hideUntilShown(s: BuildSession): void {
+    const firstByTarget = new Map<string, PlanEvent>();
+    for (const e of [...s.plan.events].sort((a, b) => a.atStage - b.atStage))
+      if ((e.kind === 'show' || e.kind === 'hide') && e.targetKey && !firstByTarget.has(e.targetKey)) firstByTarget.set(e.targetKey, e);
+    for (const [key, e] of firstByTarget) {
+      if (e.kind !== 'show') continue;
+      const ref = this.placedRefOf(s, key);
+      if (!ref) {
+        s.report.notes.push(`${key} is shown at stage ${e.atStage}; make sure it starts hidden (Initially Disabled) so it can appear.`);
+        continue;
+      }
+      if (this.ws.summary(ref) && !(this.ws.view(ref)!.flags & RecordFlags.InitiallyDisabled)) {
+        this.ws.setFlags(ref, RecordFlags.InitiallyDisabled);
+        s.report.notes.push(`${this.label(ref)} starts hidden and appears at stage ${e.atStage}.`);
+      }
+    }
+  }
+
+  /** The placed reference behind a plan key or Editor ID (the character's placed copy for characters). */
+  private placedRefOf(s: BuildSession, key: string): FormKey | undefined {
+    if (s.placedItems.has(key)) return s.placedItems.get(key);
+    const base = s.npcs.get(key) ?? this.findForm(['NPC_'], key);
+    if (base) return this.ws.search({ sigs: ['ACHR'], limit: 100_000 }).items.find((r) => (this.ws.view(r.formKey)?.data as any)?.base === base)?.formKey;
+    const ref = this.findForm(['REFR', 'ACHR'], key);
+    return ref && parseFormKey(ref).plugin === this.ws.activeName ? ref : undefined;
   }
 
   /** What moves the quest on: one step. */
@@ -811,7 +965,7 @@ export class QuestBuilder {
    */
   async planFor(quest: FormKey): Promise<{ plan: QuestPlan; fromRecord: boolean }> {
     const r = await this.record(quest);
-    if (r) return { plan: structuredClone(r.plan), fromRecord: true };
+    if (r) return { plan: normalizePlan(structuredClone(r.plan)), fromRecord: true };
     return { plan: await this.planFromQuest(quest), fromRecord: false };
   }
 
@@ -867,6 +1021,7 @@ export class QuestBuilder {
       conversations: screenplay ? [{ title: 'Existing dialogue', screenplay }] : [],
       rewards: [],
       animations: [],
+      events: [],
       assumptions: [],
       questions: [],
     };
@@ -1046,14 +1201,13 @@ export class QuestBuilder {
       await this.buildStep(s, st);
       if (st.kind !== 'talk') say(`Added “${st.note}”`);
     }
-    // Stage-script lines: gestures and rewards.
-    for (const why of ['gesture', 'reward'] as const) {
-      const before = why === 'gesture' ? JSON.stringify(old.animations) : JSON.stringify(old.rewards);
-      const after = why === 'gesture' ? JSON.stringify(next.animations) : JSON.stringify(next.rewards);
-      if (before === after) continue;
+    // Stage-script lines: gestures, rewards and world events.
+    const listOf = (p: QuestPlan, why: 'gesture' | 'reward' | 'event') => JSON.stringify(why === 'gesture' ? p.animations : why === 'reward' ? p.rewards : (p.events ?? []));
+    for (const why of ['gesture', 'reward', 'event'] as const) {
+      if (listOf(old, why) === listOf(next, why)) continue;
       await this.removeStageLines(s, why);
       await this.buildStageLines(s, why);
-      say(why === 'gesture' ? 'Updated the animations at quest stages' : 'Updated the rewards');
+      say({ gesture: 'Updated the animations at quest stages', reward: 'Updated the rewards', event: 'Updated the events at quest stages' }[why]);
     }
     if (!s.report.updated.length) say('Nothing needed changing');
   }

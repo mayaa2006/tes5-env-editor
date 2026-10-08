@@ -3,8 +3,8 @@
  * finds what would break in game (with one-click fixes), the FaceGen and
  * light-plugin checks, a conflict report, and packing into a BSA or a ZIP.
  */
-import { useState } from 'react';
-import type { ConflictEntry, Finding, FindingSeverity, PackageFile, ReleaseReport } from '@tes5/workspace';
+import { useEffect, useState } from 'react';
+import type { ConflictEntry, FaceFileStatus, Finding, FindingSeverity, PackageFile, ReleaseReport } from '@tes5/workspace';
 import { Checkbox, Help, Icon, useQuery } from '../components/ui';
 import { engine, useStore } from '../state/store';
 
@@ -71,7 +71,7 @@ export default function ReleaseView() {
         Check your plugin for things that break in game, then pack it to share. Work top to bottom: fix the problems, look over the warnings, then pack.
       </p>
       <Check />
-      <div className="card-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: 12, marginTop: 12 }}>
+      <div className="card-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 12, marginTop: 12, alignItems: 'start' }}>
         <FaceGen />
         <Esl />
       </div>
@@ -94,15 +94,14 @@ function Check() {
     setRunning(false);
     if (r) setReport(r);
   };
-  // Run once when the tab opens.
-  useQuery(
-    async () => {
-      if (!report && client) await run();
-      return true;
-    },
-    [client],
-    { revision: false },
-  );
+  // Run when the tab opens, and again shortly after each edit so results never go stale.
+  const revision = useStore((s) => s.revision);
+  useEffect(() => {
+    if (!client) return;
+    const t = setTimeout(() => void run(), report ? 600 : 0);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, revision]);
   const fix = async (f: Finding) => {
     if (!f.fix) return;
     const n = await engine((c) => c.call('releaseFix', f.fix!), { busy: `${FIX_LABEL[f.fix.kind]}…` });
@@ -226,67 +225,116 @@ function Esl() {
   );
 }
 
+const FACE_STATUS: Record<FaceFileStatus['status'], { label: string; chip: string; tip: string }> = {
+  ok: { label: 'Up to date', chip: 'ok', tip: 'The face files match this look.' },
+  outdated: { label: 'Out of date', chip: 'warn', tip: 'The look changed after the face files were made; the game would show the old face.' },
+  missing: { label: 'No face files', chip: 'warn', tip: "There are no face files for this look yet; the game would show a dark or wrong face." },
+  template: { label: 'Uses its template', chip: '', tip: "This character takes its looks from a template, and the game builds its face from the template's. No face files are needed." },
+  noHead: { label: 'No head mesh', chip: 'err', tip: "Neither the character nor their race has a head part with a mesh, so there's no face to build. Give them a head on the Characters tab." },
+};
+
+/**
+ * Character faces: the Creation Kit's "Export FaceGen" (Ctrl+F4), as a list.
+ * Characters whose face changed come first with one button for all of them;
+ * any other character can be ticked and exported too.
+ */
 function FaceGen() {
   const client = useStore((s) => s.client);
-  const { data: needed } = useQuery(() => client?.call('facesNeeded'), [client]);
-  const { data: problems } = useQuery(() => client?.call('faceGenProblems'), [client]);
-  const stuck = (problems ?? []).filter((p) => !needed?.includes(p.npc));
-  const generate = async () => {
-    const r = await engine((c) => c.call('generateFaces'), { busy: 'Generating faces…' });
+  const { data: list } = useQuery(() => client?.call('faceFiles'), [client]);
+  const [showAll, setShowAll] = useState(false);
+  const [query, setQuery] = useState('');
+  const [ticked, setTicked] = useState<Set<string>>(new Set());
+  const needed = (list ?? []).filter((f) => f.edited && (f.status === 'missing' || f.status === 'outdated'));
+  const blocked = (list ?? []).filter((f) => f.edited && f.status === 'noHead');
+  const q = query.trim().toLowerCase();
+  const shown = (list ?? []).filter((f) => (showAll || f.edited || f.status === 'template') && (!q || `${f.name ?? ''} ${f.editorId ?? ''}`.toLowerCase().includes(q)));
+  const exportable = (f: FaceFileStatus) => f.status !== 'template' && f.status !== 'noHead';
+  const tickedList = [...ticked].filter((k) => list?.some((f) => f.npc === k && exportable(f)));
+
+  const run = async (npcs: string[] | undefined, what: string) => {
+    const r = await engine((c) => c.call('generateFaces', npcs), { busy: `${what}…` });
     if (r) {
-      useStore.getState().toast('success', `Generated ${r.length} face(s)`);
+      useStore.getState().toast('success', r.length ? `Wrote face files for ${r.length} character${r.length === 1 ? '' : 's'}` : 'Nothing to write');
       for (const w of r.flatMap((x) => x.warnings)) useStore.getState().toast('warning', w);
+      setTicked(new Set());
     }
   };
-  const total = (needed?.length ?? 0) + stuck.length;
+  const tick = (k: string, on: boolean) => setTicked((t) => {
+    const n = new Set(t);
+    if (on) n.add(k);
+    else n.delete(k);
+    return n;
+  });
+  const issues = needed.length + blocked.length;
+
   return (
     <div className="card" data-testid="release-faces">
       <div className="card-title">
         Character faces
-        <Help text="When you change a character's face, the game needs matching FaceGen files: a head mesh with the sliders baked in, and a face tint. Without them the face shows dark or wrong in game (the 'dark face bug'). They're made here, no Creation Kit needed." />
-        {needed && problems && (total ? <span className="chip warn">{total} need faces</span> : <span className="chip ok">OK</span>)}
+        <Help text="When you change a character's face, the game needs matching face files (FaceGen): a head mesh with the sliders baked in, and a face tint. Without them the face shows dark or wrong in game (the 'dark face bug'). They're made here, no Creation Kit needed, and written like the Creation Kit's own: the head mesh, and the tint compressed (BC3) with mipmaps." />
+        {list && (issues ? <span className="chip warn">{issues} need attention</span> : <span className="chip ok">OK</span>)}
       </div>
-      {needed?.length ? (
+      {!list ? (
+        <div className="dim small">Checking faces…</div>
+      ) : !list.length ? (
+        <div className="dim small">This plugin has no characters yet. Make or edit one on the Characters tab, and its face files show up here.</div>
+      ) : (
         <>
-          <div className="dim small" style={{ marginBottom: 6 }}>
-            These characters' faces changed and their face files are missing or out of date.
+          <div className="dim small" style={{ marginBottom: 8 }}>
+            {needed.length
+              ? `${needed.length} character${needed.length === 1 ? "'s face has" : "s' faces have"} changed without matching face files.`
+              : 'Every changed face has up-to-date face files.'}{' '}
+            Tick any character to write its face files again (the Creation Kit's Ctrl+F4).
           </div>
-          <ul className="list">
-            {needed.map((k) => (
-              <NpcRow key={k} npc={k} />
-            ))}
-          </ul>
-          <button className="btn primary small" style={{ marginTop: 8 }} onClick={() => void generate()} title="Bake the head mesh and face tint for each of these characters into your mod's Data folder (Undo removes them)" data-testid="generate-faces">
-            <Icon name="wand" size={12} /> Generate {needed.length} face{needed.length === 1 ? '' : 's'}
-          </button>
-        </>
-      ) : null}
-      {stuck.length ? (
-        <>
-          <div className="dim small" style={{ margin: '8px 0 6px' }}>
-            These have no head part with a mesh, so their face can't be built. Give them a head on the Characters tab.
+          <div className="row wrap" style={{ gap: 6, marginBottom: 8, alignItems: 'center' }}>
+            {needed.length > 0 && (
+              <button className="btn primary small" onClick={() => void run(needed.map((f) => f.npc), 'Generating faces')} title="Bake the head mesh and face tint for every character whose face changed, into your mod's Data folder. Undo removes them." data-testid="generate-faces">
+                <Icon name="wand" size={12} /> Generate {needed.length} face{needed.length === 1 ? '' : 's'}
+              </button>
+            )}
+            <button className="btn small" disabled={!tickedList.length} onClick={() => void run(tickedList, 'Exporting faces')} title={tickedList.length ? `Write the face files for the ${tickedList.length} ticked character(s), even if they're up to date. Undo removes them.` : 'Tick characters in the list to export their face files'} data-testid="export-faces">
+              Export ticked ({tickedList.length})
+            </button>
+            <input className="input" style={{ width: 160, padding: "2px 6px" }} placeholder="Find character…" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Find character" />
+            <Checkbox checked={showAll} onChange={setShowAll} label="All characters" help="Also list characters in this plugin whose face it doesn't change (for example ones you only gave new items or a new routine)." />
           </div>
-          <ul className="list">
-            {stuck.map((p) => (
-              <NpcRow key={p.npc} npc={p.npc} />
-            ))}
-          </ul>
+          {shown.length ? (
+            <ul className="list" style={{ maxHeight: 280, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 6 }} data-testid="face-list">
+              <li className="list-item" style={{ cursor: 'default' }}>
+                <input
+                  type="checkbox"
+                  aria-label="Tick every character in the list"
+                  title="Tick or untick every character in the list"
+                  checked={shown.filter(exportable).length > 0 && shown.filter(exportable).every((f) => ticked.has(f.npc))}
+                  onChange={(e) => setTicked(e.target.checked ? new Set([...ticked, ...shown.filter(exportable).map((f) => f.npc)]) : new Set([...ticked].filter((k) => !shown.some((f) => f.npc === k))))}
+                />
+                <span className="dim small">Character</span>
+                <span className="meta">Face files</span>
+              </li>
+              {shown.map((f) => {
+                const st = FACE_STATUS[f.status];
+                return (
+                  <li key={f.npc} className="list-item" data-testid="face-row">
+                    <input type="checkbox" disabled={!exportable(f)} checked={ticked.has(f.npc)} onChange={(e) => tick(f.npc, e.target.checked)} aria-label={`Export ${f.name ?? f.editorId}`} title={exportable(f) ? 'Tick to export this face' : st.tip} />
+                    <span className="name" style={{ cursor: 'pointer' }} title="Open in the character creator" onClick={() => (useStore.getState().setNpc(f.npc), useStore.getState().setTab('npc'))}>
+                      {f.name ?? f.editorId ?? f.npc}
+                    </span>
+                    {f.name && <span className="faint small">{f.editorId}</span>}
+                    <span className="meta">
+                      <span className={`chip ${st.chip}`} title={`${st.tip}${f.status === 'ok' || f.status === 'outdated' ? `\n${f.mesh}\n${f.tint}` : ''}`}>
+                        {st.label}
+                      </span>
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <div className="dim small">{q ? `No character matches "${query}".` : 'No faces changed in this plugin. Tick All characters to export any of them.'}</div>
+          )}
         </>
-      ) : null}
-      {needed && problems && !total && <div className="dim small">Every edited face has up-to-date face files.</div>}
+      )}
     </div>
-  );
-}
-
-function NpcRow({ npc }: { npc: string }) {
-  const client = useStore((s) => s.client);
-  const { data: all } = useQuery(() => client?.call('summaries', [npc]), [npc]);
-  const data = all?.[npc];
-  return (
-    <li className="list-item" onClick={() => (useStore.getState().setNpc(npc), useStore.getState().setTab('npc'))} title="Open in the character creator">
-      <span className="name">{data?.name ?? data?.editorId ?? npc}</span>
-      <span className="meta">{data?.editorId}</span>
-    </li>
   );
 }
 

@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FACE_MORPHS, type FormKey } from '@tes5/esp';
 import { CONTROL_HELP, REGION_CONTROLS_FOR, REGION_LABELS, emptySculpt, faceLookFor, type FaceRegion, type FaceSculpt, type HeadPartInfo, type NpcAppearance, type RegionControl } from '@tes5/workspace';
-import { Checkbox, Field, FormPicker, Help, Icon, Modal, Select, Slider, Tabs, TextInput, useDebounced, useQuery, DragNumber, useUniqueEditorId } from '../../components/ui';
+import { Checkbox, EmptyState, Field, FormPicker, Help, Icon, Modal, Select, Slider, Tabs, TextInput, useDebounced, useQuery, DragNumber, useUniqueEditorId } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 import { HeadPreview, type PreviewPart } from './headPreview';
 
@@ -39,7 +39,22 @@ export default function NpcCreator() {
   return (
     <div className="row" style={{ flex: 1, minHeight: 0, alignItems: 'stretch', gap: 0 }}>
       <NpcList />
-      {npc ? <Creator key={npc} npc={npc} /> : <div className="empty grow">Choose a character on the left, or create a new one.</div>}
+      {npc ? (
+        <Creator key={npc} npc={npc} />
+      ) : (
+        <EmptyState
+          icon="npc"
+          title="Pick a character to edit"
+          testId="npc-empty"
+          actions={
+            <button className="btn primary" onClick={() => useStore.getState().requestNew('npc')} title="Make a new character: pick a race and sex, then shape the face and choose what they wear">
+              <Icon name="plus" /> New character
+            </button>
+          }
+        >
+          Choose someone in the list on the left to change their looks, outfit, items and routine, or make a new character from scratch.
+        </EmptyState>
+      )}
     </div>
   );
 }
@@ -51,7 +66,13 @@ function NpcList() {
   const [q, setQ] = useState('');
   const dq = useDebounced(q);
   const [creating, setCreating] = useState(false);
-  const { data } = useQuery(() => client?.call('search', { sigs: ['NPC_'], query: dq, limit: 400 }), [dq]);
+  const newRequest = useStore((s) => s.newRequest);
+  useEffect(() => {
+    if (newRequest && useStore.getState().takeNew('npc')) setCreating(true);
+  }, [newRequest]);
+  const [mine, setMine] = useState(false);
+  const activePlugin = useStore((s) => s.session.activePlugin);
+  const { data } = useQuery(() => client?.call('search', { sigs: ['NPC_'], query: dq, limit: 400, plugin: mine ? activePlugin : undefined }), [dq, mine, activePlugin]);
   return (
     <div className="panel" style={{ width: 230, flex: 'none', borderRight: '1px solid var(--border)', background: 'var(--panel)' }}>
       <div className="panel-header">
@@ -62,6 +83,11 @@ function NpcList() {
       </div>
       <div className="searchbox">
         <input className="input" placeholder="Find character…" value={q} onChange={(e) => setQ(e.target.value)} />
+        {activePlugin && (
+          <div style={{ marginTop: 4 }}>
+            <Checkbox checked={mine} onChange={setMine} label={`Only ones in ${activePlugin}`} help="Show only the characters your plugin adds or changes." />
+          </div>
+        )}
       </div>
       <ul className="list scroll" style={{ flex: 1 }} data-testid="npc-list">
         {data?.items.map((i) => (
@@ -71,6 +97,8 @@ function NpcList() {
             <span className="meta">{i.name ? i.editorId : ''}</span>
           </li>
         ))}
+        {data && data.total > data.items.length && <li className="list-item dim small" style={{ cursor: 'default' }}>Showing {data.items.length} of {data.total}. Type a name to find the rest.</li>}
+        {data && !data.items.length && <li className="dim small" style={{ padding: '8px 10px', whiteSpace: 'normal' }}>{mine ? 'Your plugin has no characters yet. Click New to make one, or untick the box to see everyone.' : 'No character matches.'}</li>}
       </ul>
       {creating && <NewNpcDialog onClose={() => setCreating(false)} />}
     </div>
@@ -140,6 +168,9 @@ function Creator({ npc }: { npc: FormKey }) {
   const [sculpt, setSculpt] = useState<FaceSculpt>(emptySculpt());
   const [shapeInfo, setShapeInfo] = useState<{ regions: string[]; extraMorphs: string[] }>({ regions: [], extraMorphs: [] });
   const [tab, setTab] = useState<Tab>('head');
+  // Async loads finish later: they frame the camera for the page showing then, not the one when they started.
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
   const previewEl = useRef<HTMLDivElement>(null);
   const preview = useRef<HeadPreview | null>(null);
   const [missing, setMissing] = useState<string[]>([]);
@@ -170,6 +201,7 @@ function Creator({ npc }: { npc: FormKey }) {
     const p = new HeadPreview(previewEl.current, client);
     p.onShaper = setShapeInfo;
     preview.current = p;
+    (window as unknown as { __headPreview?: HeadPreview }).__headPreview = p;
     return () => {
       p.dispose();
       preview.current = null;
@@ -180,9 +212,16 @@ function Creator({ npc }: { npc: FormKey }) {
     if (!p) return;
     void p.setParts(previewParts).then((r) => {
       setMissing(r.missing);
-      p.frame();
+      p.view(tabRef.current === 'body' ? 'body' : 'head');
     });
   }, [previewParts]);
+  // The body and what they wear by default, so the Body page shows the whole character.
+  const { data: actor } = useQuery(() => client?.call('actorModel', npc), [npc]);
+  const bodyModels = (actor?.parts ?? []).filter((p) => p.kind !== 'head').map((p) => p.model);
+  useEffect(() => {
+    void preview.current?.setBody(bodyModels, a?.weight ?? 50).then(() => preview.current?.view(tabRef.current === 'body' ? 'body' : 'head'));
+  }, [bodyModels.join('|'), a?.weight]);
+  useEffect(() => preview.current?.view(tab === 'body' ? 'body' : 'head'), [tab]);
   const lookKey = a ? JSON.stringify([a.morphs, a.weight, a.faceParts, sculpt, race]) : '';
   useEffect(() => {
     // The same look the face files are baked from: race shape, weight, presets, vampire morph, sliders and sculpt.
@@ -223,10 +262,28 @@ function Creator({ npc }: { npc: FormKey }) {
               </button>
             </div>
           )}
-          {faceStatus && !faceStatus.needed && faceStatus.present && (
-            <span className="chip ok" style={{ alignSelf: 'flex-start' }} title={`${faceStatus.paths.mesh}\n${faceStatus.paths.tint}`}>
-              <Icon name="check" size={11} /> Face files up to date
-            </span>
+          {faceStatus?.template && (
+            <div className="card small row" style={{ maxWidth: 560, gap: 10 }} data-testid="face-template">
+              <div className="grow">
+                <div style={{ fontWeight: 600 }}>Looks come from {faceStatus.templateName ?? 'a template'}</div>
+                <div className="dim">This character uses its template's traits, so the game shows the template's face and no face files are needed. Change the face on the template instead.</div>
+              </div>
+              <button className="btn small" onClick={() => useStore.getState().setNpc(faceStatus.template!)} title="Open the template this character takes its looks from">
+                Open template
+              </button>
+            </div>
+          )}
+          {faceStatus && !faceStatus.template && !faceStatus.needed && faceStatus.present && (
+            <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+              <span className="chip ok" title={`${faceStatus.paths.mesh}\n${faceStatus.paths.tint}`}>
+                <Icon name="check" size={11} /> Face files up to date
+              </span>
+              {faceStatus.canBake && (
+                <button className="btn small ghost" onClick={() => void generate()} title="Write this character's face files again from the current look (like Ctrl+F4 in the Creation Kit). Undo puts the old ones back." data-testid="regenerate-face">
+                  Write again
+                </button>
+              )}
+            </div>
           )}
           {!!missing.length && <div className="small faint">Preview: {missing.slice(0, 3).join(' · ')}</div>}
           {a && !hasFace && <div className="small warn">Neither this character nor their race has a head mesh, so there's no face to show or generate.</div>}

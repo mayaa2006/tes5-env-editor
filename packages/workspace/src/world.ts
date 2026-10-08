@@ -32,6 +32,12 @@ export interface CellSummary {
 }
 
 /** Terrain of one exterior cell. */
+/** One quadrant of a cell's ground: base texture and painted layers (LTEX forms). */
+export interface LandQuadrant {
+  base?: FormKey | null;
+  layers: { ltex: FormKey | null; layer: number; alpha: Float32Array }[];
+}
+
 export interface CellTerrain {
   cell: FormKey;
   origin: { x: number; y: number };
@@ -97,7 +103,8 @@ function readFormIdSub(rec: PluginRecord, sig: string): number | undefined {
 }
 
 function readModel(rec: PluginRecord): string | undefined {
-  const s = rec.get('MODL');
+  // Armor keeps its ground model in MOD2 (male) / MOD4 (female); its MODL entries link armor addons.
+  const s = rec.sig === 'ARMO' ? (rec.get('MOD2') ?? rec.get('MOD4')) : rec.get('MODL');
   if (!s) return undefined;
   let end = s.data.indexOf(0);
   if (end < 0) end = s.data.byteLength;
@@ -230,6 +237,29 @@ export class WorldService {
     const grid = knownGrid ?? this.cells().find((c) => c.formKey === cell)?.grid;
     if (!grid) return undefined;
     const info = { grid };
+    const land = this.landRecord(cell);
+    if (!land) return undefined;
+    const r = land.record;
+    const vhgt = r.get('VHGT')!;
+    const dv = new DataView(vhgt.data.buffer, vhgt.data.byteOffset, vhgt.data.byteLength);
+    const heights = new Float32Array(33 * 33);
+    let rowStart = dv.getFloat32(0, true);
+    for (let row = 0; row < 33; row++) {
+      rowStart += dv.getInt8(4 + row * 33);
+      let h = rowStart;
+      heights[row * 33] = h * 8;
+      for (let col = 1; col < 33; col++) {
+        h += dv.getInt8(4 + row * 33 + col);
+        heights[row * 33 + col] = h * 8;
+      }
+    }
+    const vclr = r.get('VCLR');
+    const colors = vclr && vclr.data.byteLength >= 33 * 33 * 3 ? vclr.data.slice(0, 33 * 33 * 3) : undefined;
+    return { origin: { x: info.grid.x * 4096, y: info.grid.y * 4096 }, heights, colors };
+  }
+
+  /** The winning LAND record of an outdoor cell (with heights), and the plugin it's in. */
+  landRecord(cell: FormKey): { slot: PluginSlot; record: PluginRecord } | undefined {
     for (let i = this.ws.slots.length - 1; i >= 0; i--) {
       const s = this.ws.slots[i]!;
       const local = s.plugin && s.mapper?.toLocal(cell);
@@ -241,24 +271,44 @@ export class WorldService {
           if (r.sig !== 'LAND' || r.isDeleted) continue;
           const vhgt = r.get('VHGT');
           if (!vhgt || vhgt.data.byteLength < 4 + 33 * 33) continue;
-          const dv = new DataView(vhgt.data.buffer, vhgt.data.byteOffset, vhgt.data.byteLength);
-          const heights = new Float32Array(33 * 33);
-          let rowStart = dv.getFloat32(0, true);
-          for (let row = 0; row < 33; row++) {
-            rowStart += dv.getInt8(4 + row * 33);
-            let h = rowStart;
-            heights[row * 33] = h * 8;
-            for (let col = 1; col < 33; col++) {
-              h += dv.getInt8(4 + row * 33 + col);
-              heights[row * 33 + col] = h * 8;
-            }
-          }
-          const vclr = r.get('VCLR');
-          const colors = vclr && vclr.data.byteLength >= 33 * 33 * 3 ? vclr.data.slice(0, 33 * 33 * 3) : undefined;
-          return { origin: { x: info.grid.x * 4096, y: info.grid.y * 4096 }, heights, colors };
+          return { slot: s, record: r };
         }
     }
     return undefined;
+  }
+
+  /**
+   * The ground's texture layers, per quadrant (0 south-west, 1 south-east,
+   * 2 north-west, 3 north-east): a base landscape texture, then painted
+   * layers in order, each with its opacity at the quadrant's 17×17 points.
+   */
+  landLayers(cell: FormKey): LandQuadrant[] | undefined {
+    const land = this.landRecord(cell);
+    if (!land) return undefined;
+    const quads: LandQuadrant[] = [0, 1, 2, 3].map(() => ({ layers: [] }));
+    let current: LandQuadrant['layers'][number] | undefined;
+    for (const sub of land.record.subrecords) {
+      const dv = new DataView(sub.data.buffer, sub.data.byteOffset, sub.data.byteLength);
+      if ((sub.sig === 'BTXT' || sub.sig === 'ATXT') && sub.data.byteLength >= 8) {
+        const id = dv.getUint32(0, true);
+        const quadrant = sub.data[4]! & 3;
+        const ltex = id ? (this.ws.keyOf(land.slot, id) ?? null) : null;
+        if (sub.sig === 'BTXT') {
+          quads[quadrant]!.base = ltex;
+          current = undefined;
+        } else {
+          current = { ltex, layer: dv.getUint16(6, true), alpha: new Float32Array(17 * 17) };
+          quads[quadrant]!.layers.push(current);
+        }
+      } else if (sub.sig === 'VTXT' && current) {
+        for (let o = 0; o + 8 <= sub.data.byteLength; o += 8) {
+          const pos = dv.getUint16(o, true);
+          if (pos < 289) current.alpha[pos] = dv.getFloat32(o + 4, true);
+        }
+      }
+    }
+    for (const q of quads) q.layers.sort((a, b) => a.layer - b.layer);
+    return quads;
   }
 
   private describeRef(s: PluginSlot, r: PluginRecord, key: FormKey, persistent: boolean): PlacedRef {

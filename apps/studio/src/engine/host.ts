@@ -4,7 +4,7 @@
  * demo runs it in-page against an in-memory demo data set. Every method takes
  * and returns structured-clone friendly values.
  */
-import { decodeToRgba, flattenMeshes, isCompressed, parseDds, parseNif, parseTri, type NifMaterial } from '@tes5/assets';
+import { decodeToRgba, flattenMeshes, gameTexturePath, isCompressed, parseDds, parseNif, parseTri, type NifMaterial } from '@tes5/assets';
 import { allConditionFunctions, isFormKey, newCondition, parseFormKey, recordTypeName, type FormKey, type Navmesh, type VmadProperty } from '@tes5/esp';
 import { validateNavmesh } from '@tes5/navmesh';
 import {
@@ -62,6 +62,7 @@ import {
   WorldService,
   Workspace,
   TerrainService,
+  LandTextureBaker,
   ActorModels,
   type SculptMode,
   CREATABLE_TYPES,
@@ -78,6 +79,7 @@ import {
   compactFormIds,
   computeBounds,
   detectInstall,
+  findInstalls,
   eslReport,
   generateCellNavmesh,
   readMo2Instance,
@@ -155,6 +157,7 @@ export class EngineHost {
   ws?: Workspace;
   world?: WorldService;
   terrainService?: TerrainService;
+  landTextures?: LandTextureBaker;
   actorModels?: ActorModels;
   npcs?: NpcService;
   faces?: FaceGenService;
@@ -191,6 +194,12 @@ export class EngineHost {
 
   // ---------------------------------------------------------------- session
 
+  /** Skyrim installs found in the usual places (Steam libraries, GOG), for the start screen. */
+  findInstalls() {
+    const env = typeof process !== 'undefined' && process.env ? (process.env as Record<string, string | undefined>) : {};
+    return findInstalls(this.fs, env);
+  }
+
   async open(opts: OpenOptions): Promise<SessionInfo> {
     let ws: Workspace;
     if (opts.kind === 'mo2') {
@@ -225,6 +234,7 @@ export class EngineHost {
     this.ws = ws;
     this.world = new WorldService(ws);
     this.terrainService = new TerrainService(ws, this.world);
+    this.landTextures = new LandTextureBaker(ws, this.world);
     this.npcs = new NpcService(ws);
     this.actorModels = new ActorModels(ws, this.npcs);
     this.faces = new FaceGenService(ws, this.npcs);
@@ -463,6 +473,11 @@ export class EngineHost {
   }
 
   /** Raise, lower, smooth or flatten the terrain along a brush stroke (one undo step). Returns the cells changed. */
+  /** The cell's ground texture layers blended into one picture (rows south → north), or null when it has none. */
+  async terrainTexture(cell: FormKey) {
+    return (await this.landTextures!.bake(cell)) ?? null;
+  }
+
   sculptTerrain(cell: FormKey, points: { x: number; y: number }[], opts: { mode: SculptMode; radius: number; strength: number }) {
     return this.terrainService!.sculpt(cell, points, opts);
   }
@@ -590,8 +605,7 @@ export class EngineHost {
    * without S3TC/BPTC support. Uncompressed formats are always decoded.
    */
   async texture(path: string, decode = false): Promise<TexturePayload> {
-    const p = path.toLowerCase().replace(/\//g, '\\');
-    const full = p.startsWith('textures\\') ? p : `textures\\${p}`;
+    const full = gameTexturePath(path);
     const dds = parseDds(await this.requireWs().vfs.read(full));
     const top = dds.mipmaps[0];
     return {
@@ -695,11 +709,17 @@ export class EngineHost {
     const canBake = this.faces!.headPartsOf(npc).some((p) => p.type === 'Face' && !!p.model);
     const present = this.ws!.vfs.has(paths.mesh) && this.ws!.vfs.has(paths.tint);
     const needing = await this.faces!.needingFaces();
-    return { present, canBake, needed: needing.includes(npc), paths };
+    const template = this.npcs!.looksTemplate(npc);
+    return { present, canBake, needed: needing.includes(npc), paths, template, templateName: template ? (this.ws!.summary(template)?.name ?? this.ws!.summary(template)?.editorId) : undefined };
   }
 
   facesNeeded() {
     return this.faces!.needingFaces();
+  }
+
+  /** Every character in the plugin with the state of its face files (for the export list). */
+  faceFiles() {
+    return this.faces!.faceFiles();
   }
 
   /** Bake and write FaceGen (default: every character that needs it). One undo step. */
