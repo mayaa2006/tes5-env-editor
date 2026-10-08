@@ -2,6 +2,19 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.14.0
+
+- **Plan quests with a free AI.** Quests → From text has a new **AI to use** choice:
+  - **Claude**: the best plans, with your own Anthropic key (paid), as before.
+  - **Free on this PC**: an open model running on your own computer through Ollama. Free, private, works offline. The app finds the models you've installed. If Ollama isn't running, it shows the three steps to set it up.
+  - **Free online**: a service with the OpenAI-style API. Google Gemini's free tier, Groq, OpenRouter's free models and LM Studio are preset.
+- The same AI writes journals (**Word with the AI**) and changes plans when you ask.
+- Free models make weaker plans than Claude. To help:
+  - Their answers are tidied up (code fences, thinking text).
+  - Missing lists are filled in.
+  - A wrong answer gets one retry, told exactly what was wrong.
+- Your choice is remembered.
+
 ## 0.13.2
 
 - **Quests list shows only quests with names by default.** A new **Only quests with names** checkbox above the list is ticked at the start; untick it to see unnamed quests too.

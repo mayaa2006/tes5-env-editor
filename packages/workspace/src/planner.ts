@@ -8,7 +8,9 @@
  * the author can check them before anything is built. A plan can be revised
  * by describing the change ("make Brynja the thief instead").
  *
- * The text is sent to Anthropic's API with the author's own API key.
+ * The text is sent to Anthropic's API with the author's own API key, or to
+ * a free alternative the author picks (Ollama on their own computer, or an
+ * OpenAI-style service): see aiproviders.ts.
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
@@ -17,7 +19,8 @@ import { WorkspaceError, type Workspace } from './engine';
 import { GESTURES } from './gestures';
 import { z } from 'zod';
 import type { JournalContext, JournalDraft } from './journal';
-import { PLAN_EVENT_KINDS, QuestPlanSchema, type QuestPlan } from './questplan';
+import { PLAN_EVENT_KINDS, QuestPlanSchema, normalizePlan, type QuestPlan } from './questplan';
+import { aiName, chatSend, type AiProvider } from './aiproviders';
 import { WorldService } from './world';
 
 export const PLANNER_MODEL = 'claude-opus-5-5';
@@ -125,10 +128,17 @@ export function planCatalog(ws: Workspace, opts: { limit?: number } = {}): strin
 export class QuestPlanner {
   private readonly send: PlannerSend;
 
-  constructor(opts: { apiKey?: string; send?: PlannerSend; model?: string } = {}) {
+  /** What to call the AI in messages. */
+  readonly name: string;
+
+  constructor(opts: { apiKey?: string; ai?: AiProvider; send?: PlannerSend; model?: string } = {}) {
+    const ai: AiProvider | undefined = opts.ai ?? (opts.apiKey ? { kind: 'claude', apiKey: opts.apiKey } : undefined);
+    this.name = aiName(ai);
     if (opts.send) this.send = opts.send;
+    else if (ai && ai.kind !== 'claude') this.send = chatSend(ai);
     else {
-      if (!opts.apiKey) throw new WorkspaceError('Add your Anthropic API key in Settings to plan quests with Claude');
+      if (ai?.kind === 'claude') opts = { ...opts, apiKey: ai.apiKey };
+      if (!opts.apiKey) throw new WorkspaceError('Add your Anthropic API key, or pick a free AI, to plan quests');
       const client = new Anthropic({ apiKey: opts.apiKey, dangerouslyAllowBrowser: true });
       this.send = async (params) => {
         try {
@@ -207,7 +217,7 @@ export class QuestPlanner {
 
   private async run<T>(params: BetaMessageStreamParams, schema: z.ZodType<T> = QuestPlanSchema as unknown as z.ZodType<T>, repair = true): Promise<T> {
     const reply = await this.send(params);
-    if (reply.stop_reason === 'refusal') throw new WorkspaceError('Claude declined to plan this. Try rewording the text.');
+    if (reply.stop_reason === 'refusal') throw new WorkspaceError(`${this.name} declined to plan this. Try rewording the text.`);
     if (reply.stop_reason === 'max_tokens') throw new WorkspaceError('The plan got too long to finish. Try splitting the quest into smaller parts.');
     const text = reply.content
       .filter((b) => b.type === 'text')
@@ -220,8 +230,11 @@ export class QuestPlanner {
       if (schema === (QuestPlanSchema as unknown) && json && typeof json === 'object' && !('events' in json)) (json as Record<string, unknown>).events = [];
       if (schema === (QuestPlanSchema as unknown) && json && typeof json === 'object' && !('startsWhen' in json)) (json as Record<string, unknown>).startsWhen = null;
       if (schema === (QuestPlanSchema as unknown) && json && typeof json === 'object' && !('failures' in json)) (json as Record<string, unknown>).failures = [];
+      // Smaller models leave fields out: empty lists and "none" are filled in, so only real gaps count.
+      json = fillMissing(schema, json);
+      if (schema === (QuestPlanSchema as unknown) && json && typeof json === 'object') normalizePlan(json as QuestPlan);
     } catch {
-      throw new WorkspaceError("Claude's answer wasn't in the expected format. Try again.");
+      throw new WorkspaceError(`${this.name}'s answer wasn't in the expected format. Try again${this.name === 'Claude' ? '' : ', or try a bigger model'}.`);
     }
     const parsed = schema.safeParse(json);
     if (parsed.success) return parsed.data;
@@ -236,7 +249,7 @@ export class QuestPlanner {
         schema,
         false,
       );
-    throw new WorkspaceError(`Claude's plan was incomplete (${issues[0]}). Try again.`);
+    throw new WorkspaceError(`${this.name}'s plan was incomplete (${issues[0]}). Try again${this.name === 'Claude' ? '' : ', or try a bigger model'}.`);
   }
 }
 
@@ -250,6 +263,34 @@ const JOURNAL_RULES = `You write the quest journal and objectives for a Skyrim q
 Journal entries: written by the player in the first person and the past tense, one to three short sentences, saying what happened and what they mean to do next ("Brynja asked me to find her mother's ring. She thinks it was lost somewhere in the tavern."). No game terms (stages, aliases, triggers), no "you". The final stage of a completed quest gets a short closing entry. The opening stage is usually left empty unless the quest starts with something the player should read.
 Objectives: short instructions in the imperative, at most about 50 characters, no full stop ("Find Brynja's ring", "Return the ring to Brynja"). Show each one at the stage where the task starts and complete it at the stage where it's done; use the stage number as the objective number unless the quest already has one there.
 Use the names given. Only use what the quest data says; don't invent new events.`;
+
+/** Fill fields an answer left out: lists become [] and nullable fields null, all the way down. */
+export function fillMissing(schema: z.ZodType, v: unknown): unknown {
+  const def = (schema as unknown as { _zod?: { def: Record<string, any> } })._zod?.def;
+  if (!def) return v;
+  switch (def.type) {
+    case 'object': {
+      if (!v || typeof v !== 'object' || Array.isArray(v)) return v;
+      const o = v as Record<string, unknown>;
+      for (const [k, s] of Object.entries(def.shape as Record<string, z.ZodType>)) {
+        const t = (s as unknown as { _zod: { def: { type: string } } })._zod.def.type;
+        if (!(k in o) || o[k] === undefined) {
+          if (t === 'array') o[k] = [];
+          else if (t === 'nullable') o[k] = null;
+        } else o[k] = fillMissing(s, o[k]);
+      }
+      return o;
+    }
+    case 'array':
+      return Array.isArray(v) ? v.map((x) => fillMissing(def.element, x)) : v;
+    case 'nullable':
+    case 'optional':
+    case 'default':
+      return v === null || v === undefined ? v : fillMissing(def.innerType, v);
+    default:
+      return v;
+  }
+}
 
 const ENUM_FIELDS = new Set(['sex', 'kind', 'startsWith']);
 

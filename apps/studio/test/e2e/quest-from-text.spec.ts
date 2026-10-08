@@ -94,7 +94,7 @@ test('write a quest, let Claude plan it, check it and build it', async ({ page }
 
 test('try it with the example, no API key needed', async ({ page }) => {
   await openQuests(page);
-  await page.getByRole('button', { name: /Describe a quest and let Claude build it/ }).click();
+  await page.getByRole('button', { name: /Describe a quest and let AI build it/ }).click();
   const dlg = page.getByRole('dialog');
   await dlg.getByTestId('use-example').click();
   await expect(dlg.getByTestId('plan-review').locator('input').first()).toHaveValue("The Innkeeper's Ring");
