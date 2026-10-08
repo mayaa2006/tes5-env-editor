@@ -238,6 +238,7 @@ Opens an MO2 instance and profile directly, using its virtual Data folder (loose
 - The properties panel (every field of the selected form) can be hidden from the top bar. It starts hidden in the Characters and Quests designers, so they get the full width.
 - Side panels shrink on smaller windows, and the World toolbar drops its words (keeping icons and tooltips) when the 3D view gets narrow.
 - **Start screen:** finds Skyrim in your Steam libraries and GOG folders, so you usually just click **Open**. The plugin list has search and **All / Only masters / None**, and unticking a master unticks the plugins that need it.
+- **Dialogs remember what you typed.** Close a New quest, New character, New script, New cell or quest-from-text dialog (Cancel, Esc or a click outside) and it is filled in again next time, until the thing is created.
 - **Empty screens say what to do next**, with a button for it (New character, New quest, Describe a quest, New script).
 - Character and quest lists can show **only the ones in your plugin**, and say when there are more than they show.
 - Conditions show names, not numbers: skills and stats ("One-handed", "Health"), crime types, hands, alignment.

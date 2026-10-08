@@ -7,7 +7,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { EMOTIONS, QUEST_TYPES, QuestFlag, type FormKey } from '@tes5/esp';
 import type { InfoModel, QuestModel, TopicModel } from '@tes5/workspace';
-import { Checkbox, DragNumber, EmptyState, Field, FormLink, FormPicker, Icon, Modal, Select, Tabs, TextInput, useDebounced, useQuery, useSummaries, useUniqueEditorId } from '../../components/ui';
+import { Checkbox, clearDraft, DragNumber, EmptyState, Field, FormLink, FormPicker, Icon, Modal, Select, Tabs, TextInput, useDebounced, useDraft, useQuery, useSummaries, useUniqueEditorId } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 import { ConditionList } from '../record/ConditionEditor';
 import { TriggersSection } from '../record/TriggersEditor';
@@ -145,10 +145,10 @@ function QuestList() {
 }
 
 function NewQuestDialog({ onClose }: { onClose: () => void }) {
-  const [edid, setEdid] = useUniqueEditorId('MyQuest');
-  const [name, setName] = useState('My Quest');
-  const [sge, setSge] = useState(false);
-  const [runOnce, setRunOnce] = useState(true);
+  const [edid, setEdid] = useUniqueEditorId('MyQuest', 'newQuest:edid');
+  const [name, setName] = useDraft('newQuest:name', 'My Quest');
+  const [sge, setSge] = useDraft('newQuest:sge', false);
+  const [runOnce, setRunOnce] = useDraft('newQuest:runOnce', true);
   return (
     <Modal
       title="New quest"
@@ -172,6 +172,7 @@ function NewQuestDialog({ onClose }: { onClose: () => void }) {
                 { success: `Created ${name}` },
               );
               if (key) {
+                clearDraft('newQuest:');
                 useStore.getState().setQuest(key);
                 onClose();
               }

@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FACE_MORPHS, type FormKey } from '@tes5/esp';
 import { CONTROL_HELP, REGION_CONTROLS_FOR, REGION_LABELS, emptySculpt, faceLookFor, type FaceRegion, type FaceSculpt, type HeadPartInfo, type NpcAppearance, type RegionControl } from '@tes5/workspace';
-import { Checkbox, EmptyState, Field, FormPicker, Help, Icon, Modal, Select, Slider, Tabs, TextInput, useDebounced, useQuery, DragNumber, useUniqueEditorId } from '../../components/ui';
+import { Checkbox, clearDraft, EmptyState, Field, FormPicker, Help, Icon, Modal, Select, Slider, Tabs, TextInput, useDebounced, useDraft, useQuery, DragNumber, useUniqueEditorId } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 import { HeadPreview, type PreviewPart } from './headPreview';
 
@@ -106,9 +106,9 @@ function NpcList() {
 }
 
 function NewNpcDialog({ onClose }: { onClose: () => void }) {
-  const [template, setTemplate] = useState<FormKey | null>(useStore.getState().npc ?? null);
-  const [edid, setEdid] = useUniqueEditorId('MyNewCharacter');
-  const [name, setName] = useState('New Character');
+  const [template, setTemplate] = useDraft<FormKey | null>('newNpc:template', useStore.getState().npc ?? null);
+  const [edid, setEdid] = useUniqueEditorId('MyNewCharacter', 'newNpc:edid');
+  const [name, setName] = useDraft('newNpc:name', 'New Character');
   return (
     <Modal
       title="New character"
@@ -132,6 +132,7 @@ function NewNpcDialog({ onClose }: { onClose: () => void }) {
                 { success: `Created ${name}` },
               );
               if (key) {
+                clearDraft('newNpc:');
                 useStore.getState().setNpc(key);
                 onClose();
               }
