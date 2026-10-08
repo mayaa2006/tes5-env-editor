@@ -7,12 +7,13 @@ import { useEffect, useState } from 'react';
 import type { FormKey } from '@tes5/esp';
 import type { JournalContext, JournalDraft, JournalLint } from '@tes5/workspace';
 import { Checkbox, Help, Icon, Modal, TextInput } from '../../components/ui';
-import { engine, useStore } from '../../state/store';
+import { engine } from '../../state/store';
+import { useAi } from '../../components/AiPicker';
 
 type Row<T> = T & { use: boolean };
 
 export default function JournalWriter({ quest, onClose }: { quest: FormKey; onClose: () => void }) {
-  const key = useStore((s) => s.settings.anthropicApiKey);
+  const { ai, ready, name } = useAi();
   const [overwrite, setOverwrite] = useState(false);
   const [ctx, setCtx] = useState<JournalContext>();
   const [lint, setLint] = useState<JournalLint[]>([]);
@@ -33,7 +34,7 @@ export default function JournalWriter({ quest, onClose }: { quest: FormKey; onCl
   }, [quest, overwrite]);
 
   const askClaude = async () => {
-    const d = await engine((c) => c.call('journalDraftWithClaude', quest, key, overwrite), { busy: 'Claude is writing the journal…', refreshSession: false });
+    const d = await engine((c) => c.call('journalDraftWithClaude', quest, ai, overwrite), { busy: `${name} is writing the journal…`, refreshSession: false });
     if (d) take(d);
   };
   const apply = async () => {
@@ -58,8 +59,8 @@ export default function JournalWriter({ quest, onClose }: { quest: FormKey; onCl
         <>
           <Checkbox checked={overwrite} onChange={setOverwrite} label="Rewrite the ones already written too" />
           <span className="grow" />
-          <button className="btn" onClick={() => void askClaude()} disabled={!key} title={key ? 'Claude words the drafts in the style of the game’s quests' : 'Add your Anthropic API key in Quests → From text first'} data-testid="journal-claude">
-            <Icon name="wand" size={13} /> Ask Claude to word them
+          <button className="btn" onClick={() => void askClaude()} disabled={!ready} title={ready ? `${name} words the drafts in the style of the game’s quests` : 'Choose an AI first: Quests → From writing (Claude, or a free one)'} data-testid="journal-claude">
+            <Icon name="wand" size={13} /> Ask {ai.kind === 'claude' ? 'Claude' : 'the AI'} to word them
           </button>
           <button className="btn" onClick={onClose}>
             Cancel

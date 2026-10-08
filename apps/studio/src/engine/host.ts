@@ -101,6 +101,9 @@ import {
   WorldspaceService,
   type NewExteriorCellOptions,
   type NewWorldspaceOptions,
+  ollamaModels,
+  OLLAMA_URL,
+  type AiProvider,
 } from '@tes5/workspace';
 import type { CleanOptions } from '@tes5/cleaner';
 
@@ -1053,9 +1056,14 @@ export class EngineHost {
     return { context, draft: draftJournal(context, { overwrite }), lint: lintJournal(context) };
   }
 
-  /** Claude writes the drafts instead of the templates. */
-  async journalDraftWithClaude(quest: FormKey, apiKey: string, overwrite = false) {
-    return new QuestPlanner({ apiKey }).writeJournal(await this.journalContext(quest), { overwrite });
+  /** The AI (Claude or a free one) writes the drafts instead of the templates. */
+  async journalDraftWithClaude(quest: FormKey, ai: AiProvider | string, overwrite = false) {
+    return new QuestPlanner({ ai: asAi(ai) }).writeJournal(await this.journalContext(quest), { overwrite });
+  }
+
+  /** Models installed in Ollama on this computer. */
+  ollamaModels(url?: string) {
+    return ollamaModels(url || OLLAMA_URL);
   }
 
   /** Write the chosen drafts into the quest (one undo step). */
@@ -1085,9 +1093,9 @@ export class EngineHost {
   }
 
   /** The writer on a plan: fill in the missing journal entries and objectives (templates, or Claude with a key). */
-  async planJournal(plan: QuestPlan, apiKey?: string) {
+  async planJournal(plan: QuestPlan, ai?: AiProvider | string) {
     const ctx = journalContextFromPlan(plan);
-    const draft = apiKey ? await new QuestPlanner({ apiKey }).writeJournal(ctx) : draftJournal(ctx);
+    const draft = ai ? await new QuestPlanner({ ai: asAi(ai) }).writeJournal(ctx) : draftJournal(ctx);
     const next = applyJournalToPlan(plan, draft);
     return { plan: next, ...this.reviewQuestPlan(next) };
   }
@@ -1105,14 +1113,14 @@ export class EngineHost {
   }
 
   /** Claude plans a quest from a design document or a conversation. */
-  async planQuest(source: string, mode: PlannerMode, apiKey: string) {
-    const plan = await new QuestPlanner({ apiKey }).plan(source, mode, planCatalog(this.requireWs()));
+  async planQuest(source: string, mode: PlannerMode, ai: AiProvider | string) {
+    const plan = await new QuestPlanner({ ai: asAi(ai) }).plan(source, mode, planCatalog(this.requireWs()));
     return { plan, ...this.reviewQuestPlan(plan) };
   }
 
   /** Claude changes a plan as described. */
-  async reviseQuestPlan(plan: QuestPlan, feedback: string, apiKey: string, source?: string) {
-    const next = await new QuestPlanner({ apiKey }).revise(plan, feedback, planCatalog(this.requireWs()), source);
+  async reviseQuestPlan(plan: QuestPlan, feedback: string, ai: AiProvider | string, source?: string) {
+    const next = await new QuestPlanner({ ai: asAi(ai) }).revise(plan, feedback, planCatalog(this.requireWs()), source);
     return { plan: next, ...this.reviewQuestPlan(next) };
   }
 
@@ -1460,3 +1468,8 @@ export class EngineHost {
 export type EngineMethod = {
   [K in keyof EngineHost]-?: EngineHost[K] extends (...args: any[]) => any ? K : never;
 }[keyof EngineHost];
+
+/** An AI choice, or (as before) just a Claude API key. */
+function asAi(ai: AiProvider | string): AiProvider {
+  return typeof ai === 'string' ? { kind: 'claude', apiKey: ai } : ai;
+}
