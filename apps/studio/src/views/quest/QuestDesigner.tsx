@@ -68,8 +68,8 @@ function NoQuest() {
           <button className="btn primary" onClick={() => useStore.getState().requestNew('quest')} title="Start an empty quest and add stages, objectives and characters yourself">
             <Icon name="plus" /> New quest
           </button>
-          <button className="btn" onClick={() => setWriting(true)} title="Paste a design document or a conversation; Claude plans the whole quest, you check it, and it's built for you">
-            <Icon name="wand" size={13} /> Describe a quest and let Claude build it
+          <button className="btn" onClick={() => setWriting(true)} title="Paste a design document or a conversation; an AI (Claude, or a free one on your PC or online) plans the whole quest, you check it, and it's built for you">
+            <Icon name="wand" size={13} /> Describe a quest and let AI build it
           </button>
         </>
       }
@@ -105,7 +105,7 @@ function QuestList() {
     <div className="panel" style={{ width: 260, flex: 'none', borderRight: '1px solid var(--border)', background: 'var(--panel)' }}>
       <div className="panel-header">
         <span className="grow">Quests</span>
-        <button className="btn small" onClick={() => setWriting(true)} data-testid="quest-from-writing" title="Paste a design document or a conversation; Claude plans the whole quest, you check it, and it's built for you">
+        <button className="btn small" onClick={() => setWriting(true)} data-testid="quest-from-writing" title="Paste a design document or a conversation; an AI (Claude, or a free one on your PC or online) plans the whole quest, you check it, and it's built for you">
           <Icon name="wand" size={12} /> From text
         </button>
         <button className="btn small primary" onClick={() => setCreating(true)} data-testid="new-quest">

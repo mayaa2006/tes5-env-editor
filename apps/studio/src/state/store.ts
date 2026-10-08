@@ -52,6 +52,13 @@ export interface Settings {
   mo2Exe: string;
   /** Anthropic API key for planning quests with Claude (kept on this computer). */
   anthropicApiKey: string;
+  /** Which AI plans quests and writes journals: Claude, Ollama on this computer, or an OpenAI-style service. */
+  aiKind: 'claude' | 'ollama' | 'openai';
+  ollamaUrl: string;
+  ollamaModel: string;
+  openaiUrl: string;
+  openaiKey: string;
+  openaiModel: string;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -74,6 +81,12 @@ const DEFAULT_SETTINGS: Settings = {
   mo2Executable: 'SKSE',
   mo2Exe: '',
   anthropicApiKey: '',
+  aiKind: 'claude',
+  ollamaUrl: 'http://localhost:11434',
+  ollamaModel: '',
+  openaiUrl: '',
+  openaiKey: '',
+  openaiModel: '',
 };
 
 function loadSettings(): Settings {

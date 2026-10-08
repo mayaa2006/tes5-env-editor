@@ -2,9 +2,22 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
-## 0.13.3
+## 0.14.1
 
 - **Closing a dialog no longer loses what you typed.** New quest, New character, New script, New cell / worldspace and the quest-from-text box keep their fields when you cancel, press Esc or click outside, and are filled in again next time you open them. They start fresh once the thing is created.
+
+## 0.14.0
+
+- **Plan quests with a free AI.** Quests → From text has a new **AI to use** choice:
+  - **Claude**: the best plans, with your own Anthropic key (paid), as before.
+  - **Free on this PC**: an open model running on your own computer through Ollama. Free, private, works offline. The app finds the models you've installed. If Ollama isn't running, it shows the three steps to set it up.
+  - **Free online**: a service with the OpenAI-style API. Google Gemini's free tier, Groq, OpenRouter's free models and LM Studio are preset.
+- The same AI writes journals (**Word with the AI**) and changes plans when you ask.
+- Free models make weaker plans than Claude. To help:
+  - Their answers are tidied up (code fences, thinking text).
+  - Missing lists are filled in.
+  - A wrong answer gets one retry, told exactly what was wrong.
+- Your choice is remembered.
 
 ## 0.13.2
 

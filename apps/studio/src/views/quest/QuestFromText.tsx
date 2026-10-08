@@ -1,6 +1,6 @@
 /**
  * Quest from writing: paste a design document or just a conversation,
- * Claude plans the whole quest, you check and adjust the plan, and it's
+ * The AI (Claude, or a free one) plans the whole quest, you check and adjust the plan, and it's
  * built (characters, items, stages, journal, objectives, triggers,
  * dialogue) as one undo step.
  */
@@ -9,6 +9,7 @@ import type { FormKey } from '@tes5/esp';
 import type { PlanIssue, PlanResolution, PlannerMode, QuestBuildReport, QuestPlan } from '@tes5/workspace';
 import { clearDraft, Field, Help, Icon, Modal, Select, TextInput, useDraft } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
+import { AiPicker, useAi } from '../../components/AiPicker';
 
 type Review = { plan: QuestPlan; issues: PlanIssue[]; resolution: PlanResolution[] };
 type PlanSection = 'overview' | 'cast' | 'story' | 'events' | 'dialogue';
@@ -23,7 +24,7 @@ const MODES: { id: PlannerMode; title: string; text: string; placeholder: string
   {
     id: 'conversation',
     title: 'A conversation',
-    text: 'Just write the dialogue, no tags needed. Claude works out the quest around it and adds the stages, journal and objectives.',
+    text: 'Just write the dialogue, no tags needed. The AI works out the quest around it and adds the stages, journal and objectives.',
     placeholder: 'Player: Got any work?\nBrynja: I lost my mother’s ring. Find it and I’ll pay you.\nPlayer: I found your ring!\nBrynja: Thank the gods! Here, take this.',
   },
 ];
@@ -101,13 +102,11 @@ export default function QuestFromText({ onClose, existing }: { onClose: () => vo
 // ------------------------------------------------------------------ 1. write
 
 function Write({ mode, setMode, source, setSource, onPlanned, onClose }: { mode: PlannerMode; setMode: (m: PlannerMode) => void; source: string; setSource: (s: string) => void; onPlanned: (r: Review) => void; onClose: () => void }) {
-  const key = useStore((s) => s.settings.anthropicApiKey);
-  const update = useStore((s) => s.updateSettings);
-  const [editKey, setEditKey] = useState(!key);
+  const { ai, ready, name } = useAi();
   const m = MODES.find((x) => x.id === mode)!;
 
   const plan = async () => {
-    const r = await engine((c) => c.call('planQuest', source, mode, key), { busy: 'Claude is planning the quest… this can take a minute or two', refreshSession: false });
+    const r = await engine((c) => c.call('planQuest', source, mode, ai), { busy: `${name} is planning the quest… this can take ${ai.kind === 'claude' ? 'a minute or two' : 'several minutes on a free model'}`, refreshSession: false });
     if (r) onPlanned(r);
   };
   const example = async () => {
@@ -135,43 +134,20 @@ function Write({ mode, setMode, source, setSource, onPlanned, onClose }: { mode:
       </div>
       <textarea className="input mono" data-testid="plan-source" value={source} onChange={(e) => setSource(e.target.value)} placeholder={m.placeholder} rows={14} style={{ width: '100%', resize: 'vertical', fontSize: 12 }} autoFocus />
       <div className="card" style={{ padding: 10 }}>
-        {editKey ? (
-          <Field
-            label="Anthropic API key"
-            title="Claude plans the quest through Anthropic's API, using your own key (create one at console.anthropic.com). The key is stored on this computer only. Your text and a list of the characters, places, voices and races in your load order are sent to Anthropic to make the plan."
-          >
-            <div className="row" style={{ gap: 6 }}>
-              <input className="input mono grow" type="password" placeholder="sk-ant-…" defaultValue={key} data-testid="api-key" onBlur={(e) => update({ anthropicApiKey: e.target.value.trim() })} />
-              {key && (
-                <button className="btn small" onClick={() => setEditKey(false)}>
-                  Done
-                </button>
-              )}
-            </div>
-          </Field>
-        ) : (
-          <div className="row small dim" style={{ gap: 6 }}>
-            <Icon name="check" size={12} /> Using your Anthropic API key
-            <Help text="Your text and a list of the characters, places, voices and races in your load order are sent to Anthropic to make the plan. Nothing is built until you've checked it." />
-            <span className="grow" />
-            <button className="btn small ghost" onClick={() => setEditKey(true)}>
-              Change key
-            </button>
-          </div>
-        )}
+        <AiPicker />
         <p className="dim small" style={{ margin: '6px 0 0' }}>
-          Nothing is built yet: you'll see the plan first, with every decision Claude made on its own, and can change it.
+          Nothing is built yet: you'll see the plan first, with every decision {name} made on its own, and can change it.
         </p>
       </div>
       <div className="row" style={{ gap: 8 }}>
-        <button className="btn" onClick={() => void example()} data-testid="use-example" title="Load an example design document and the plan Claude makes from it (no API key needed)">
+        <button className="btn" onClick={() => void example()} data-testid="use-example" title="Load an example design document and a ready-made plan for it (no AI needed)">
           Use the example
         </button>
         <span className="grow" />
         <button className="btn" onClick={onClose}>
           Cancel
         </button>
-        <button className="btn primary" disabled={!source.trim() || !key} onClick={() => void plan()} title={!key ? 'Add your API key first' : !source.trim() ? 'Write something first' : undefined} data-testid="plan-quest">
+        <button className="btn primary" disabled={!source.trim() || !ready} onClick={() => void plan()} title={!ready ? 'Choose an AI first (above)' : !source.trim() ? 'Write something first' : `${name} reads your text and plans the whole quest; you check it before anything is built`} data-testid="plan-quest">
           <Icon name="wand" size={13} /> Plan the quest
         </button>
       </div>
@@ -183,7 +159,7 @@ function Write({ mode, setMode, source, setSource, onPlanned, onClose }: { mode:
 
 function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { review: Review; setReview: (r: Review) => void; source: string; onBack: () => void; onBuilt: (r: QuestBuildReport) => void; existing?: FormKey }) {
   const [preview, setPreview] = useState<string[] | null>(null);
-  const key = useStore((s) => s.settings.anthropicApiKey);
+  const { ai, ready: aiOk, name: aiLabel } = useAi();
   const { plan, issues, resolution } = review;
   const [feedback, setFeedback] = useState('');
   const [draft, setDraft] = useState(plan);
@@ -209,14 +185,14 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
     await check(prev);
   };
   const revise = async () => {
-    const r = await engine((c) => c.call('reviseQuestPlan', draft, feedback, key, source), { busy: 'Claude is changing the plan…', refreshSession: false });
+    const r = await engine((c) => c.call('reviseQuestPlan', draft, feedback, ai, source), { busy: `${aiLabel} is changing the plan…`, refreshSession: false });
     if (r) {
       setReview(r);
       setFeedback('');
     }
   };
   const journal = async (claude: boolean) => {
-    const r = await engine((c) => c.call('planJournal', draft, claude ? key : undefined), { busy: claude ? 'Claude is writing the journal…' : undefined, refreshSession: false });
+    const r = await engine((c) => c.call('planJournal', draft, claude ? ai : undefined), { busy: claude ? `${aiLabel} is writing the journal…` : undefined, refreshSession: false });
     if (r) setReview(r);
   };
   const build = async () => {
@@ -239,7 +215,7 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
   const quest = draft.stages.length > 0;
   const n = (k: number, one: string, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
   const sections: { id: PlanSection; label: string; hint: string; count?: number; summary: string }[] = [
-    { id: 'overview', label: 'Overview', hint: 'Name, problems to fix, and what Claude decided on its own', count: errors || undefined, summary: '' },
+    { id: 'overview', label: 'Overview', hint: `Name, problems to fix, and what ${aiLabel} decided on its own`, count: errors || undefined, summary: '' },
     { id: 'cast', label: 'Cast & places', hint: 'Characters (with roles and fighting), places, items and enemy groups', count: draft.characters.length + draft.locations.length + draft.items.length + (draft.encounters?.length ?? 0), summary: [n(draft.characters.length, 'character'), n(draft.locations.length, 'place'), n(draft.items.length, 'item'), draft.encounters?.length ? n(draft.encounters.length, 'enemy group') : ''].filter(Boolean).join(', ') },
     ...(quest
       ? [
@@ -316,7 +292,7 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
         <div className="card" data-testid="plan-assumptions">
           <div className="card-title">
             Check these
-            <Help text="Claude decided these on its own because your text didn't say. If one is wrong, say what you want below (“Ask Claude to change the plan”)." />
+            <Help text={`${aiLabel} decided these on its own because your text didn't say. If one is wrong, say what you want below (“Ask the AI to change the plan”).`} />
           </div>
           <ul className="always-list">
             {draft.questions.map((q) => (
@@ -412,8 +388,8 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
           <button className="btn small ghost" onClick={() => void journal(false)} title="Fill in empty journal entries and missing objectives from what moves the quest on" data-testid="plan-draft-journal">
             Draft missing journal
           </button>
-          <button className="btn small ghost" disabled={!key} onClick={() => void journal(true)} title={key ? 'Claude writes the missing journal entries and objectives in the style of the game' : 'Add your API key on the first page'}>
-            <Icon name="wand" size={12} /> Word with Claude
+          <button className="btn small ghost" disabled={!aiOk} onClick={() => void journal(true)} title={aiOk ? `${aiLabel} writes the missing journal entries and objectives in the style of the game` : 'Choose an AI on the first page'} data-testid="journal-ai">
+            <Icon name="wand" size={12} /> Word with {ai.kind === 'claude' ? 'Claude' : 'the AI'}
           </button>
         </div>
         <div className="col" style={{ gap: 6 }}>
@@ -489,7 +465,7 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
 
       {section === 'dialogue' && (
         <>
-          {!draft.conversations.length && <p className="dim small">No conversations in this plan. Ask Claude below to write some (“Brynja greets the player and asks for help”).</p>}
+          {!draft.conversations.length && <p className="dim small">No conversations in this plan. Ask the AI below to write some (“Brynja greets the player and asks for help”).</p>}
       {draft.conversations.map((c, i) => (
         <div key={i} className="card">
           <div className="card-title">
@@ -510,13 +486,13 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
         <div className="row" style={{ gap: 6 }}>
           <input
             className="input grow"
-            placeholder="Ask Claude to change the plan, e.g. “Make Eirik the thief, and let the player keep the ring for a reward”"
+            placeholder={`Ask ${aiLabel} to change the plan, e.g. “Make Eirik the thief, and let the player keep the ring for a reward”`}
             value={feedback}
             onChange={(e) => setFeedback(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && feedback.trim() && key && void revise()}
+            onKeyDown={(e) => e.key === 'Enter' && feedback.trim() && aiOk && void revise()}
             data-testid="plan-feedback"
           />
-          <button className="btn" disabled={!feedback.trim() || !key} onClick={() => void revise()} title={!key ? 'Add your API key on the first page' : undefined}>
+          <button className="btn" disabled={!feedback.trim() || !aiOk} onClick={() => void revise()} title={!aiOk ? 'Choose an AI on the first page' : `${aiLabel} changes the plan as you describe; Undo edit puts it back`}>
             Change
           </button>
         </div>

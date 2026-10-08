@@ -99,7 +99,13 @@ The quest list on the left shows only quests that have a name by default (the hi
 
 #### Quest from writing
 
-**Quests → From text:** paste a design document, or just a conversation with no tags, and Claude plans the whole quest:
+**Quests → From text:** paste a design document, or just a conversation with no tags, and an AI plans the whole quest. Pick the AI under **AI to use**:
+
+- **Claude** gives the best plans, using your own Anthropic API key (paid).
+- **Free on this PC** uses [Ollama](https://ollama.com) to run an open model on your own computer. It's free, private and works offline. Install Ollama, run `ollama pull qwen3:14b` (or `qwen3:8b` on smaller PCs), and pick it from the list. Bigger models make better plans; small ones may need a second try.
+- **Free online** uses a service with the OpenAI-style API. Google Gemini's free tier, Groq, OpenRouter's free models and LM Studio are preset; paste the service's free key.
+
+The plan covers:
 
 - who's in it (characters from your load order, or new ones copied from a similar character), where, and which items;
 - stages with journal entries, objectives with quest markers, what moves the quest on, the dialogue, and the rewards;
@@ -112,7 +118,7 @@ The quest list on the left shows only quests that have a name by default (the hi
 - **how it starts:** with the game (for quests that begin by talking to someone), or when the player enters a place, reads a note, picks something up or uses something, or **after another of your quests** reaches a stage, so a questline's parts follow each other. The quest map shows what starts each quest.
 - **where things go:** characters stand on real floor at the level you walk in on, clear of walls and each other, or at a named spot ("behind the bar", "by the forge") facing it; items go on tables or named furniture, or **inside a named container** ("in the chest"). That chest gets its own copy of the container, and the quest creates the item inside it, so picking it up still counts and the marker points at it.
 
-You check the plan first, in tabs: **Overview** (problems to fix and every decision Claude made on its own), **Cast & places**, **Story** (how it starts, stages and journal, objectives, what moves it on, how it can fail), **World events** and **Dialogue**. Problems that must be fixed show on whichever tab you're on, and the Build button stays at the bottom. You can edit the journal, objectives and dialogue directly, or ask Claude to change something ("make Eirik the thief"). **Build the quest** then creates everything (records, triggers, scripts, dialogue) as one undo step, and lists what still needs you (such as empty new interiors); new and changed faces get their face files when you save. Uses your own Anthropic API key; **Use the example** tries it without one.
+You check the plan first, in tabs: **Overview** (problems to fix and every decision Claude made on its own), **Cast & places**, **Story** (how it starts, stages and journal, objectives, what moves it on, how it can fail), **World events** and **Dialogue**. Problems that must be fixed show on whichever tab you're on, and the Build button stays at the bottom. You can edit the journal, objectives and dialogue directly, or ask Claude to change something ("make Eirik the thief"). **Build the quest** then creates everything (records, triggers, scripts, dialogue) as one undo step, and lists what still needs you (such as empty new interiors); new and changed faces get their face files when you save. **Use the example** tries it without any AI.
 
 **Change with a plan** (on any quest) shows the quest as a plan: exactly as it was built, or read back from a quest made by hand. Change it yourself or ask Claude ("add a stage where Eirik confesses"), see the list of what will change, and **Update the quest**. Only those differences are applied (stages, journal, objectives, steps, characters, routines, rewards, events, how it starts, how it fails, and conversations that came from the plan), so edits you made by hand stay. One undo reverts the update.
 
