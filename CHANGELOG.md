@@ -2,6 +2,18 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.15.1
+
+- **Free online AI works with current models.** Model names are no longer guessed:
+  - After you paste a key, the app asks the service which models it offers now and picks one. **Find models** asks again.
+  - A model the service has dropped is swapped for one it still offers.
+  - The defaults are updated: Gemini's free model is now gemini-3.8-flash, and OpenRouter's old free Llama model is gone.
+- **Clearer links:** **Get a free key ↗** opens the service's key page in your browser.
+  - The **API address** is marked as being for the app, not a web page: opening it in a browser always shows an error.
+  - Ollama's download page is a link too.
+- **A wrong key shows up straight away**, before you plan.
+- **Fix:** in the browser demo, Gemini, Groq and OpenRouter were blocked by the page's security settings.
+
 ## 0.15.0
 
 - **Save into a new folder, whatever your setup.** On the start screen, **Where my files are saved → Save into a new folder** puts your plugin and everything else the editor writes (scripts, SEQ and face files, backups) into one folder you choose, made if it doesn't exist. It's the same with a Skyrim folder or Mod Organizer 2, so it suits any mod manager. The choice is remembered, and the plugin screen shows where files will go. Off by default: saves go to Data, or MO2's Overwrite, as before.

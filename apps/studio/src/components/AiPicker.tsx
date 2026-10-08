@@ -4,7 +4,7 @@
  * online service with the OpenAI-style API. Kept in the settings.
  */
 import { useEffect, useState } from 'react';
-import { OLLAMA_URL, OPENAI_PRESETS, aiName, aiReady, type AiProvider } from '@tes5/workspace';
+import { OLLAMA_URL, OPENAI_PRESETS, aiName, aiReady, pickModel, type AiProvider } from '@tes5/workspace';
 import { useStore } from '../state/store';
 import { Field, Help, Icon } from './ui';
 
@@ -127,7 +127,13 @@ function OllamaFields() {
         <div className="dim small" data-testid="ollama-help">
           {error ? `${error} ` : 'Ollama is running but has no models yet. '}To set it up (free):
           <ol style={{ margin: '4px 0 0', paddingLeft: 18 }}>
-            <li>Install Ollama from ollama.com and start it.</li>
+            <li>
+              Install Ollama (
+              <a href="https://ollama.com/download" target="_blank" rel="noreferrer" title="Opens ollama.com/download in your browser" data-testid="ollama-download">
+                download ↗
+              </a>
+              ) and start it.
+            </li>
             <li>
               In a terminal, run <code>ollama pull qwen3:14b</code> (about 9 GB; <code>qwen3:8b</code> for smaller PCs).
             </li>
@@ -146,6 +152,29 @@ function OpenAiFields() {
   const s = useStore((st) => st.settings);
   const update = useStore((st) => st.updateSettings);
   const preset = OPENAI_PRESETS.find((p) => p.url === s.openaiUrl);
+  const [models, setModels] = useState<string[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  // Ask the service what it offers now (also checks the key); keep the chosen model if it's still there.
+  const find = async (url = s.openaiUrl, key = s.openaiKey) => {
+    if (!url) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const list = (await useStore.getState().client?.call('aiServiceModels', url, key || undefined)) ?? [];
+      setModels(list);
+      const model = useStore.getState().settings.openaiModel;
+      if (list.length && !list.includes(model)) update({ openaiModel: pickModel(list, preset?.model ?? model) });
+    } catch (e) {
+      setModels(null);
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  useEffect(() => {
+    if (s.openaiUrl && (s.openaiKey || /localhost|127\.0\.0\.1/.test(s.openaiUrl))) void find();
+  }, [s.openaiUrl, s.openaiKey]);
   return (
     <>
       <Field label="Service" title="Fills in the address and a model. You can change both.">
@@ -154,7 +183,10 @@ function OpenAiFields() {
           value={preset?.id ?? ''}
           onChange={(e) => {
             const p = OPENAI_PRESETS.find((x) => x.id === e.target.value);
-            if (p) update({ openaiUrl: p.url, openaiModel: p.model });
+            if (p) {
+              setModels(null);
+              update({ openaiUrl: p.url, openaiModel: p.model });
+            }
           }}
           data-testid="openai-preset"
         >
@@ -166,18 +198,49 @@ function OpenAiFields() {
           ))}
         </select>
       </Field>
-      {preset && <p className="dim small" style={{ margin: 0 }}>{`${preset.note}${preset.keyUrl ? ` Get a key at ${preset.keyUrl}` : ''}`}</p>}
-      <Field label="Address" title="The service's OpenAI-style API address (ending in /v1 or similar).">
+      {preset && (
+        <p className="dim small" style={{ margin: 0 }} data-testid="openai-preset-note">
+          {preset.note}{' '}
+          {preset.keyUrl && (
+            <a href={preset.keyUrl} target="_blank" rel="noreferrer" title={`Opens ${preset.keyUrl} in your browser`} data-testid="openai-key-link">
+              {preset.id === 'lmstudio' ? 'Get LM Studio' : 'Get a free key'} ↗
+            </a>
+          )}
+        </p>
+      )}
+      <Field label="API key" title="Stored on this computer only. Leave empty for services that don't need one (like LM Studio).">
+        <input className="input mono grow" type="password" defaultValue={s.openaiKey} key={s.openaiUrl} placeholder={preset?.id === 'lmstudio' ? 'Not needed' : 'Paste the key from the service'} onBlur={(e) => update({ openaiKey: e.target.value.trim() })} data-testid="openai-key" />
+      </Field>
+      <Field label="Model" title="Which of the service's models plans the quest. The list comes from the service itself, so it's always current.">
+        <div className="row" style={{ gap: 6 }}>
+          {models && models.length ? (
+            <select className="input grow mono" value={models.includes(s.openaiModel) ? s.openaiModel : ''} onChange={(e) => update({ openaiModel: e.target.value })} data-testid="openai-model">
+              {!models.includes(s.openaiModel) && <option value="">Pick a model</option>}
+              {models.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input className="input mono grow" value={s.openaiModel} placeholder="Press Find models" onChange={(e) => update({ openaiModel: e.target.value.trim() })} data-testid="openai-model" />
+          )}
+          <button className="btn small ghost" disabled={!s.openaiUrl || busy} onClick={() => void find()} title="Ask the service which models it offers now (this also checks your key)" data-testid="openai-find-models">
+            <Icon name="redo" size={12} /> {busy ? 'Looking…' : 'Find models'}
+          </button>
+        </div>
+      </Field>
+      {models && <p className="dim small" style={{ margin: 0 }} data-testid="openai-found">{models.length ? `Key works: ${models.length} model(s) available.` : 'The service lists no usable models for this key.'}</p>}
+      {error && (
+        <p className="small" style={{ margin: 0, color: 'var(--warn, #e0a040)' }} data-testid="openai-error">
+          {error}
+        </p>
+      )}
+      <Field label="API address" title="Where the app sends requests. This is not a web page: opening it in a browser shows an error, which is normal.">
         <input className="input mono grow" value={s.openaiUrl} placeholder="https://…/v1" onChange={(e) => update({ openaiUrl: e.target.value.trim() })} data-testid="openai-url" />
       </Field>
-      <Field label="API key" title="Stored on this computer only. Leave empty for services that don't need one (like LM Studio).">
-        <input className="input mono grow" type="password" defaultValue={s.openaiKey} placeholder="Key from the service" onBlur={(e) => update({ openaiKey: e.target.value.trim() })} data-testid="openai-key" />
-      </Field>
-      <Field label="Model" title="The model's name at that service.">
-        <input className="input mono grow" value={s.openaiModel} placeholder="model name" onChange={(e) => update({ openaiModel: e.target.value.trim() })} data-testid="openai-model" />
-      </Field>
       <p className="dim small" style={{ margin: 0 }}>
-        Your text and a list of the characters, places, voices and races in your load order are sent to this service. Free tiers have daily limits, and plans can need more fixing than Claude's.
+        The API address is for the app, not a web page. Your text and a list of the characters, places, voices and races in your load order are sent to this service. Free tiers have daily limits, and plans can need more fixing than Claude's.
       </p>
     </>
   );

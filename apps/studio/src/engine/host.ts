@@ -102,6 +102,7 @@ import {
   type NewExteriorCellOptions,
   type NewWorldspaceOptions,
   ollamaModels,
+  serviceModels,
   OLLAMA_URL,
   type AiProvider,
 } from '@tes5/workspace';
@@ -1068,6 +1069,11 @@ export class EngineHost {
   /** Models installed in Ollama on this computer. */
   ollamaModels(url?: string) {
     return ollamaModels(url || OLLAMA_URL);
+  }
+
+  /** The models an online (OpenAI-style) service offers right now; also checks the key. */
+  aiServiceModels(url: string, apiKey?: string) {
+    return serviceModels({ url, apiKey });
   }
 
   /** Write the chosen drafts into the quest (one undo step). */

@@ -19,12 +19,17 @@ export type AiProvider =
 
 export const OLLAMA_URL = 'http://localhost:11434';
 
-/** Free online services with the OpenAI-style API, for the settings' quick picks. */
+/**
+ * Free online services with the OpenAI-style API, for the settings' quick picks.
+ * `url` is the API address the app talks to (not a web page); `keyUrl` is the
+ * web page where a free key is made. The model is only a starting point: the
+ * app asks the service for its current models (free models come and go).
+ */
 export const OPENAI_PRESETS: { id: string; label: string; url: string; model: string; keyUrl?: string; note: string }[] = [
-  { id: 'gemini', label: 'Google Gemini (free tier)', url: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.5-flash', keyUrl: 'https://aistudio.google.com/apikey', note: 'Free key from Google AI Studio; daily limits apply.' },
-  { id: 'groq', label: 'Groq (free tier)', url: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile', keyUrl: 'https://console.groq.com/keys', note: 'Free key; fast, with per-minute limits.' },
-  { id: 'openrouter', label: 'OpenRouter (free models)', url: 'https://openrouter.ai/api/v1', model: 'meta-llama/llama-3.3-70b-instruct:free', keyUrl: 'https://openrouter.ai/keys', note: 'Free key; pick a model ending in ":free".' },
-  { id: 'lmstudio', label: 'LM Studio (on this computer)', url: 'http://localhost:1234/v1', model: '', note: 'Start its local server; no key needed.' },
+  { id: 'gemini', label: 'Google Gemini (free tier)', url: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-3.8-flash', keyUrl: 'https://aistudio.google.com/apikey', note: 'Sign in with a Google account and press "Create API key". Free, with daily limits.' },
+  { id: 'groq', label: 'Groq (free tier)', url: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile', keyUrl: 'https://console.groq.com/keys', note: 'Make a free account and press "Create API Key". Fast, with per-minute and daily limits.' },
+  { id: 'openrouter', label: 'OpenRouter (free models)', url: 'https://openrouter.ai/api/v1', model: '', keyUrl: 'https://openrouter.ai/settings/keys', note: 'Make a free account and create a key. Only models ending in ":free" are listed; they change often.' },
+  { id: 'lmstudio', label: 'LM Studio (on this computer)', url: 'http://localhost:1234/v1', model: '', keyUrl: 'https://lmstudio.ai', note: 'Install LM Studio, download a model in it and start its local server (Developer tab). No key needed.' },
 ];
 
 /** What to call the AI in messages ("Claude", "qwen3 (Ollama)"…). */
@@ -129,6 +134,39 @@ export async function ollamaModels(url = OLLAMA_URL, fetchImpl: Fetch = globalTh
   if (!res.ok) throw new WorkspaceError(`Ollama answered ${res.status} at ${url}`);
   const j = await res.json();
   return ((j?.models ?? []) as { name?: string; model?: string }[]).map((m) => m.name ?? m.model ?? '').filter(Boolean);
+}
+
+/**
+ * The models an OpenAI-style service offers right now (GET …/models), best
+ * first: on OpenRouter only free ones, with structured output first; chat
+ * models only (no embedding, speech or image models).
+ */
+export async function serviceModels(p: { url: string; apiKey?: string }, fetchImpl: Fetch = globalThis.fetch as unknown as Fetch): Promise<string[]> {
+  const base = p.url.trim().replace(/\/+$/, '');
+  if (!base) throw new WorkspaceError('Fill in the service address first');
+  let res;
+  try {
+    res = await fetchImpl(`${base}/models`, { method: 'GET', headers: p.apiKey ? { authorization: `Bearer ${p.apiKey}` } : {} });
+  } catch {
+    throw new WorkspaceError(`Couldn't reach ${hostOf(base) || base}. Check the address${/localhost|127\.0\.0\.1/.test(base) ? ' and that the local server is started' : ' and your internet connection'}.`);
+  }
+  if (res.status === 401 || res.status === 403) throw new WorkspaceError(`${hostOf(base)} rejected the API key. Check it, or make a new one on the service's key page.`);
+  if (!res.ok) throw new WorkspaceError(`${hostOf(base)} answered ${res.status} when asked for its models. Check the address.`);
+  const j = await res.json();
+  const list = ((j?.data ?? j?.models ?? []) as { id?: string; name?: string; supported_parameters?: string[] }[])
+    .map((m) => ({ id: String(m.id ?? m.name ?? '').replace(/^models\//, ''), params: m.supported_parameters ?? [] }))
+    .filter((m) => m.id && !/embed|tts|whisper|transcri|speech|audio|image|imagen|veo|guard|moderation|safety|aqa/i.test(m.id));
+  const openrouter = /openrouter\.ai/i.test(base);
+  const usable = openrouter ? list.filter((m) => m.id.endsWith(':free')) : list;
+  const score = (m: { id: string; params: string[] }) =>
+    (m.params.includes('structured_outputs') ? 4 : 0) + (m.params.includes('response_format') ? 2 : 0) + (/gemini/i.test(m.id) && /flash/i.test(m.id) && !/lite|preview|exp|thinking/i.test(m.id) ? 1 : 0);
+  const version = (id: string) => Number(/(\d+(?:\.\d+)?)/.exec(id)?.[1] ?? 0);
+  return usable.sort((a, b) => score(b) - score(a) || version(b.id) - version(a.id) || a.id.localeCompare(b.id)).map((m) => m.id);
+}
+
+/** The model to use from a service's list: the one asked for if it's still offered, else the best one listed. */
+export function pickModel(models: string[], wanted: string): string {
+  return models.includes(wanted) ? wanted : (models[0] ?? wanted);
 }
 
 /** Open models often wrap JSON in code fences or think aloud first: keep just the JSON object. */

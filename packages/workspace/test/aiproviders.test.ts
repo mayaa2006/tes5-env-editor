@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { QuestPlanner, aiName, aiReady, chatSend, cleanJson, exampleQuestPlan, ollamaModels } from '../src';
+import { OPENAI_PRESETS, QuestPlanner, aiName, aiReady, chatSend, cleanJson, exampleQuestPlan, ollamaModels, pickModel, serviceModels } from '../src';
 
 type Call = { url: string; body: any; headers: Record<string, string> };
 
@@ -85,5 +85,28 @@ describe('free AI providers', () => {
     expect(aiReady({ kind: 'openai', url: 'https://a/v1', model: 'm' })).toBe(true);
     expect(aiReady({ kind: 'claude', apiKey: ' ' })).toBe(false);
     expect(cleanJson('Sure! Here it is:\n{"a":1}\nHope that helps')).toBe('{"a":1}');
+  });
+
+  it("asks an online service for its current models, so stale names aren't used", async () => {
+    // OpenRouter: only free models, structured-output ones first; no key needed to list.
+    const or = server({ json: { data: [{ id: 'paid/model' }, { id: 'a/plain:free', supported_parameters: [] }, { id: 'b/json:free', supported_parameters: ['response_format', 'structured_outputs'] }, { id: 'c/guard:free' }] } });
+    expect(await serviceModels({ url: 'https://openrouter.ai/api/v1/' }, or.fetch)).toEqual(['b/json:free', 'a/plain:free']);
+    expect(or.calls[0]!.url).toBe('https://openrouter.ai/api/v1/models');
+    // Gemini: "models/" prefixes dropped, embedding/speech models left out, the newest stable flash first.
+    const g = server({ json: { data: [{ id: 'models/gemini-2.5-pro' }, { id: 'models/text-embedding-004' }, { id: 'models/gemini-3.8-flash' }, { id: 'models/gemini-3.8-flash-lite' }, { id: 'models/gemini-2.5-flash' }, { id: 'models/gemini-3.8-flash-tts' }] } });
+    const gem = await serviceModels({ url: 'https://generativelanguage.googleapis.com/v1beta/openai', apiKey: 'k' }, g.fetch);
+    expect(gem[0]).toBe('gemini-3.8-flash');
+    expect(gem).not.toContain('text-embedding-004');
+    expect(gem).not.toContain('gemini-3.8-flash-tts');
+    expect(g.calls[0]!.headers.authorization).toBe('Bearer k');
+    // A model the service no longer offers is swapped for one it does.
+    expect(pickModel(['x', 'y'], 'gone')).toBe('x');
+    expect(pickModel(['x', 'y'], 'y')).toBe('y');
+    await expect(serviceModels({ url: 'https://api.groq.com/openai/v1', apiKey: 'bad' }, server({ status: 401 }).fetch)).rejects.toThrow(/rejected the API key/);
+    // Every preset has a key or download page (a web page), separate from its API address.
+    for (const p of OPENAI_PRESETS) {
+      expect(p.keyUrl).toMatch(/^https:\/\//);
+      expect(p.keyUrl).not.toBe(p.url);
+    }
   });
 });
