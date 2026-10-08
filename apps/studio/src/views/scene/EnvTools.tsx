@@ -145,7 +145,8 @@ const SCULPT_MODES: { id: TerrainMode; label: string; help: string }[] = [
 const GROUND_HINT = 'Ground: drag to paint the texture · Ctrl+drag to fade it · [ ] brush size · Esc to stop';
 
 /** Landscape textures to paint with, each with a colour swatch. */
-function GroundTexturePicker({ value, onChange }: { value: FormKey | null; onChange: (k: FormKey) => void }) {
+/** Landscape textures to pick from, with a colour swatch each. With `noneLabel`, "none" is a choice (and the default). */
+export function GroundTexturePicker({ value, onChange, noneLabel }: { value: FormKey | null; onChange: (k: FormKey | null) => void; noneLabel?: string }) {
   const [list, setList] = useState<{ formKey: FormKey; editorId?: string; name?: string }[]>([]);
   const [swatches, setSwatches] = useState<Record<string, string>>({});
   const [q, setQ] = useState('');
@@ -153,7 +154,7 @@ function GroundTexturePicker({ value, onChange }: { value: FormKey | null; onCha
     void engine((c) => c.call('landscapeTextures'), { refreshSession: false }).then((l) => {
       if (!l) return;
       setList(l);
-      if (!value && l[0]) onChange(l[0].formKey);
+      if (!value && l[0] && !noneLabel) onChange(l[0].formKey);
     });
   }, []);
   const shown = list.filter((t) => !q || `${t.editorId ?? ''} ${t.name ?? ''}`.toLowerCase().includes(q.toLowerCase())).slice(0, 200);
@@ -162,11 +163,17 @@ function GroundTexturePicker({ value, onChange }: { value: FormKey | null; onCha
       if (!(t.formKey in swatches))
         void engine((c) => c.call('landscapeSwatch', t.formKey), { refreshSession: false }).then((rgb) => setSwatches((s) => ({ ...s, [t.formKey]: rgb ? `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})` : 'transparent' })));
   }, [shown.map((t) => t.formKey).join()]);
-  if (!list.length) return <div className="dim small">No landscape textures in your load order.</div>;
+  if (!list.length) return <div className="dim small">No landscape textures in your load order{noneLabel ? '; the game\'s default ground is used.' : '.'}</div>;
   return (
     <div className="col" style={{ gap: 4 }}>
       <input className="input" placeholder="Find a ground texture…" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.stopPropagation()} data-testid="ground-texture-search" />
       <div className="list" style={{ maxHeight: 180, overflow: 'auto' }} data-testid="ground-texture-list">
+        {noneLabel && !q && (
+          <div className={`list-item ${!value ? 'selected' : ''}`} onClick={() => onChange(null)} data-testid="ground-texture-none">
+            <span style={{ width: 14, height: 14, borderRadius: 3, background: 'var(--bg-2)', border: '1px dashed var(--border)', flex: 'none' }} />
+            <span className="grow dim">{noneLabel}</span>
+          </div>
+        )}
         {shown.map((t) => (
           <div key={t.formKey} className={`list-item ${value === t.formKey ? 'selected' : ''}`} onClick={() => onChange(t.formKey)} title={t.formKey} data-testid="ground-texture">
             <span style={{ width: 14, height: 14, borderRadius: 3, background: swatches[t.formKey] ?? 'var(--bg-2)', border: '1px solid var(--border)', flex: 'none' }} />

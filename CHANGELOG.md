@@ -2,6 +2,18 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.13.0
+
+- **New worldspaces:** Cells → **New worldspace**. Start with a square of flat ground (1×1 up to 7×7 cells), pick a ground texture, water, and weather and music like another worldspace (Tamriel by default). Its persistent cell is made too.
+- **New outdoor cells:**
+  - **+ Cell** on a worldspace in the Cells list fills in the nearest free spot.
+  - In the scene, a dashed **E+** (or W+, N+, S+) means there's no cell that way yet: click it to make one and go there.
+  - The new ground meets the cells around it without a step, and uses their ground texture and water.
+- **New cell dialog** has three tabs: **Indoors**, **Outdoors** and **New worldspace**.
+- Outdoor cells without an Editor ID show as **Wilderness** (with their grid position) instead of a form ID.
+- **Fix:** an empty outdoor cell is framed when you open it.
+- **Fix:** editing a vanilla worldspace's persistent cell kept it where the game expects (directly under the worldspace), not in a cell block.
+
 ## 0.12.0
 
 - **Paint the ground:** World tools → **Terrain** → **Paint**. Pick a landscape texture (search it, see its colour), press **Start painting** and drag. Ctrl+drag fades it.

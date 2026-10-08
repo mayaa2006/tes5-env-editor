@@ -977,7 +977,8 @@ export class Workspace {
     if (p.topic !== undefined) out.topic = this.keyOf(slot, p.topic) ?? undefined;
     if (p.worldspace !== undefined) out.worldspace = this.keyOf(slot, p.worldspace) ?? undefined;
     if (p.persistent !== undefined) out.persistent = p.persistent;
-    if (record.sig === 'CELL' && p.worldspace !== undefined && !readCellGrid(record)) out.worldCell = true;
+    // The worldspace's persistent cell sits directly under the world (vanilla ones also carry a grid).
+    if (record.sig === 'CELL' && p.worldspace !== undefined && (!readCellGrid(record) || (record.flags & RecordFlags.Persistent) !== 0)) out.worldCell = true;
     return out;
   }
 
@@ -1124,7 +1125,7 @@ export class Workspace {
   }
 
   /** Create a new record in the active plugin. */
-  createRecord(sig: string, data: Record<string, unknown>, where: { cell?: FormKey; topic?: FormKey; worldspace?: FormKey; persistent?: boolean } = {}, flags = 0): FormKey {
+  createRecord(sig: string, data: Record<string, unknown>, where: { cell?: FormKey; topic?: FormKey; worldspace?: FormKey; persistent?: boolean; worldCell?: boolean } = {}, flags = 0): FormKey {
     if (!getRecordDef(sig)) throw new WorkspaceError(`Creating ${sig} records is not supported yet (no schema)`);
     this.checkEditorId(data.editorId, null, undefined);
     this.warnUnencodable(data);

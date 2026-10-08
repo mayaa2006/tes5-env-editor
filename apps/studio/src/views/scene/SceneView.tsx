@@ -9,7 +9,7 @@ import type { PlacedRef } from '@tes5/workspace';
 import { Checkbox, Field, Icon, Menu, MenuItem, Modal, Select, useQuery } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 import { EnvTools, type ToolHandlers } from './EnvTools';
-import { NewCellDialog } from './NewCellDialog';
+import { NewCellDialog, cellLabel, type NewCellKind } from './NewCellDialog';
 import { SnapSettings } from './SnapSettings';
 import { Viewport, type Tool } from './viewport';
 
@@ -33,7 +33,7 @@ export default function SceneView() {
   const [navDrawing, setNavDrawing] = useState(false);
   const [dropping, setDropping] = useState(false);
   const [hiddenTick, setHiddenTick] = useState(0);
-  const [newCell, setNewCell] = useState(false);
+  const [newCell, setNewCell] = useState<NewCellKind | null>(null);
   const [ortho, setOrtho] = useState(false);
   const [dock, setDock] = useState<'outliner' | 'tools' | null>('outliner');
   const [generate, setGenerate] = useState(false);
@@ -166,6 +166,8 @@ export default function SceneView() {
   };
 
   // Feed data into the viewport.
+  // Terrain first: framing a cell with nothing placed in it yet uses its ground.
+  useEffect(() => vpRef.current?.setTerrain(terrain ?? []), [terrain]);
   useEffect(() => {
     const vp = vpRef.current;
     if (!vp) return;
@@ -179,7 +181,6 @@ export default function SceneView() {
   useEffect(() => {
     if (info) vpRef.current?.setCellContext(info);
   }, [info?.formKey]);
-  useEffect(() => vpRef.current?.setTerrain(terrain ?? []), [terrain]);
   useEffect(() => vpRef.current?.setNavmeshes((navmeshes ?? []).map((n) => ({ key: n.formKey, nav: n.geometry, mine: n.source === session.activePlugin }))), [navmeshes, session.activePlugin]);
   useEffect(() => vpRef.current?.setSelection(sceneSelection), [sceneSelection, refs]);
   useEffect(() => vpRef.current?.setTool(tool), [tool]);
@@ -226,7 +227,7 @@ export default function SceneView() {
     }
   };
 
-  if (!cell) return <NoCell onNew={() => setNewCell(true)} newCell={newCell} closeNew={() => setNewCell(false)} />;
+  if (!cell) return <NoCell onNew={setNewCell} newCell={newCell} closeNew={() => setNewCell(null)} />;
 
   const toolBtn = (t: Tool, icon: string, label: string, key: string) => (
     <button className={`btn small ${tool === t ? 'active' : 'ghost'}`} title={`${label} tool: drag the handles in the view. Or press ${key} for a quick ${label.toLowerCase()} without switching tools.`} onClick={() => setTool(t)} aria-pressed={tool === t}>
@@ -240,8 +241,8 @@ export default function SceneView() {
   return (
     <div className="col scene-main" style={{ flex: 1, minHeight: 0 }}>
       <div className="viewport-toolbar">
-        <strong className="ellipsis" style={{ maxWidth: 180 }} title={`${info?.editorId ?? cell}${info?.name ? ` “${info.name}”` : ''} · ${cell}`}>
-          {info?.editorId ?? cell}
+        <strong className="ellipsis" style={{ maxWidth: 180 }} title={`${info ? cellLabel(info) : cell}${info?.name ? ` “${info.name}”` : ''} · ${cell}`}>
+          {info ? cellLabel(info) : cell}
         </strong>
         {info && !info.interior && info.grid && <span className="chip" title="Grid position of the current cell (new objects are placed in the cell under the cursor)">{`${info.grid.x}, ${info.grid.y}`}</span>}
         {outdoorArea && (
@@ -255,8 +256,26 @@ export default function SceneView() {
               ] as const
             ).map(([l, dx, dy, dir]) => {
               const n = neighbour(dx, dy);
+              if (!n && area && info?.grid && info.worldspace) {
+                const at = { x: info.grid.x + dx, y: info.grid.y + dy };
+                return (
+                  <button
+                    key={l}
+                    className="btn small ghost"
+                    style={{ borderStyle: 'dashed' }}
+                    data-testid={`cell-step-${dir}`}
+                    title={`No cell to the ${dir} yet: click to make one at ${at.x}, ${at.y} and go there. Its ground meets this one. Undo removes it.`}
+                    onClick={async () => {
+                      const key = await engine((c) => c.call('createExteriorCell', info.worldspace!, at, {}), { success: `Made a new cell at ${at.x}, ${at.y}` });
+                      if (key) useStore.getState().setCell(key);
+                    }}
+                  >
+                    {l}+
+                  </button>
+                );
+              }
               return (
-                <button key={l} className="btn small ghost" disabled={!n} title={n ? `Make the cell to the ${dir} (${n.editorId ?? `${n.grid.x}, ${n.grid.y}`}) the current one` : `No cell to the ${dir} in this worldspace`} onClick={() => n && useStore.getState().setCell(n.formKey)}>
+                <button key={l} className="btn small ghost" disabled={!n} data-testid={`cell-step-${dir}`} title={n ? `Make the cell to the ${dir} (${n.editorId ?? `${n.grid.x}, ${n.grid.y}`}) the current one` : `No cell to the ${dir} in this worldspace`} onClick={() => n && useStore.getState().setCell(n.formKey)}>
                   {l}
                 </button>
               );
@@ -442,20 +461,25 @@ export default function SceneView() {
           <SnapSettings />
         </Modal>
       )}
-      {newCell && <NewCellDialog onClose={() => setNewCell(false)} />}
+      {newCell && <NewCellDialog kind={newCell} onClose={() => setNewCell(null)} />}
     </div>
   );
 }
 
-function NoCell({ onNew, newCell, closeNew }: { onNew: () => void; newCell: boolean; closeNew: () => void }) {
+function NoCell({ onNew, newCell, closeNew }: { onNew: (k: NewCellKind) => void; newCell: NewCellKind | null; closeNew: () => void }) {
   return (
     <div className="empty" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
       <Icon name="scene" size={36} />
       <div>Pick a cell in the Cells list on the left to open it here.</div>
-      <button className="btn primary" onClick={onNew}>
-        <Icon name="plus" /> New interior cell
-      </button>
-      {newCell && <NewCellDialog onClose={closeNew} />}
+      <div className="row" style={{ gap: 8 }}>
+        <button className="btn primary" onClick={() => onNew('interior')} title="A cell on its own, like a house, cave or dungeon">
+          <Icon name="plus" /> New interior cell
+        </button>
+        <button className="btn" onClick={() => onNew('world')} title="A new outdoor world with a square of flat ground to start from" data-testid="no-cell-new-worldspace">
+          <Icon name="plus" /> New worldspace
+        </button>
+      </div>
+      {newCell && <NewCellDialog kind={newCell} onClose={closeNew} />}
     </div>
   );
 }
