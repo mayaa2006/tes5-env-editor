@@ -2,7 +2,7 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
-## 0.5.0
+## 0.6.0
 
 - **Things happen at quest stages:** a quest plan can now make enemies appear, turn someone hostile or friendly, unlock or lock a door or chest, make something appear or vanish, move or kill a character, fade to black, play a sound, change the weather, show a message, start another quest or move the player when a stage is reached. Claude adds them from your text ("bandits ambush you", "the door unlocks"); check and change them in the plan's **What happens at stages** card. **Change with a plan** updates them too.
 - **Undo in the plan review:** **Undo edit** takes back your last edit to a plan before you build it.
@@ -27,6 +27,14 @@ Each version here is published as a Windows installer and portable exe on the [r
 - **World view characters** get the same: weight-blended bodies, their own skin tone, and their face tint.
 - **No more white blobs:** the boxes that mist, smoke and other effects carry for the editor are hidden; glows, webs and splashes use their own colour and blending; water is blue. Marker shapes inside furniture and dragon perches are hidden unless View → **Marker shapes on furniture** is on.
 - **Fixes:** the pre-release check no longer shows problems you've already fixed (it updates itself); Escape now closes dialogs while you're typing in them; armor lying in the world (on racks and tables) now shows its ground model instead of nothing.
+
+## 0.5.0
+
+- **Body tab (BodySlide):** shape bodies with the sliders and presets mods already ship for BodySlide.
+  - Finds slider sets and presets in your Data and mod folders (`CalienteTools\BodySlide`); **Rescan** looks again.
+  - Sliders can have one value, or a different one at weight 0 and weight 100. A **preview weight** slider shows the blend, and the 3D view turns.
+  - **Build body** writes the `_0` and `_1` meshes into your mod, as BodySlide does. **Save preset** writes a preset BodySlide can use too. Each is one undo step.
+  - Not checked against real body mods yet; see the ROADMAP.
 
 ## 0.4.0
 

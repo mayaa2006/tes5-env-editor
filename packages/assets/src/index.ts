@@ -5,3 +5,4 @@ export * from './nif';
 export * from './nif-writer';
 export * from './tri';
 export * from './nif-blocks';
+export * from './osd';

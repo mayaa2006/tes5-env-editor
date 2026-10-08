@@ -46,6 +46,8 @@ import {
   type ScatterOptions,
   NpcService,
   FaceGenService,
+  BodySlideService,
+  type SliderValues,
   type FaceSculpt,
   QuestGraphService,
   QuestService,
@@ -159,6 +161,7 @@ export class EngineHost {
   actorModels?: ActorModels;
   npcs?: NpcService;
   faces?: FaceGenService;
+  bodies?: BodySlideService;
   quests?: QuestService;
   scripts?: ScriptService;
   triggers?: TriggerService;
@@ -235,6 +238,7 @@ export class EngineHost {
     this.npcs = new NpcService(ws);
     this.actorModels = new ActorModels(ws, this.npcs);
     this.faces = new FaceGenService(ws, this.npcs);
+    this.bodies = new BodySlideService(ws);
     this.scripts = new ScriptService(ws);
     this.scripts.runner = this.runner;
     this.quests = new QuestService(ws, this.scripts);
@@ -620,6 +624,35 @@ export class EngineHost {
     const full = p.startsWith('meshes\\') ? p : `meshes\\${p}`;
     const t = parseTri(await this.requireWs().vfs.read(full));
     return { morphs: t.morphs.map((m) => ({ name: m.name, deltas: m.deltas })), vertexCount: t.vertices.length / 3 };
+  }
+
+  // ---------------------------------------------------------------- BodySlide
+
+  /** Every BodySlide slider set found in your Data folders (rescans). */
+  bodySets() {
+    return this.bodies!.list();
+  }
+
+  async bodySliders(set: string) {
+    return { sliders: await this.bodies!.sliders(set), defaults: await this.bodies!.defaults(set), warnings: await this.bodies!.check(set).catch(() => [] as string[]) };
+  }
+
+  bodyPresets(set?: string) {
+    return this.bodies!.presets(set);
+  }
+
+  /** The body at a weight (0–1) for the 3D view. */
+  bodyPreview(set: string, values: SliderValues, weight: number) {
+    return this.bodies!.preview(set, values, weight);
+  }
+
+  /** Write the 0 and 1 weight meshes into your mod. One undo step. */
+  bodyBuild(set: string, values: SliderValues, output?: { folder?: string; file?: string }) {
+    return this.bodies!.build(set, values, output);
+  }
+
+  bodySavePreset(name: string, set: string, values: SliderValues) {
+    return this.bodies!.savePreset(name, set, values);
   }
 
   // ---------------------------------------------------------------- NPCs

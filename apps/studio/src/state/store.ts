@@ -3,7 +3,7 @@ import type { FormKey } from '@tes5/esp';
 import type { EngineClient } from '../engine/client';
 import type { SessionInfo } from '../engine/host';
 
-export type WorkspaceTab = 'scene' | 'npc' | 'items' | 'magic' | 'quest' | 'script' | 'records' | 'clean' | 'automations' | 'plugins' | 'release';
+export type WorkspaceTab = 'scene' | 'npc' | 'body' | 'items' | 'magic' | 'quest' | 'script' | 'records' | 'clean' | 'automations' | 'plugins' | 'release';
 
 /** Where you are in the Items or Magic workspace: the category and the record open in it. */
 export interface CatalogPlace {
