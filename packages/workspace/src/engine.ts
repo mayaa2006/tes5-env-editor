@@ -686,12 +686,13 @@ export class Workspace {
   }
 
   /** Search winning records by EditorID / name / FormID text. */
-  search(opts: { sigs?: readonly string[]; query?: string; plugin?: string; limit?: number; offset?: number } = {}): { total: number; items: RecordSummary[] } {
+  search(opts: { sigs?: readonly string[]; query?: string; plugin?: string; named?: boolean; limit?: number; offset?: number } = {}): { total: number; items: RecordSummary[] } {
     const q = opts.query?.trim().toLowerCase() ?? '';
     const plugin = opts.plugin?.toLowerCase();
     const matches: WinnerEntry[] = [];
     for (const e of this.winnerEntries(opts.sigs)) {
       if (plugin && e.slot.name.toLowerCase() !== plugin && parseFormKey(e.key).plugin.toLowerCase() !== plugin) continue;
+      if (opts.named && !this.nameOf(e)?.trim()) continue;
       if (q) {
         const edid = this.edidOf(e);
         if (!(edid?.toLowerCase().includes(q) || this.nameOf(e)?.toLowerCase().includes(q) || e.key.toLowerCase().includes(q))) continue;

@@ -95,6 +95,8 @@ Quests are built on a **quest map**: stages are boxes, and you drag a connection
 
 Other tabs keep the stage list, objectives, aliases and voice-file names.
 
+The quest list on the left shows only quests that have a name by default (the hidden internal ones are left out); untick **Only quests with names** to see every quest.
+
 #### Quest from writing
 
 **Quests → From text:** paste a design document, or just a conversation with no tags, and Claude plans the whole quest:
