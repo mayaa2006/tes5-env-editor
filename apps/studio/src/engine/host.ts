@@ -98,6 +98,9 @@ import {
   type TestLaunchOptions,
   type TriggerSpec,
   type WorkspaceEvent,
+  WorldspaceService,
+  type NewExteriorCellOptions,
+  type NewWorldspaceOptions,
 } from '@tes5/workspace';
 import type { CleanOptions } from '@tes5/cleaner';
 
@@ -157,6 +160,7 @@ export class EngineHost {
   ws?: Workspace;
   world?: WorldService;
   terrainService?: TerrainService;
+  worldspaceService?: WorldspaceService;
   landTextures?: LandTextureBaker;
   actorModels?: ActorModels;
   npcs?: NpcService;
@@ -234,6 +238,7 @@ export class EngineHost {
     this.ws = ws;
     this.world = new WorldService(ws);
     this.terrainService = new TerrainService(ws, this.world);
+    this.worldspaceService = new WorldspaceService(ws, this.world, this.terrainService);
     this.landTextures = new LandTextureBaker(ws, this.world);
     this.npcs = new NpcService(ws);
     this.actorModels = new ActorModels(ws, this.npcs);
@@ -550,6 +555,21 @@ export class EngineHost {
 
   createInteriorCell(editorId: string, name?: string) {
     return this.world!.createInteriorCell(editorId, name, { ambient: [80, 70, 60] });
+  }
+
+  /** A new worldspace with a square of flat outdoor cells; returns its centre cell and the rest. */
+  createWorldspace(opts: NewWorldspaceOptions) {
+    return this.worldspaceService!.createWorldspace(opts);
+  }
+
+  /** A new outdoor cell whose ground meets the cells around it. */
+  createExteriorCell(worldspace: FormKey, grid: { x: number; y: number }, opts: NewExteriorCellOptions = {}) {
+    return this.worldspaceService!.createExteriorCell(worldspace, grid, opts);
+  }
+
+  /** The nearest free grid spot for a new outdoor cell. */
+  freeCellSpot(worldspace: FormKey, near?: { x: number; y: number }) {
+    return this.worldspaceService!.freeSpotNear(worldspace, near);
   }
 
   /**

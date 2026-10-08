@@ -364,7 +364,7 @@ export class TerrainService {
   }
 
   /** Write a LAND record's texture layers (BTXT, then ATXT + VTXT per layer, for each quarter-cell). */
-  private writeLayers(land: FormKey, quads: LandQuadrant[]): void {
+  writeLayers(land: FormKey, quads: LandQuadrant[], label = 'Paint ground texture'): void {
     const v = this.ws.view(land)!;
     const layerSigs = new Set(['BTXT', 'ATXT', 'VTXT']);
     const keep = v.unknown.filter((u) => !layerSigs.has(u.sig));
@@ -398,6 +398,6 @@ export class TerrainService {
     // Later fields keep their place after the layers.
     const shift = index - (old.length ? Math.min(...old.map((u) => u.index)) + old.length : 4);
     const after = keep.map((u) => (old.length && u.index > Math.max(...old.map((o) => o.index)) ? { ...u, index: u.index + shift } : u));
-    this.ws.updateRecord(land, v.data, { unknown: [...after, ...subs].sort((a, b) => a.index - b.index), label: 'Paint ground texture' });
+    this.ws.updateRecord(land, v.data, { unknown: [...after, ...subs].sort((a, b) => a.index - b.index), label });
   }
 }

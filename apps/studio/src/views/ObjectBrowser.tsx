@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
+import type { FormKey } from '@tes5/esp';
 import { Icon, Tabs, useDebounced, useQuery } from '../components/ui';
 import { engine, useStore } from '../state/store';
-import { NewCellDialog } from './scene/NewCellDialog';
+import { NewCellDialog, cellLabel, type NewCellKind } from './scene/NewCellDialog';
 
 type Tab = 'objects' | 'cells' | 'assets';
 
@@ -142,7 +143,7 @@ function Cells() {
   const setCell = useStore((s) => s.setCell);
   const setTab = useStore((s) => s.setTab);
   const [q, setQ] = useState('');
-  const [newCell, setNewCell] = useState(false);
+  const [newCell, setNewCell] = useState<{ kind: NewCellKind; worldspace?: FormKey } | null>(null);
   const { data: cells } = useQuery(() => client?.call('cells', {}), [client]);
   const { data: worlds } = useQuery(() => client?.call('worldspaces'), [client]);
   const filtered = (cells ?? []).filter((c) => !q || (c.editorId ?? '').toLowerCase().includes(q.toLowerCase()) || (c.name ?? '').toLowerCase().includes(q.toLowerCase()));
@@ -158,7 +159,7 @@ function Cells() {
       }}
       title={c.formKey}
     >
-      <span className="name">{c.editorId ?? c.formKey}</span>
+      <span className="name">{cellLabel(c)}</span>
       {c.grid && <span className="mono faint small">{`${c.grid.x}, ${c.grid.y}`}</span>}
       {c.inActive && <span className="chip accent">edited</span>}
       <span className="meta">{c.name ?? ''}</span>
@@ -172,23 +173,35 @@ function Cells() {
       <div className="scroll" style={{ flex: 1 }}>
         <div className="panel-header row">
           <span className="grow">Interiors ({interiors.length})</span>
-          <button className="btn small ghost" title="Create a new interior cell" onClick={() => setNewCell(true)} data-testid="new-cell">
+          <button className="btn small ghost" title="Create a new interior cell (or an outdoor one, or a new worldspace)" onClick={() => setNewCell({ kind: 'interior' })} data-testid="new-cell">
             <Icon name="plus" size={12} /> New
           </button>
         </div>
         <ul className="list" data-testid="cell-list">
           {interiors.map(item)}
         </ul>
+        <div className="panel-header row">
+          <span className="grow">Outdoors</span>
+          <button className="btn small ghost" title="Create a new outdoor world, with a square of flat ground to start from" onClick={() => setNewCell({ kind: 'world' })} data-testid="new-worldspace">
+            <Icon name="plus" size={12} /> New worldspace
+          </button>
+        </div>
+        {!byWorld.length && !q && <p className="dim small" style={{ padding: '4px 10px' }}>No outdoor cells yet. Make a worldspace to build outside.</p>}
         {byWorld.map(({ w, cells: cs }) => (
           <div key={w.formKey}>
-            <div className="panel-header">
-              {w.editorId} ({cs.length})
+            <div className="panel-header row">
+              <span className="grow ellipsis" title={w.name ?? undefined}>
+                {w.editorId} ({cs.length})
+              </span>
+              <button className="btn small ghost" title={`Add an outdoor cell to ${w.editorId ?? 'this worldspace'}; its ground meets the cells around it`} onClick={() => setNewCell({ kind: 'exterior', worldspace: w.formKey })} data-testid="new-exterior-cell">
+                <Icon name="plus" size={12} /> Cell
+              </button>
             </div>
             <ul className="list">{cs.map(item)}</ul>
           </div>
         ))}
       </div>
-      {newCell && <NewCellDialog onClose={() => setNewCell(false)} />}
+      {newCell && <NewCellDialog kind={newCell.kind} worldspace={newCell.worldspace} onClose={() => setNewCell(null)} />}
     </div>
   );
 }

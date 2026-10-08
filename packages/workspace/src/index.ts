@@ -32,6 +32,7 @@ export * from './facekit';
 export * from './newrecord';
 export * from './catalog';
 export * from './terrain';
+export * from './worldspace';
 export * from './actormodel';
 export * from './landtex';
 export * from './xml';

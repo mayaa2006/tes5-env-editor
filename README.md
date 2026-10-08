@@ -31,6 +31,7 @@ Three.js viewport with Blender controls:
 - **Drag and drop:** drag base objects or raw `.nif` files from the browser into the scene. A Static base record is created for meshes automatically, with bounds.
 - **Scene:** outliner, LAND terrain with its real ground textures, cell lighting preview.
 - **Outdoors:** an outdoor cell opens with its neighbours around it (View → **Outdoors, also load**: 0, 1 or 2 cells around), and the **W / N / S / E** buttons step to the next cell. Objects you drop land in the cell under them. The outliner lists everything in view, or **only the current cell**.
+- **New cells and worldspaces:** the Cells list has **New** (indoors), **New worldspace** and **+ Cell** on each worldspace. A new worldspace starts as a square of flat ground (1×1 up to 7×7 cells) with its persistent cell, an optional ground texture, water, and weather and music taken from another worldspace (Tamriel by default). Outdoors, a dashed **W+ / N+ / S+ / E+** button means there's no cell that way yet: click it to make one and go there. New ground meets the cells around it and uses their ground texture. Each is one undo step.
 - **Characters as people:** placed characters show with their body, outfit and head (their face file, or the race's head) instead of a capsule, following templates and leveled lists like the game. Turn it off under View.
 
 #### Terrain sculpting and ground painting

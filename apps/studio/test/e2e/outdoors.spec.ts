@@ -18,8 +18,8 @@ for (const size of [
     // The neighbour to the west is loaded too; there's nothing to the east.
     const steps = page.getByTestId('cell-steps');
     await expect(steps.getByRole('button', { name: 'W' })).toBeEnabled();
-    await expect(steps.getByRole('button', { name: 'E' })).toBeDisabled();
-    await expect(steps.getByRole('button', { name: 'E' })).toHaveAttribute('title', 'No cell to the east in this worldspace');
+    // No cell to the east: the button offers to make one.
+    await expect(steps.getByRole('button', { name: 'E+' })).toHaveAttribute('title', /No cell to the east yet: click to make one at 2, 0/);
     const outliner = page.getByTestId('outliner');
     await expect(outliner.getByText('Only the current cell')).toBeVisible();
     const own = await outliner.locator('.list-item').count();
