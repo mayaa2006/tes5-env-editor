@@ -21,7 +21,7 @@ export interface ToolHandlers {
 type Tab = 'place' | 'terrain' | 'paint' | 'path' | 'light' | 'clutter' | 'room' | 'doors';
 const TABS: { id: Tab; label: string; icon: string; title: string }[] = [
   { id: 'place', label: 'Place', icon: 'cube', title: 'Drop to surface, arrays' },
-  { id: 'terrain', label: 'Terrain', icon: 'scene', title: 'Sculpt the ground outdoors: raise, lower, smooth, flatten' },
+  { id: 'terrain', label: 'Terrain', icon: 'scene', title: 'Shape the ground outdoors (raise, lower, smooth, flatten) and paint its textures' },
   { id: 'paint', label: 'Paint', icon: 'palette', title: 'Scatter brush for plants, rocks and clutter' },
   { id: 'path', label: 'Path', icon: 'route', title: 'Roads, fences and rows of objects along a line' },
   { id: 'light', label: 'Light', icon: 'light', title: 'Lights for candles and fires, cell mood' },
@@ -133,25 +133,72 @@ function PlaceTab() {
 // ------------------------------------------------------------------ terrain
 
 type SculptMode = 'raise' | 'lower' | 'smooth' | 'flatten';
-const SCULPT_MODES: { id: SculptMode; label: string; help: string }[] = [
+type TerrainMode = SculptMode | 'paint';
+const SCULPT_MODES: { id: TerrainMode; label: string; help: string }[] = [
   { id: 'raise', label: 'Raise', help: 'Push the ground up under the brush (Ctrl+drag lowers).' },
   { id: 'lower', label: 'Lower', help: 'Dig the ground down under the brush (Ctrl+drag raises).' },
   { id: 'smooth', label: 'Smooth', help: 'Even out bumps and sharp edges.' },
   { id: 'flatten', label: 'Flatten', help: 'Level the ground to the height where the stroke starts: for building plots, roads and camps.' },
+  { id: 'paint', label: 'Paint', help: 'Paint a ground texture (grass, dirt, rock, snow…), blended in layers like the Creation Kit does.' },
 ];
 
+const GROUND_HINT = 'Ground: drag to paint the texture · Ctrl+drag to fade it · [ ] brush size · Esc to stop';
+
+/** Landscape textures to paint with, each with a colour swatch. */
+function GroundTexturePicker({ value, onChange }: { value: FormKey | null; onChange: (k: FormKey) => void }) {
+  const [list, setList] = useState<{ formKey: FormKey; editorId?: string; name?: string }[]>([]);
+  const [swatches, setSwatches] = useState<Record<string, string>>({});
+  const [q, setQ] = useState('');
+  useEffect(() => {
+    void engine((c) => c.call('landscapeTextures'), { refreshSession: false }).then((l) => {
+      if (!l) return;
+      setList(l);
+      if (!value && l[0]) onChange(l[0].formKey);
+    });
+  }, []);
+  const shown = list.filter((t) => !q || `${t.editorId ?? ''} ${t.name ?? ''}`.toLowerCase().includes(q.toLowerCase())).slice(0, 200);
+  useEffect(() => {
+    for (const t of shown.slice(0, 60))
+      if (!(t.formKey in swatches))
+        void engine((c) => c.call('landscapeSwatch', t.formKey), { refreshSession: false }).then((rgb) => setSwatches((s) => ({ ...s, [t.formKey]: rgb ? `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})` : 'transparent' })));
+  }, [shown.map((t) => t.formKey).join()]);
+  if (!list.length) return <div className="dim small">No landscape textures in your load order.</div>;
+  return (
+    <div className="col" style={{ gap: 4 }}>
+      <input className="input" placeholder="Find a ground texture…" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.stopPropagation()} data-testid="ground-texture-search" />
+      <div className="list" style={{ maxHeight: 180, overflow: 'auto' }} data-testid="ground-texture-list">
+        {shown.map((t) => (
+          <div key={t.formKey} className={`list-item ${value === t.formKey ? 'selected' : ''}`} onClick={() => onChange(t.formKey)} title={t.formKey} data-testid="ground-texture">
+            <span style={{ width: 14, height: 14, borderRadius: 3, background: swatches[t.formKey] ?? 'var(--bg-2)', border: '1px solid var(--border)', flex: 'none' }} />
+            <span className="grow" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.name ?? t.editorId ?? t.formKey}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function TerrainTab({ cell, interior, viewport, handlers, refs }: { cell: FormKey; interior: boolean; viewport: React.RefObject<Viewport | null>; handlers: React.RefObject<ToolHandlers>; refs: PlacedRef[] }) {
-  const [mode, setMode] = useState<SculptMode>('raise');
+  const [mode, setMode] = useState<TerrainMode>('raise');
   const [radius, setRadius] = useState(512);
   const [strength, setStrength] = useState(0.5);
+  const [texture, setTexture] = useState<FormKey | null>(null);
   const [on, setOn] = useState(false);
   const [lastStroke, setLastStroke] = useState<{ points: Vec[]; radius: number } | null>(null);
-  const live = useRef({ mode, radius, strength });
-  live.current = { mode, radius, strength };
+  const live = useRef({ mode, radius, strength, texture });
+  live.current = { mode, radius, strength, texture };
 
   useEffect(() => {
     handlers.current.brushStroke = async (points, erase) => {
       const o = live.current;
+      if (o.mode === 'paint') {
+        if (!o.texture) return toast('info', 'Pick a ground texture to paint with first.');
+        const r = await engine((c) => c.call('paintGroundTexture', cell, points, { texture: o.texture!, radius: o.radius, strength: o.strength, erase }));
+        if (r?.cells.length) viewport.current?.refreshGround(r.cells);
+        else if (r) toast('info', 'No terrain under the brush (only loaded outdoor cells can be painted).');
+        if (r?.full) toast('warning', 'Some of this ground already has six painted textures, the most it can hold. Paint over one of them (or paint its base texture) to make room.');
+        return;
+      }
       const m: SculptMode = erase && o.mode === 'raise' ? 'lower' : erase && o.mode === 'lower' ? 'raise' : o.mode;
       const changed = await engine((c) => c.call('sculptTerrain', cell, points, { mode: m, radius: o.radius, strength: o.strength }));
       if (changed?.length) setLastStroke({ points, radius: o.radius });
@@ -166,12 +213,18 @@ function TerrainTab({ cell, interior, viewport, handlers, refs }: { cell: FormKe
     };
   }, [cell, handlers]);
   useEffect(() => viewport.current?.setBrushRadius(radius), [radius, viewport]);
-  useEffect(() => viewport.current?.setSculpt({ mode, strength }), [mode, strength, viewport]);
+  useEffect(() => {
+    if (mode !== 'paint') viewport.current?.setSculpt({ mode, strength });
+  }, [mode, strength, viewport]);
+  // Switching between painting and sculpting while the brush is on swaps the brush.
+  useEffect(() => {
+    if (on) viewport.current?.setBrush(mode === 'paint' ? { radius, hint: GROUND_HINT } : { radius, sculpt: { mode, strength } });
+  }, [mode === 'paint']);
 
-  if (interior) return <div className="dim small">Terrain only exists outdoors. Open an outdoor cell to sculpt it.</div>;
+  if (interior) return <div className="dim small">Terrain only exists outdoors. Open an outdoor cell to sculpt or paint it.</div>;
   const toggle = () => {
     const next = !on;
-    viewport.current?.setBrush(next ? { radius, sculpt: { mode, strength } } : null);
+    viewport.current?.setBrush(next ? (mode === 'paint' ? { radius, hint: GROUND_HINT } : { radius, sculpt: { mode, strength } }) : null);
     setOn(next);
   };
   // Objects standing in the last stroke's area may now float or be buried.
@@ -190,12 +243,19 @@ function TerrainTab({ cell, interior, viewport, handlers, refs }: { cell: FormKe
       <Field label="Brush size" title="Radius in game units (a cell is 4096 across). [ and ] change it while sculpting.">
         <DragNumber value={radius} min={128} max={8192} precision={0} onCommit={setRadius} suffix="u" />
       </Field>
-      <Field label="Strength" title="How much each pass of the brush changes the ground.">
+      {mode === 'paint' && (
+        <div className="col" style={{ gap: 4 }} title="The ground texture to paint. Painting a quarter-cell's base texture paints over the layers on top of it.">
+          <span className="small dim">Ground texture</span>
+          <GroundTexturePicker value={texture} onChange={setTexture} />
+        </div>
+      )}
+      <Field label="Strength" title={mode === 'paint' ? 'How strongly each pass covers what was there (1 = fully at the brush centre).' : 'How much each pass of the brush changes the ground.'}>
         <Slider value={strength} min={0.05} max={1} step={0.05} onCommit={setStrength} />
       </Field>
       <button className={`btn small ${on ? 'active' : 'primary'}`} onClick={toggle} data-testid="sculpt-toggle" title="Then drag over the ground in the view. Each stroke is one undo step.">
-        {on ? 'Stop sculpting' : 'Start sculpting'}
+        {on ? (mode === 'paint' ? 'Stop painting' : 'Stop sculpting') : mode === 'paint' ? 'Start painting' : 'Start sculpting'}
       </button>
+      {mode === 'paint' && <p className="dim small" style={{ margin: 0 }}>Each quarter of a cell holds its base texture plus up to six painted ones, as in the game. Distant terrain (LOD) keeps the old look until LOD is rebuilt.</p>}
       {nearStroke.length > 0 && (
         <div className="card small" style={{ padding: 8 }}>
           {nearStroke.length} object{nearStroke.length === 1 ? '' : 's'} stood where you sculpted and may now float or sink.

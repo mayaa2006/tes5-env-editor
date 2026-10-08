@@ -515,6 +515,16 @@ function buildDemoMaster(): Plugin {
   place(keeper, 150, 250, 0, Math.PI, { persistent: true, sig: 'ACHR', edid: 'DemoInnkeeperRef' });
   place(smith, -250, -200, 0, 0.5, { persistent: true, sig: 'ACHR', edid: 'DemoBlacksmithRef' });
 
+  // Landscape textures to paint the ground with (texture set → landscape texture, as in the game).
+  for (const [edid, file] of [
+    ['DemoLandGrass', 'grass'],
+    ['DemoLandRock', 'rock'],
+    ['DemoLandDirt', 'wood'],
+  ] as const) {
+    const txst = rec(p, 'TXST', id(), { editorId: `${edid}TX`, bounds: bounds(0, 0, 0), textures: { diffuse: `demo\\${file}.dds` } });
+    rec(p, 'LTEX', id(), { editorId: edid, textureSet: txst, havok: { friction: 30, restitution: 30 }, specular: 30, grasses: [] });
+  }
+
   // ---- exterior worldspace with two cells
   const world = 0xb00;
   rec(p, 'WRLD', world, { editorId: 'DemoWorld', name: 'Demo Valley', parent: {}, distantLodMultiplier: 1, flags: 0x1 | 0x10 });

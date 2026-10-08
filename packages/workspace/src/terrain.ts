@@ -6,6 +6,7 @@
  */
 import type { FormKey } from '@tes5/esp';
 import { WorkspaceError, type Workspace } from './engine';
+import type { LandQuadrant } from './world';
 import type { WorldService } from './world';
 
 /** Distance between terrain vertices, and vertices per cell side. */
@@ -274,5 +275,129 @@ export class TerrainService {
       }
     });
     return changed;
+  }
+
+  /**
+   * Paint a landscape texture along a brush stroke (one undo step), the way
+   * the CK's landscape painting does: each quarter-cell has a base texture
+   * and up to six painted layers, each with an opacity at 17×17 points.
+   * Painting the base texture fades the layers on top of it; painting another
+   * texture raises (or adds) its layer and fades the layers above it.
+   * Returns the cells whose ground changed, and whether some ground already
+   * had six painted textures (the most it can hold) so nothing new was added.
+   */
+  paintTexture(cell: FormKey, points: { x: number; y: number }[], opts: { texture: FormKey; radius: number; strength: number; erase?: boolean }): { cells: FormKey[]; full: boolean } {
+    if (!points.length) return { cells: [], full: false };
+    if (this.ws.summary(opts.texture)?.sig !== 'LTEX') throw new WorkspaceError('Pick a landscape texture to paint with');
+    const info = this.world.cells().find((c) => c.formKey === cell);
+    if (!info || info.interior) throw new WorkspaceError('Ground textures can only be painted outdoors');
+    const r = opts.radius;
+    const xs = points.map((p) => p.x);
+    const ys = points.map((p) => p.y);
+    const minX = Math.floor((Math.min(...xs) - r) / CELL);
+    const maxX = Math.floor((Math.max(...xs) + r) / CELL);
+    const minY = Math.floor((Math.min(...ys) - r) / CELL);
+    const maxY = Math.floor((Math.max(...ys) + r) / CELL);
+    const strength = Math.max(0, Math.min(1, opts.strength));
+    const changed: FormKey[] = [];
+    let full = false;
+    this.ws.transaction('Paint ground texture', () => {
+      for (let cy = minY; cy <= maxY; cy++)
+        for (let cx = minX; cx <= maxX; cx++) {
+          const c = this.world.cellAt(info.worldspace, { x: cx, y: cy });
+          const land = c ? this.landOf(c) : undefined;
+          const quads = c ? this.world.landLayers(c) : undefined;
+          if (!c || !land || !quads) continue;
+          let hit = false;
+          for (let q = 0; q < 4; q++) {
+            const quad = quads[q]!;
+            const qx = q & 1;
+            const qy = q >> 1;
+            for (let row = 0; row < 17; row++)
+              for (let col = 0; col < 17; col++) {
+                const wx = cx * CELL + (qx * 16 + col) * LAND_STEP;
+                const wy = cy * CELL + (qy * 16 + row) * LAND_STEP;
+                // Strongest at the centre of the brush, nothing at its edge.
+                let w = 0;
+                for (const p of points) {
+                  const d = Math.hypot(p.x - wx, p.y - wy);
+                  if (d < r) w = Math.max(w, strength * (1 - (d / r) ** 2));
+                }
+                if (w <= 0.001) continue;
+                hit = true;
+                const i = row * 17 + col;
+                // Ctrl+drag: fade this texture where it's painted.
+                if (opts.erase) {
+                  const own = quad.layers.find((l) => l.ltex === opts.texture);
+                  if (own) own.alpha[i] = own.alpha[i]! * (1 - w);
+                  continue;
+                }
+                // Bare ground (the game's default) gets a layer, so only the brushed area changes.
+                if (quad.base === opts.texture) {
+                  for (const l of quad.layers) l.alpha[i] = l.alpha[i]! * (1 - w);
+                  continue;
+                }
+                let layer = quad.layers.find((l) => l.ltex === opts.texture);
+                if (!layer) {
+                  if (quad.layers.length >= 6) {
+                    // Full: reuse the faintest layer.
+                    const faintest = [...quad.layers].sort((a, b) => a.alpha.reduce((s, v) => s + v, 0) - b.alpha.reduce((s, v) => s + v, 0))[0]!;
+                    if (faintest.alpha.some((v) => v > 0.02)) {
+                      full = true;
+                      continue;
+                    }
+                    quad.layers.splice(quad.layers.indexOf(faintest), 1);
+                  }
+                  layer = { ltex: opts.texture, layer: quad.layers.length, alpha: new Float32Array(289) };
+                  quad.layers.push(layer);
+                }
+                layer.alpha[i] = layer.alpha[i]! + (1 - layer.alpha[i]!) * w;
+                for (const l of quad.layers.slice(quad.layers.indexOf(layer) + 1)) l.alpha[i] = l.alpha[i]! * (1 - w);
+              }
+          }
+          if (!hit) continue;
+          this.writeLayers(land, quads);
+          changed.push(c);
+        }
+    });
+    return { cells: changed, full };
+  }
+
+  /** Write a LAND record's texture layers (BTXT, then ATXT + VTXT per layer, for each quarter-cell). */
+  private writeLayers(land: FormKey, quads: LandQuadrant[]): void {
+    const v = this.ws.view(land)!;
+    const layerSigs = new Set(['BTXT', 'ATXT', 'VTXT']);
+    const keep = v.unknown.filter((u) => !layerSigs.has(u.sig));
+    const old = v.unknown.filter((u) => layerSigs.has(u.sig));
+    let index = old.length ? Math.min(...old.map((u) => u.index)) : 4;
+    const subs: { index: number; sig: string; data: Uint8Array }[] = [];
+    const head = (ltex: FormKey | null, quadrant: number, layer: number) => {
+      const b = new Uint8Array(8);
+      const dv = new DataView(b.buffer);
+      dv.setUint32(0, ltex ? this.ws.localIdForActive(ltex) : 0, true);
+      b[4] = quadrant;
+      dv.setInt16(6, layer, true);
+      return b;
+    };
+    for (let q = 0; q < 4; q++) {
+      const quad = quads[q]!;
+      if (quad.base !== undefined) subs.push({ index: index++, sig: 'BTXT', data: head(quad.base ?? null, q, -1) });
+      const layers = quad.layers.filter((l) => l.alpha.some((a) => a > 0.002));
+      layers.forEach((l, n) => {
+        subs.push({ index: index++, sig: 'ATXT', data: head(l.ltex, q, n) });
+        const points = [...l.alpha].map((a, pos) => ({ a, pos })).filter((p) => p.a > 0.002);
+        const vt = new Uint8Array(points.length * 8);
+        const dv = new DataView(vt.buffer);
+        points.forEach((p, k) => {
+          dv.setUint16(k * 8, p.pos, true);
+          dv.setFloat32(k * 8 + 4, Math.min(1, p.a), true);
+        });
+        subs.push({ index: index++, sig: 'VTXT', data: vt });
+      });
+    }
+    // Later fields keep their place after the layers.
+    const shift = index - (old.length ? Math.min(...old.map((u) => u.index)) + old.length : 4);
+    const after = keep.map((u) => (old.length && u.index > Math.max(...old.map((o) => o.index)) ? { ...u, index: u.index + shift } : u));
+    this.ws.updateRecord(land, v.data, { unknown: [...after, ...subs].sort((a, b) => a.index - b.index), label: 'Paint ground texture' });
   }
 }

@@ -583,6 +583,22 @@ export const TREE: RecordDef = record(
   { category: 'World Objects' },
 );
 
+/** Landscape texture: what painted ground looks like (a texture set), its material and the grass that grows on it. */
+export const LTEX: RecordDef = record(
+  'LTEX',
+  'Landscape Texture',
+  [
+    EDID,
+    sub('TNAM', 'textureSet', 'Texture Set', formid(['TXST'])),
+    sub('MNAM', 'material', 'Material Type', formid(['MATT'])),
+    sub('HNAM', 'havok', 'Havok Data', struct([['friction', 'Friction', u8()], ['restitution', 'Restitution', u8()]])),
+    sub('SNAM', 'specular', 'Texture Specular Exponent', u8()),
+    rarray('grasses', 'Grasses', sub('GNAM', 'grass', 'Grass', formid(['GRAS']))),
+    sub('INAM', 'flags', 'Flags', u32({ hidden: true })),
+  ],
+  { category: 'World Data' },
+);
+
 export const TXST: RecordDef = record(
   'TXST',
   'Texture Set',

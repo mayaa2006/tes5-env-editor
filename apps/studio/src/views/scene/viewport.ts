@@ -487,6 +487,24 @@ export class Viewport {
   /** Ground textures per cell, kept across refreshes (the painted layers don't change while sculpting). */
   private landTextures = new Map<FormKey, Promise<THREE.Texture | null>>();
 
+  /** Show newly painted ground: drop the cached textures of these cells and re-bake them. */
+  refreshGround(cells: FormKey[]): void {
+    for (const cell of cells) {
+      this.landTextures.delete(cell);
+      const mesh = this.terrainGroup.children.find((c) => c.userData.cell === cell) as THREE.Mesh | undefined;
+      const mat = mesh?.material as THREE.MeshStandardMaterial | undefined;
+      if (!mat) continue;
+      void this.landTexture(cell).then((tex) => {
+        if (!tex || this.disposed) return;
+        mat.map?.dispose();
+        mat.map = tex;
+        mat.color.setRGB(1, 1, 1);
+        mat.needsUpdate = true;
+        this.invalidate();
+      });
+    }
+  }
+
   private landTexture(cell: FormKey): Promise<THREE.Texture | null> {
     let p = this.landTextures.get(cell);
     if (!p) {
@@ -615,7 +633,7 @@ export class Viewport {
   }
 
   /** Paint mode: a circle follows the cursor; drag to paint, Ctrl+drag to erase, [ and ] resize. */
-  setBrush(opts: { radius: number; sculpt?: { mode: SculptOptions['mode']; strength: number } } | null): void {
+  setBrush(opts: { radius: number; sculpt?: { mode: SculptOptions['mode']; strength: number }; hint?: string } | null): void {
     if (this.brush) this.helpers.remove(this.brush.ring);
     this.clearToolHelpers('brushDab');
     this.brush = undefined;
@@ -631,7 +649,7 @@ export class Viewport {
       this.cb.status(
         opts.sculpt
           ? `Terrain: drag to ${opts.sculpt.mode}${opts.sculpt.mode === 'raise' ? ' · Ctrl+drag to lower' : opts.sculpt.mode === 'lower' ? ' · Ctrl+drag to raise' : ''} · [ ] brush size · Esc to stop`
-          : 'Paint: drag to paint · Ctrl+drag to erase · [ ] brush size · Esc to stop',
+          : (opts.hint ?? 'Paint: drag to paint · Ctrl+drag to erase · [ ] brush size · Esc to stop'),
       );
     } else this.cb.status(null);
     this.invalidate();

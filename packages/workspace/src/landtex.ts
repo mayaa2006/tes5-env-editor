@@ -4,7 +4,7 @@
  * the way the game paints them. Vertex colours are applied on top by the view.
  */
 import { decodeToRgba, gameTexturePath, parseDds } from '@tes5/assets';
-import type { FormKey, PluginRecord } from '@tes5/esp';
+import type { FormKey } from '@tes5/esp';
 import type { Workspace } from './engine';
 import type { WorldService } from './world';
 
@@ -24,7 +24,8 @@ export interface LandTexture {
 
 export class LandTextureBaker {
   private tiles = new Map<string, Promise<Uint8Array | null>>();
-  private baked = new WeakMap<PluginRecord, Promise<LandTexture | undefined>>();
+  /** Keyed on the record's subrecord list, which every edit replaces (so painting re-bakes). */
+  private baked = new WeakMap<object, Promise<LandTexture | undefined>>();
 
   constructor(
     readonly ws: Workspace,
@@ -83,14 +84,25 @@ export class LandTextureBaker {
     return p;
   }
 
+  /** The average colour of a landscape texture (for a picker swatch), or null when its texture can't be read. */
+  async swatch(ltex: FormKey): Promise<[number, number, number] | null> {
+    const path = this.diffuseOf(ltex);
+    const t = path ? await this.tile(path) : null;
+    if (!t) return null;
+    let r = 0, g = 0, b = 0;
+    for (let i = 0; i < t.length; i += 3) (r += t[i]!), (g += t[i + 1]!), (b += t[i + 2]!);
+    const n = t.length / 3;
+    return [Math.round(r / n), Math.round(g / n), Math.round(b / n)];
+  }
+
   /** The blended ground texture of an outdoor cell, or undefined when it has no land or no texture layers. */
   bake(cell: FormKey, size = 512): Promise<LandTexture | undefined> {
     const land = this.world.landRecord(cell);
     if (!land) return Promise.resolve(undefined);
-    let p = this.baked.get(land.record);
+    let p = this.baked.get(land.record.subrecords);
     if (!p) {
       p = this.bakeNow(cell, size);
-      this.baked.set(land.record, p);
+      this.baked.set(land.record.subrecords, p);
     }
     return p;
   }
