@@ -7,7 +7,7 @@
  * Only node positions live outside the plugin (a small layout file).
  */
 import { parseFragmentSource } from '@tes5/papyrus';
-import { conditionFunctionByName, newCondition, parseFormKey, type Condition, type FormKey, type Vmad } from '@tes5/esp';
+import { conditionFunctionByName, newCondition, newVmad, parseFormKey, type Condition, type FormKey, type Vmad } from '@tes5/esp';
 import { WorkspaceError, type Workspace } from './engine';
 import { joinPath } from './fs';
 import { QuestFlag } from '@tes5/esp';
@@ -65,6 +65,8 @@ export type QuestStartWhen = { kind: 'arrive' | 'read' | 'pickup' | 'activate'; 
 
 export interface QuestGraph {
   quest: FormKey;
+  /** The quest's time limit, if it has one (a timer script on the quest). */
+  timeLimit?: { days: number; fromStage: number; failStage: number };
   /** What starts the quest. */
   starts: QuestStart[];
   editorId?: string;
@@ -223,6 +225,9 @@ export class QuestGraphService {
 
     for (const st of await this.startedBy(quest)) starts.push({ kind: 'afterQuest', label: `${this.name(st.quest)} reaches stage ${st.stage}`, quest: st.quest, stage: st.stage });
 
+    const timeLimit = await this.timeLimit(quest);
+    if (timeLimit) edges.push({ id: 'timelimit', from: timeLimit.fromStage, to: timeLimit.failStage, kind: 'script', label: `Time runs out (${timeLimit.days} day${timeLimit.days === 1 ? '' : 's'})`, source: { type: 'fragment', stage: timeLimit.fromStage } });
+
     const problems: string[] = [];
     const sge = (q.flags & QuestFlag.StartGameEnabled) !== 0;
     if (!sge && edges.some((e) => e.kind === 'talk' && e.from === null)) problems.push('Dialogue only appears while the quest is running. Turn on “Starts with the game” or start it from another quest.');
@@ -242,6 +247,7 @@ export class QuestGraphService {
 
     return {
       quest,
+      timeLimit,
       starts,
       editorId: q.editorId,
       name: q.name,
@@ -403,6 +409,96 @@ export class QuestGraphService {
   }
 
   /** Add lines to a stage's script (keeping what's there). */
+  // ---------------------------------------------------------------- failing
+
+  /**
+   * Fail the quest (set `failStage`) if `actor` dies before any of the
+   * `unlessDone` stages (the endings) are reached. Shows on the map as a
+   * "killed" arrow into the fail stage.
+   */
+  async addFailOnDeath(quest: FormKey, actor: FormKey, failStage: number, unlessDone: number[]): Promise<{ alias: number; trigger: string }> {
+    return this.ws.transactionAsync('Fail if killed', async () => {
+      if (!this.quests.quest(quest).stages.some((s) => s.index === failStage)) this.quests.addStage(quest, failStage);
+      const v = this.ws.view(actor);
+      if (v?.sig !== 'NPC_' && v?.sig !== 'ACHR') throw new WorkspaceError('Only characters can die');
+      const alias = this.aliasFor(quest, actor);
+      const host: TriggerHost = { kind: 'alias', quest, alias };
+      const { specs } = await this.triggers.list(host);
+      const id = newTriggerId();
+      specs.push({
+        id,
+        name: `Fails if ${this.name(actor)} dies`,
+        event: { kind: 'death' },
+        conditions: [...new Set([...unlessDone, failStage])].map((stage) => ({ kind: 'questStageDone' as const, quest, stage, done: false })),
+        actions: [{ kind: 'setStage', quest, stage: failStage }],
+        once: true,
+      });
+      await this.triggers.set(host, specs);
+      return { alias, trigger: id };
+    });
+  }
+
+  /** Remove a trigger made by addFailOnDeath. */
+  async removeFailOnDeath(quest: FormKey, where: { alias: number; trigger: string }): Promise<void> {
+    const host: TriggerHost = { kind: 'alias', quest, alias: where.alias };
+    if (!this.quests.quest(quest).aliases.some((a) => a.id === where.alias)) return;
+    const { specs } = await this.triggers.list(host);
+    const kept = specs.filter((sp) => sp.id !== where.trigger);
+    if (kept.length !== specs.length) await this.triggers.set(host, kept);
+  }
+
+  private timerName(quest: FormKey): string {
+    return `${(this.ws.view(quest)?.editorId ?? 'Quest').replace(/[^A-Za-z0-9_]/g, '')}TimeLimit`;
+  }
+
+  /**
+   * Give the quest a time limit: when it reaches `fromStage` the clock starts,
+   * and after `days` in-game days it fails (sets `failStage`) unless one of
+   * the `unlessDone` stages was reached. A small script on the quest does the
+   * waiting; null removes the time limit.
+   */
+  async setTimeLimit(quest: FormKey, limit: { days: number; fromStage: number; failStage: number; unlessDone: number[] } | null): Promise<void> {
+    await this.ws.transactionAsync(limit ? 'Set time limit' : 'Remove time limit', async () => {
+      const name = this.timerName(quest);
+      const old = await this.timeLimit(quest);
+      const startLine = (hours: number) => `RegisterForSingleUpdateGameTime(${hours})`;
+      if (old) await this.removeStageLine(quest, old.fromStage, startLine(Math.round(old.days * 24 * 100) / 100));
+      this.ws.editRecord(quest, (d: any) => {
+        const vm: Vmad = d.scripts ?? newVmad();
+        vm.scripts = vm.scripts.filter((x) => x.name.toLowerCase() !== name.toLowerCase());
+        if (limit) vm.scripts.push({ name, flags: 0, properties: [] });
+        d.scripts = vm;
+      });
+      if (!limit) return;
+      for (const st of [limit.fromStage, limit.failStage]) if (!this.quests.quest(quest).stages.some((s) => s.index === st)) this.quests.addStage(quest, st);
+      const hours = Math.round(limit.days * 24 * 100) / 100;
+      const guard = [...new Set([...limit.unlessDone, limit.failStage])].map((s) => `!IsStageDone(${s})`).join(' && ');
+      const source = [
+        `Scriptname ${name} extends Quest`,
+        `{Fails the quest when its time runs out. Made by TES5 Env Editor.}`,
+        `;@studio-timelimit days=${limit.days} from=${limit.fromStage} fail=${limit.failStage}`,
+        '',
+        'Event OnUpdateGameTime()',
+        `\tIf ${guard}`,
+        `\t\tSetStage(${limit.failStage})`,
+        '\tEndIf',
+        'EndEvent',
+        '',
+      ].join('\n');
+      await this.scripts.write(name, source, { undoable: true });
+      await this.appendStageCode(quest, limit.fromStage, [startLine(hours)]);
+    });
+  }
+
+  /** The time limit set with setTimeLimit, read back from its script. */
+  async timeLimit(quest: FormKey): Promise<{ days: number; fromStage: number; failStage: number } | undefined> {
+    const name = this.timerName(quest);
+    const vm = (this.ws.view(quest)?.data as any)?.scripts as Vmad | undefined;
+    if (!vm?.scripts.some((x) => x.name.toLowerCase() === name.toLowerCase()) || !this.scripts.has(name)) return undefined;
+    const m = /;@studio-timelimit days=([\d.]+) from=(\d+) fail=(\d+)/.exec(await this.scripts.read(name));
+    return m ? { days: Number(m[1]), fromStage: Number(m[2]), failStage: Number(m[3]) } : undefined;
+  }
+
   /** The line in another quest's stage script that starts this one. */
   startLine(quest: FormKey): string {
     return `(${formExpression(quest)} as Quest).Start()`;

@@ -21,7 +21,7 @@
  */
 import { EMOTIONS, conditionFunctionByName, newCondition, parseFormKey, type Condition, type FormKey } from '@tes5/esp';
 import { WorkspaceError, type Workspace } from './engine';
-import { clauseConditions, parseIf, type IfClause } from './dialogueif';
+import { choiceGlobal, clauseConditions, parseIf, type IfClause } from './dialogueif';
 import { gestureCode } from './gestures';
 import { writeScene } from './scenes';
 import { MISC_TOPICS, type QuestService } from './quest';
@@ -389,6 +389,21 @@ export class DialogueService {
         for (const v of (r.tags[tag] ?? '').split(';').filter((x) => x.trim())) {
           const { item, count } = this.itemTag(v, r.line);
           code.push(`Game.GetPlayer().${verb}(${formExpression(item)}, ${count})`);
+        }
+      }
+      // [remember NAME] / [forget NAME]: a choice the quest keeps for later lines and endings.
+      for (const [tag, value] of [
+        ['remember', 1],
+        ['forget', 0],
+      ] as const) {
+        for (const v of (r.tags[tag] ?? '').split(';').map((x) => x.trim()).filter(Boolean)) {
+          let g: FormKey;
+          try {
+            g = choiceGlobal(this.ws, quest, v);
+          } catch (e) {
+            throw new WorkspaceError(`Line ${r.line}: ${(e as Error).message}`);
+          }
+          code.push(`(${formExpression(g)} as GlobalVariable).SetValue(${value})`);
         }
       }
       if (code.length) await setInfoFragment(info, code.join('\n'), 'end');

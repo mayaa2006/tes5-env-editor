@@ -30,7 +30,7 @@ export interface DialogueLint {
 export const PLAYER_LINE_MAX = 80;
 /** Responses longer than this make a long, hard-to-read subtitle (and one long voice file). */
 export const RESPONSE_LINE_MAX = 150;
-const KNOWN_TAGS = new Set(['goodbye', 'stage', 'if', 'emotion', 'gives', 'takes', 'gesture', 'once', 'persuade', 'at', 'start']);
+const KNOWN_TAGS = new Set(['goodbye', 'stage', 'if', 'emotion', 'gives', 'takes', 'gesture', 'once', 'persuade', 'at', 'start', 'remember', 'forget']);
 const PLACEHOLDER = /\b(TODO|TBD|FIXME|XXX|lorem ipsum)\b|\{\{|\}\}|<[A-Z ]+>/;
 
 /** A conversation in a neutral shape, from records or from a screenplay. */
@@ -114,7 +114,7 @@ export function lintScreenplay(source: string, ctx: { stages?: number[]; speaker
   // Tags the importer doesn't know are silently dropped, so a typo loses the stage change.
   source.split(/\r?\n/).forEach((raw, i) => {
     for (const m of raw.matchAll(/\[([a-z]+)(?:\s+[^\]]*)?\]/gi)) {
-      if (!KNOWN_TAGS.has(m[1]!.toLowerCase())) out.push({ severity: 'error', message: `Unknown tag ${m[0]}`, detail: 'Tags: [stage N], [if …], [goodbye], [once], [persuade N], [emotion …], [gives …], [takes …], [gesture …]; on a SCENE: line, [at stage N] or [start].', line: i + 1 });
+      if (!KNOWN_TAGS.has(m[1]!.toLowerCase())) out.push({ severity: 'error', message: `Unknown tag ${m[0]}`, detail: 'Tags: [stage N], [if …], [goodbye], [once], [persuade N], [emotion …], [gives …], [takes …], [gesture …], [remember NAME], [forget NAME]; on a SCENE: line, [at stage N] or [start].', line: i + 1 });
     }
     if (/\[[^\]]*$/.test(raw)) out.push({ severity: 'error', message: 'A tag is missing its closing ]', line: i + 1 });
   });

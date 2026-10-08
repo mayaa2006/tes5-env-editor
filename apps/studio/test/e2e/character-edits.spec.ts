@@ -28,7 +28,7 @@ const PLAN = {
       factions: [{ faction: 'Merchants', rank: 0 }], inventory: [], routine: [],
     },
   ],
-  locations: [], items: [], stages: [], objectives: [], steps: [], conversations: [], rewards: [], animations: [], events: [],
+  locations: [], items: [], stages: [], objectives: [], steps: [], conversations: [], rewards: [], animations: [], events: [], failures: [],
   assumptions: ['Halvar keeps his hair style'], questions: [],
 };
 

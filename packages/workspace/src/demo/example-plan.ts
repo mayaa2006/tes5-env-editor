@@ -84,6 +84,7 @@ EIRIK: A ring? Ha! Saw something shiny roll across a table earlier. Didn't think
     rewards: [],
     animations: [{ atStage: 20, characterKey: 'eirik', gesture: 'laugh' }],
     events: [],
+    failures: [],
     assumptions: ['The ring starts on a table in the tavern', 'Brynja pays 100 gold in her dialogue rather than as a separate reward'],
     questions: ['Should Eirik be suspicious, or just lazy?'],
   };
