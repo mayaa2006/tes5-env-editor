@@ -224,7 +224,11 @@ A final tab before sharing your mod:
 
 #### Mod Organizer 2
 
-Opens an MO2 instance and profile directly, using its virtual Data folder (loose files override BSAs). Saves go to Overwrite.
+Opens an MO2 instance and profile directly, using its virtual Data folder (loose files override BSAs). Saves go to Overwrite, unless you choose a folder (below).
+
+#### Save into a new folder
+
+On the start screen, **Where my files are saved → Save into a new folder** sends everything the editor writes (your plugin, scripts, SEQ and face files, backups) into one folder you pick or type, made if it doesn't exist. It works the same whether you open a Skyrim folder or Mod Organizer 2, and for any mod manager: add the folder as a mod (MO2, Vortex) or copy it into Data. The choice is remembered, and the next screen shows where files will go. Left off, saves go to the Data folder, or to Overwrite in MO2 as before.
 
 ### Finding your way
 

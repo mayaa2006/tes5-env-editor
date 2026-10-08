@@ -59,6 +59,9 @@ export interface Settings {
   openaiUrl: string;
   openaiKey: string;
   openaiModel: string;
+  /** Save everything into a folder of the user's choosing instead of Data / MO2 Overwrite. */
+  saveToFolder: boolean;
+  saveFolder: string;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -87,6 +90,8 @@ const DEFAULT_SETTINGS: Settings = {
   openaiUrl: '',
   openaiKey: '',
   openaiModel: '',
+  saveToFolder: false,
+  saveFolder: '',
 };
 
 function loadSettings(): Settings {

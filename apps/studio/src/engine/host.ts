@@ -209,6 +209,10 @@ export class EngineHost {
 
   async open(opts: OpenOptions): Promise<SessionInfo> {
     let ws: Workspace;
+    // Saving into a chosen folder (any mod manager, or none): make it, and read it as a mod folder so what was saved there loads again.
+    const outputDir = opts.outputDir?.trim() || undefined;
+    if (outputDir) await this.fs.mkdir(outputDir);
+    const withOutput = (roots: string[]) => (outputDir && !roots.some((r) => r.replace(/[\\/]+$/, '').toLowerCase() === outputDir.replace(/[\\/]+$/, '').toLowerCase()) ? [...roots, outputDir] : roots);
     if (opts.kind === 'mo2') {
       if (!opts.path) throw new Error('Pick your Mod Organizer 2 instance folder');
       const inst = await readMo2Instance(this.fs, opts.path);
@@ -216,8 +220,8 @@ export class EngineHost {
       const install = inst.gamePath ? await detectInstall(this.fs, inst.gamePath) : undefined;
       ws = new Workspace(this.fs, {
         game: install?.game ?? 'SkyrimSE',
-        roots: profile.roots,
-        outputDir: opts.outputDir ?? inst.overwriteDir,
+        roots: withOutput(profile.roots),
+        outputDir: outputDir ?? inst.overwriteDir,
         loadOrder: profile.plugins,
       });
       this.source = `MO2: ${inst.instanceDir} (${profile.name})`;
@@ -227,7 +231,7 @@ export class EngineHost {
       if (!opts.path) throw new Error('Pick your Skyrim folder');
       const install = await detectInstall(this.fs, opts.path);
       if (!install) throw new Error(`No Skyrim installation found in ${opts.path}`);
-      ws = new Workspace(this.fs, { game: install.game, roots: [install.dataDir], outputDir: opts.outputDir ?? install.dataDir, loadOrder: opts.loadOrder });
+      ws = new Workspace(this.fs, { game: install.game, roots: withOutput([install.dataDir]), outputDir: outputDir ?? install.dataDir, loadOrder: opts.loadOrder });
       this.source = opts.kind === 'demo' ? 'Demo data (in memory)' : install.gameDir ?? install.dataDir;
       this.gameDir = install.gameDir ?? install.dataDir.replace(/[\\/]+Data[\\/]*$/i, '');
       this.mo2 = undefined;

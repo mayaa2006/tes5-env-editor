@@ -9,13 +9,31 @@ export function Welcome() {
   const [mo2Path, setMo2Path] = useState('');
   const [profile, setProfile] = useState('');
   const [gamePath, setGamePath] = useState('');
+  const settings = useStore((s) => s.settings);
+  const update = useStore((s) => s.updateSettings);
 
-  const openDemo = () =>
-    engine(
+  /** The folder to save into, if the user chose one: undefined = the usual place, null = they backed out. */
+  const saveTo = async (): Promise<string | undefined | null> => {
+    if (!settings.saveToFolder) return undefined;
+    if (settings.saveFolder.trim()) return settings.saveFolder.trim();
+    const picked = await client?.openFolder('Choose or create the folder your mod will be saved into');
+    if (!picked) {
+      useStore.getState().toast('info', 'Type a folder name under “Where my files are saved”, or untick the box to use the usual place.');
+      return null;
+    }
+    update({ saveFolder: picked });
+    return picked;
+  };
+
+  const openDemo = async () => {
+    const outputDir = await saveTo();
+    if (outputDir === null) return;
+    await engine(
       (c) =>
         c.call('open', {
           kind: 'demo',
           path: DEMO_GAME_DIR,
+          outputDir,
           loadOrder: [
             { name: 'DemoWorld.esm', active: true },
             { name: 'DirtyPatch.esp', active: true },
@@ -23,17 +41,22 @@ export function Welcome() {
         }),
       { busy: 'Opening demo data…' },
     );
+  };
 
   const openFolder = async () => {
     const path = gamePath || (await client?.openFolder('Select your Skyrim folder (the one containing SkyrimSE.exe)'));
     if (!path) return;
-    await engine((c) => c.call('open', { kind: 'folder', path }), { busy: 'Reading plugins…' });
+    const outputDir = await saveTo();
+    if (outputDir === null) return;
+    await engine((c) => c.call('open', { kind: 'folder', path, outputDir }), { busy: 'Reading plugins…' });
   };
 
   const openMo2 = async () => {
     const path = mo2Path || (await client?.openFolder('Select your Mod Organizer 2 instance folder (contains ModOrganizer.ini)'));
     if (!path) return;
-    await engine((c) => c.call('open', { kind: 'mo2', path, profile: profile || undefined }), { busy: 'Reading MO2 profile…' });
+    const outputDir = await saveTo();
+    if (outputDir === null) return;
+    await engine((c) => c.call('open', { kind: 'mo2', path, profile: profile || undefined, outputDir }), { busy: 'Reading MO2 profile…' });
   };
 
   // Look for the game in the usual places, so most people never have to browse for it.
@@ -42,7 +65,11 @@ export function Welcome() {
     if (!client || client.mode === 'demo') return;
     client.call('findInstalls').then(setFound, () => setFound([]));
   }, [client]);
-  const openFound = (path: string) => engine((c) => c.call('open', { kind: 'folder', path }), { busy: 'Reading plugins…' });
+  const openFound = async (path: string) => {
+    const outputDir = await saveTo();
+    if (outputDir === null) return;
+    await engine((c) => c.call('open', { kind: 'folder', path, outputDir }), { busy: 'Reading plugins…' });
+  };
 
   if (session.open) return <LoadOrderPicker />;
 
@@ -71,12 +98,35 @@ export function Welcome() {
           <div className="dim small" style={{ marginTop: 6 }}>Using Mod Organizer 2? Open your MO2 instance below instead, so your mods are included.</div>
         </div>
       )}
+      <div className="card" style={{ marginBottom: 12 }} data-testid="save-folder-card">
+        <div className="card-title">Where my files are saved</div>
+        <Checkbox
+          checked={settings.saveToFolder}
+          onChange={(v) => update({ saveToFolder: v })}
+          label="Save into a new folder"
+          help="Everything this editor writes (your plugin, scripts, SEQ and face files, backups) goes into this one folder, whichever way you open the game. Add the folder to your mod manager as a mod, or copy it into Data. Off: saves go to the Data folder, or to MO2's Overwrite."
+        />
+        {settings.saveToFolder ? (
+          <div className="row" style={{ marginTop: 6, gap: 6 }}>
+            <div className="grow">
+              <TextInput value={settings.saveFolder} onCommit={(v) => update({ saveFolder: v })} placeholder="Folder to save into, e.g. C:\Modding\MyMod (made if it doesn't exist)" mono />
+            </div>
+            {client?.canPickFolders && (
+              <button className="btn" onClick={async () => { const p = await client.openFolder('Choose or create the folder your mod will be saved into'); if (p) update({ saveFolder: p }); }} title="Pick the folder in a window">
+                Browse…
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="dim small" style={{ marginTop: 4 }}>Using the usual place: your Skyrim Data folder, or Overwrite when you open Mod Organizer 2.</div>
+        )}
+      </div>
       <div className="welcome-grid">
         <button className="welcome-card" onClick={openMo2} disabled={client?.mode === 'demo' && !mo2Path}>
           <h3>
             <Icon name="folder" /> Open Mod Organizer 2
           </h3>
-          <p>Reads your MO2 instance and profile directly — no need to launch through MO2. Saves go to Overwrite.</p>
+          <p>Reads your MO2 instance and profile directly — no need to launch through MO2. Saves go to Overwrite, or to a folder you choose below.</p>
           {client?.mode === 'demo' && <p className="warn small">Needs the desktop app.</p>}
         </button>
         <button className="welcome-card" onClick={openFolder} disabled={client?.mode === 'demo' && !gamePath}>
@@ -159,6 +209,11 @@ function LoadOrderPicker() {
     <div className="welcome">
       <h1>Choose plugins to load</h1>
       <div className="lead">{session.source}</div>
+      {session.outputDir && (
+        <div className="dim small" style={{ marginTop: -8, marginBottom: 8 }} data-testid="save-location" title={session.outputDir}>
+          Your files will be saved to: <span className="mono">{session.outputDir}</span>
+        </div>
+      )}
       <p className="dim" style={{ marginTop: 0 }}>
         Tick the plugins you want to see and work with. Their masters are ticked for you. Fewer plugins load faster; the official masters are always enough to get started.
       </p>
