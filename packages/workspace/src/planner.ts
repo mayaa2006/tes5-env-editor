@@ -17,7 +17,7 @@ import { WorkspaceError, type Workspace } from './engine';
 import { GESTURES } from './gestures';
 import { z } from 'zod';
 import type { JournalContext, JournalDraft } from './journal';
-import { QuestPlanSchema, type QuestPlan } from './questplan';
+import { PLAN_EVENT_KINDS, QuestPlanSchema, type QuestPlan } from './questplan';
 import { WorldService } from './world';
 
 export const PLANNER_MODEL = 'claude-opus-5-5';
@@ -45,13 +45,14 @@ How to plan:
 - Clothing, armour and weapons in an outfit or inventory are existing items named as in the load order (e.g. "Fine Clothes", "Iron Sword"). Only add new clothing or weapons to "items" (kind clothing/armor/weapon, basedOn the closest existing item) when the text describes something unique.
 - Say where in a place characters stand and items lie when the text does or it matters ("behind the bar", "by the forge", "in the chest by the bed", "under the table"): characters.spot and items.spot. An item "in" a container is put inside it and can still be picked up for a quest step.
 - Give characters a routine when the text says what they do or when it matters for the quest: new characters usually "sandbox" (go about their business) where they live by day and "sleep" there at night. Quest behaviour uses fromStage/untilStage: "follow" (the player) for companions or escorts, "forcegreet" (walk up to the player and say a line) for someone who should approach the player, "travel" to move someone to a place, "stay" to keep them put.
-- If the text only asks to create or change characters, places or items and describes no quest, leave stages, objectives, steps, conversations, rewards and animations empty; nothing but those changes is built.
+- If the text only asks to create or change characters, places or items and describes no quest, leave stages, objectives, steps, conversations, rewards, animations and events empty; nothing but those changes is built.
 - Stages: start at 0 or 10, go up in steps of 10, and end on a stage that completes the quest (often 100 or 200). One stage has startsQuest true. Every stage after the first must be reachable: a step or a conversation line sets it.
 - Journal entries are written in the past tense from the player's point of view, like Skyrim's ("Brynja asked me to find her stolen ring."). Write one for every stage the player should notice; the final stage gets a closing entry.
 - Objectives are short instructions ("Find Brynja's ring", "Return the ring to Brynja"). Show each at the stage where it starts and complete it at the stage where it's done. Point the marker (targetKey) at the character, item or location involved.
 - Steps say what moves the quest from one stage to the next: talk (a line in a conversation, see below), pickup/read/equip/drop/activate (an item key), death/activate (a character key), arrive (a location key), or script (immediately after the "from" stage).
 - Items the player must pick up, read or activate must start in a location (startsWith "location"), so the game can tell when it happens. Items handed over in dialogue use the [gives …] and [takes …] tags instead.
 - Rewards are gold and/or items given at a stage (usually the final one).
+- Events are what happens in the world when a stage is reached, outside dialogue: enemies appear (spawn, with an enemy type like "bandit" or "draugr" and how many), a character turns on the player or calms down (hostile / friendly), a door or chest unlocks or locks, something appears or vanishes (show / hide; shown things start hidden), someone moves somewhere (moveTo), someone dies (kill), the screen fades to black and back (fade, e.g. for time passing or being knocked out; moves at the same stage happen in the dark), a sound plays, the weather changes, a message shows, another quest starts (startQuest, for questlines), or the player is moved (movePlayer). Add one wherever the text says something happens ("bandits ambush you", "the door unlocks", "he draws his sword"). Pair a hostile character or spawned enemies with a death step when killing them moves the quest on.
 - Set startsWithGame true when the quest begins by talking to someone (their opening dialogue only appears while the quest runs).
 
 Conversations are written in this screenplay format. Each top-level PLAYER line is something the player can say; NPC lines under it are the answers; indent player choices under the NPC line they answer, and that NPC's answers under them:
@@ -202,6 +203,8 @@ export class QuestPlanner {
     let json: unknown;
     try {
       json = normalize(JSON.parse(text));
+      // Lists added to the plan format later may be left out.
+      if (schema === (QuestPlanSchema as unknown) && json && typeof json === 'object' && !('events' in json)) (json as Record<string, unknown>).events = [];
     } catch {
       throw new WorkspaceError("Claude's answer wasn't in the expected format. Try again.");
     }
@@ -239,6 +242,10 @@ const ENUM_FIELDS = new Set(['sex', 'kind', 'startsWith']);
 function normalize(v: unknown, key?: string): unknown {
   if (Array.isArray(v)) return v.map((x) => normalize(x));
   if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, normalize(x, k)]));
-  if (typeof v === 'string' && key && ENUM_FIELDS.has(key)) return v.trim().toLowerCase();
+  if (typeof v === 'string' && key && ENUM_FIELDS.has(key)) {
+    const t = v.trim().toLowerCase();
+    // Event kinds are camelCase ("moveTo").
+    return PLAN_EVENT_KINDS.find((k) => k.toLowerCase() === t) ?? t;
+  }
   return v;
 }

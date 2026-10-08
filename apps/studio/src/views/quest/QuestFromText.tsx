@@ -7,7 +7,7 @@
 import { useEffect, useState } from 'react';
 import type { FormKey } from '@tes5/esp';
 import type { PlanIssue, PlanResolution, PlannerMode, QuestBuildReport, QuestPlan } from '@tes5/workspace';
-import { Field, Help, Icon, Modal, TextInput } from '../../components/ui';
+import { Field, Help, Icon, Modal, Select, TextInput } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 
 type Review = { plan: QuestPlan; issues: PlanIssue[]; resolution: PlanResolution[] };
@@ -184,15 +184,26 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
   const { plan, issues, resolution } = review;
   const [feedback, setFeedback] = useState('');
   const [draft, setDraft] = useState(plan);
-  useEffect(() => setDraft(plan), [plan]);
+  useEffect(() => setDraft({ ...plan, events: plan.events ?? [] }), [plan]);
+  const [history, setHistory] = useState<QuestPlan[]>([]);
 
-  // Re-check after hand edits.
-  const edit = async (fn: (p: QuestPlan) => void) => {
-    const next = structuredClone(draft);
-    fn(next);
+  // Re-check after hand edits (each one can be undone).
+  const check = async (next: QuestPlan) => {
     setDraft(next);
     const r = await engine((c) => c.call('reviewQuestPlan', next), { refreshSession: false });
     if (r) setReview({ plan: next, ...r });
+  };
+  const edit = async (fn: (p: QuestPlan) => void) => {
+    const next = structuredClone(draft);
+    fn(next);
+    setHistory((h) => [...h.slice(-49), draft]);
+    await check(next);
+  };
+  const undoEdit = async () => {
+    const prev = history[history.length - 1];
+    if (!prev) return;
+    setHistory((h) => h.slice(0, -1));
+    await check(prev);
   };
   const revise = async () => {
     const r = await engine((c) => c.call('reviseQuestPlan', draft, feedback, key, source), { busy: 'Claude is changing the plan…', refreshSession: false });
@@ -354,7 +365,7 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
                   <div className="grow col" style={{ gap: 2 }}>
                     <TextInput value={s.journal} placeholder="(no journal entry)" multiline onCommit={(v) => void edit((p) => void (p.stages.find((x) => x.index === s.index)!.journal = v))} />
                     <span className="dim small">
-                      {[s.startsQuest && 'Starts the quest', s.completesQuest && 'Completes the quest', s.failsQuest && 'Fails the quest', ...shown.map((o) => `Shows “${o.text}”`), ...draft.animations.filter((a) => a.atStage === s.index).map((a) => `${nameOf(a.characterKey)}: ${a.gesture}`)].filter(Boolean).join(' · ')}
+                      {[s.startsQuest && 'Starts the quest', s.completesQuest && 'Completes the quest', s.failsQuest && 'Fails the quest', ...shown.map((o) => `Shows “${o.text}”`), ...draft.animations.filter((a) => a.atStage === s.index).map((a) => `${nameOf(a.characterKey)}: ${a.gesture}`), ...(draft.events ?? []).filter((e) => e.atStage === s.index).map((e) => e.note)].filter(Boolean).join(' · ')}
                     </span>
                   </div>
                 </div>
@@ -406,6 +417,7 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
         </div>
       </div>
 
+      <EventsCard plan={draft} edit={edit} nameOf={nameOf} />
         </>
       )}
       {draft.conversations.map((c, i) => (
@@ -440,11 +452,125 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
         <button className="btn" onClick={onBack}>
           Back
         </button>
+        <button className="btn ghost" disabled={!history.length} onClick={() => void undoEdit()} title={history.length ? 'Take back your last change to the plan' : 'Nothing to undo yet'} data-testid="plan-undo">
+          <Icon name="undo" size={13} /> Undo edit
+        </button>
         <span className="grow" />
         {errors > 0 && <span className="small err">Fix {errors} problem(s) first</span>}
         <button className="btn primary" disabled={errors > 0} onClick={() => void build()} data-testid="build-quest" title={existing ? 'Shows what will change before anything is changed' : 'Creates everything as one step you can undo'}>
           <Icon name="check" size={13} /> {existing ? 'See what will change' : draft.stages.length ? 'Build the quest' : 'Make the changes'}
         </button>
+      </div>
+    </div>
+  );
+}
+
+type PlanEvent = NonNullable<QuestPlan['events']>[number];
+type EventKind = PlanEvent['kind'];
+
+/** Each kind of event: what it's called, what it does, and which fields it uses. */
+const EVENT_KINDS: { kind: EventKind; label: string; hint: string; target?: string; to?: string; what?: string; count?: string }[] = [
+  { kind: 'spawn', label: 'Enemies appear', hint: 'Enemies are placed next to the target (or the player). They fight as they normally would.', target: 'Where (empty = by the player)', what: 'Enemy, e.g. bandit, draugr, wolf', count: 'How many' },
+  { kind: 'hostile', label: 'Turns hostile', hint: 'The character attacks the player.', target: 'Who' },
+  { kind: 'friendly', label: 'Stops fighting', hint: 'The character stops attacking and calms down.', target: 'Who' },
+  { kind: 'unlock', label: 'Unlock', hint: 'Unlocks a door or chest.', target: 'Door or chest' },
+  { kind: 'lock', label: 'Lock', hint: 'Locks a door or chest.', target: 'Door or chest' },
+  { kind: 'show', label: 'Appears', hint: 'Something appears. It starts hidden until this stage.', target: 'What' },
+  { kind: 'hide', label: 'Vanishes', hint: 'Something disappears from the world.', target: 'What' },
+  { kind: 'moveTo', label: 'Moves to', hint: 'Moves a character straight to a place or person (do it during a fade so nobody sees).', target: 'Who', to: 'Where to' },
+  { kind: 'kill', label: 'Dies', hint: 'The character dies.', target: 'Who' },
+  { kind: 'fade', label: 'Fade to black', hint: 'The screen fades to black and back. Other events at the same stage happen while it is dark.', count: 'Seconds of black' },
+  { kind: 'sound', label: 'Sound', hint: 'Plays a sound from the load order at the target (or the player).', what: 'Sound name or Editor ID', target: 'Where (empty = player)' },
+  { kind: 'weather', label: 'Weather', hint: 'Changes the weather. Type “clear” to go back to normal.', what: 'Weather, e.g. SkyrimStormRain' },
+  { kind: 'message', label: 'Message', hint: 'A notification in the top corner of the screen.', what: 'Text' },
+  { kind: 'startQuest', label: 'Start a quest', hint: 'Starts another quest, e.g. the next one in a questline.', what: 'Quest Editor ID' },
+  { kind: 'movePlayer', label: 'Move the player', hint: 'Moves the player to a place or person.', to: 'Where to' },
+];
+
+/** What happens in the world at each stage: enemies, doors, fades… */
+function EventsCard({ plan, edit, nameOf }: { plan: QuestPlan; edit: (fn: (p: QuestPlan) => void) => Promise<void>; nameOf: (k: string | null) => string }) {
+  const events = plan.events ?? [];
+  const stages = [...plan.stages].sort((a, b) => a.index - b.index);
+  const keys = [...plan.characters.map((c) => ({ key: c.key, name: c.name })), ...plan.items.map((i) => ({ key: i.key, name: i.name })), ...plan.locations.map((l) => ({ key: l.key, name: l.name }))];
+  const set = (i: number, change: Partial<PlanEvent>) => void edit((p) => void Object.assign(p.events![i]!, change));
+  const add = () =>
+    void edit((p) => {
+      const last = [...p.stages].sort((a, b) => a.index - b.index).find((x) => !x.startsQuest) ?? p.stages[0]!;
+      (p.events ??= []).push({ atStage: last.index, kind: 'message', targetKey: null, toKey: null, what: 'Something happens…', count: null, note: 'New event' });
+    });
+  const field = (i: number, label: string, value: string | null, k: 'targetKey' | 'toKey' | 'what', list?: boolean) => (
+    <label className="col small" style={{ gap: 2, flex: '1 1 140px', minWidth: 120 }}>
+      <span className="dim">{label}</span>
+      <input
+        className="input"
+        defaultValue={value ?? ''}
+        key={`${i}-${k}-${value}`}
+        list={list ? 'plan-event-keys' : undefined}
+        placeholder={list ? 'A name from the plan, or an Editor ID' : undefined}
+        onBlur={(e) => {
+          const v = e.target.value.trim() || null;
+          if (v !== value) set(i, { [k]: v });
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          e.stopPropagation();
+        }}
+        data-testid={`event-${k}`}
+      />
+    </label>
+  );
+  return (
+    <div className="card" data-testid="plan-events">
+      <div className="card-title row" style={{ gap: 6 }}>
+        What happens at stages
+        <Help text="Things that happen in the world when the quest reaches a stage: enemies appear, someone turns hostile, a door unlocks, something appears or vanishes, the screen fades to black. They become lines in the stage's script." />
+        <span className="grow" />
+        <button className="btn small ghost" onClick={add} disabled={!stages.length} title="Add something that happens when the quest reaches a stage" data-testid="add-event">
+          <Icon name="plus" size={12} /> Add event
+        </button>
+      </div>
+      <datalist id="plan-event-keys">
+        {keys.map((k) => (
+          <option key={k.key} value={k.key}>
+            {k.name}
+          </option>
+        ))}
+      </datalist>
+      {!events.length && <p className="dim small" style={{ margin: 0 }}>Nothing happens in the world yet besides dialogue. Add an event for an ambush, a door that unlocks, or a fade to black.</p>}
+      <div className="col" style={{ gap: 8 }}>
+        {events.map((e, i) => {
+          const meta = EVENT_KINDS.find((k) => k.kind === e.kind) ?? EVENT_KINDS[0]!;
+          return (
+            <div key={i} className="col plan-event" style={{ gap: 4 }} data-testid="plan-event">
+              <div className="row wrap" style={{ gap: 6, alignItems: 'flex-end' }}>
+                <label className="col small" style={{ gap: 2 }}>
+                  <span className="dim">At stage</span>
+                  <Select value={e.atStage} options={stages.map((s) => ({ value: s.index, label: String(s.index) }))} onChange={(v) => set(i, { atStage: v })} />
+                </label>
+                <label className="col small" style={{ gap: 2 }} title={meta.hint}>
+                  <span className="dim">What happens</span>
+                  <Select value={e.kind} options={EVENT_KINDS.map((k) => ({ value: k.kind, label: k.label }))} onChange={(v) => set(i, { kind: v })} />
+                </label>
+                {meta.target && field(i, meta.target, e.targetKey, 'targetKey', true)}
+                {meta.to && field(i, meta.to, e.toKey, 'toKey', true)}
+                {meta.what && field(i, meta.what, e.what, 'what')}
+                {meta.count && (
+                  <label className="col small" style={{ gap: 2, width: 90 }}>
+                    <span className="dim">{meta.count}</span>
+                    <input className="input" type="number" min={1} max={e.kind === 'spawn' ? 10 : 30} defaultValue={e.count ?? (e.kind === 'fade' ? 2 : 1)} key={`${i}-count-${e.count}`} onBlur={(ev) => set(i, { count: Math.round(Number(ev.target.value)) || null })} data-testid="event-count" />
+                  </label>
+                )}
+                <button className="btn small ghost icon" onClick={() => void edit((p) => void p.events!.splice(i, 1))} title="Remove this event (Undo edit brings it back)" data-testid="remove-event">
+                  <Icon name="trash" size={12} />
+                </button>
+              </div>
+              <span className="dim small">
+                {meta.hint}
+                {e.targetKey && ` Target: ${nameOf(e.targetKey)}.`}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

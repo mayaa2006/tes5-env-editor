@@ -303,6 +303,55 @@ describe('quest builder', () => {
     expect(ws.undoLabel).toBe(undo);
   });
 
+  it('makes things happen at stages: enemies, hostility, doors, appearing, fades', async () => {
+    const { ws, builder, graphs } = await setup();
+    const plan = exampleQuestPlan();
+    plan.events = [
+      { atStage: 20, kind: 'spawn', targetKey: 'tavern', toKey: null, what: 'Town Guard', count: 2, note: 'Guards burst in' },
+      { atStage: 20, kind: 'hostile', targetKey: 'eirik', toKey: null, what: null, count: null, note: 'Eirik draws his sword' },
+      { atStage: 20, kind: 'unlock', targetKey: 'DemoTavernDoorRef', toKey: null, what: null, count: null, note: 'The door unlocks' },
+      { atStage: 10, kind: 'show', targetKey: 'ring', toKey: null, what: null, count: null, note: 'The ring appears' },
+      { atStage: 100, kind: 'fade', targetKey: null, toKey: null, what: null, count: 3, note: 'Time passes' },
+      { atStage: 100, kind: 'moveTo', targetKey: 'eirik', toKey: 'brynja', what: null, count: null, note: 'Eirik joins Brynja' },
+      { atStage: 100, kind: 'message', targetKey: null, toKey: null, what: 'Some "time" later', count: null, note: 'Message' },
+      { atStage: 100, kind: 'weather', targetKey: null, toKey: null, what: 'NoSuchStorm', count: null, note: 'A storm' },
+    ];
+    expect(validatePlan(plan)).toEqual([]);
+    const report = await builder.build(plan);
+    const q = report.quest!;
+    const s20 = await graphs.fragmentCode(q, 20);
+    expect(s20.match(/\.PlaceActorAtMe\(Game\.GetFormFromFile\(0x[0-9A-F]{6}, "DemoWorld\.esm"\) as ActorBase\)/g)).toHaveLength(2);
+    expect(s20).toMatch(/^Alias_\w+\.GetReference\(\)\.PlaceActorAtMe/m);
+    expect(s20).toContain('Alias_InnkeeperRingQuestEirik.GetActorReference().StartCombat(Game.GetPlayer())');
+    expect(s20).toMatch(/Alias_DemoTavernDoorRef\w*\.GetReference\(\)\.Lock\(False\)/);
+    expect(await graphs.fragmentCode(q, 10)).toMatch(/\.GetReference\(\)\.Enable\(\)/);
+    // Shown at a stage, so it starts hidden.
+    const ring = ws.search({ sigs: ['REFR'], query: 'InnkeeperRingQuestBrynjasRingRef', limit: 5 }).items[0]!.formKey;
+    expect(ws.view(ring)!.flags & 0x800).toBe(0x800);
+    // The fade wraps the other things that happen at that stage.
+    const end = (await graphs.fragmentCode(q, 100)).split('\n').map((l) => l.trim());
+    const at = (re: RegExp) => end.findIndex((l) => re.test(l));
+    expect(at(/^Game\.FadeOutGame\(True/)).toBeLessThan(at(/MoveTo\(Alias_/));
+    expect(at(/MoveTo\(Alias_/)).toBeLessThan(at(/^Game\.FadeOutGame\(False/));
+    expect(end).toContain('Debug.Notification("Some \\"time\\" later")');
+    expect(report.warnings.some((w) => /A storm.*no weather like “NoSuchStorm”/.test(w))).toBe(true);
+  });
+
+  it('checks events before building', () => {
+    const plan = exampleQuestPlan();
+    plan.events = [
+      { atStage: 55, kind: 'unlock', targetKey: null, toKey: null, what: null, count: null, note: 'Open up' },
+      { atStage: 10, kind: 'spawn', targetKey: null, toKey: null, what: null, count: 40, note: 'Ambush' },
+      { atStage: 10, kind: 'movePlayer', targetKey: null, toKey: null, what: null, count: null, note: 'Away' },
+    ];
+    const msgs = validatePlan(plan).map((i) => i.message);
+    expect(msgs).toContain('The “Open up” event happens at stage 55, which doesn\'t exist');
+    expect(msgs).toContain('The “Open up” event needs a target (who or what it happens to)');
+    expect(msgs).toContain('The “Ambush” event needs an enemy type');
+    expect(msgs).toContain('The “Ambush” event spawns 40; use 1 to 10');
+    expect(msgs).toContain('The “Away” event needs somewhere to go');
+  });
+
   it('turns plan keys into Editor IDs in screenplays', () => {
     const out = rewriteScreenplay('PLAYER: Hi [if stage 10]\nBRYNJA: Here. [gives ring x2] [takes gold x5]\n  EIRIK: Hm. [gives Unknown]', new Map([['brynja', 'DemoInnkeeper'], ['eirik', 'QEirik']]), new Map([['ring', 'QRing']]));
     expect(out).toBe('PLAYER: Hi [if stage 10]\nDemoInnkeeper: Here. [gives QRing x2] [takes gold x5]\n  QEirik: Hm. [gives Unknown]');
@@ -356,12 +405,14 @@ describe('quest planner', () => {
   it('fixes small slips and asks once to repair a plan that does not fit', async () => {
     const odd = exampleQuestPlan() as any;
     odd.characters[1].sex = 'Male';
+    odd.events = [{ atStage: 20, kind: 'MoveTo', targetKey: 'eirik', toKey: 'brynja', what: null, count: null, note: 'Eirik walks over' }];
     const sent: any[] = [];
     const broken = { ...exampleQuestPlan(), stages: 'none' };
     const answers = [JSON.stringify(broken), JSON.stringify(odd)];
     const planner = new QuestPlanner({ send: async (p) => (sent.push(p), reply(answers.shift()!)) });
     const plan = await planner.plan('doc', 'document', '');
     expect(plan.characters[1]!.sex).toBe('male');
+    expect(plan.events[0]!.kind).toBe('moveTo');
     expect(sent).toHaveLength(2);
     expect(sent[1].messages.at(-1).content).toMatch(/^That plan doesn't match the format:\nstages:/);
   });

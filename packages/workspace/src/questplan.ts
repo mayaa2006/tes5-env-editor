@@ -118,6 +118,23 @@ export const PlanAnimationSchema = z.object({
   gesture: z.string().describe('A gesture name from the instructions, e.g. "wave", "laugh", "pray"'),
 });
 
+export const PLAN_EVENT_KINDS = ['spawn', 'hostile', 'friendly', 'unlock', 'lock', 'show', 'hide', 'moveTo', 'kill', 'fade', 'sound', 'weather', 'message', 'startQuest', 'movePlayer'] as const;
+export type PlanEventKind = (typeof PLAN_EVENT_KINDS)[number];
+
+export const PlanEventSchema = z.object({
+  atStage: z.number().int().describe('Stage at which it happens'),
+  kind: z
+    .enum(PLAN_EVENT_KINDS)
+    .describe(
+      'spawn: enemies appear (what = enemy type, count, at target or by the player); hostile / friendly: a character attacks the player or stops fighting; unlock / lock: a door or chest; show / hide: make something appear or vanish (shown things start hidden); moveTo: move a character (target) to a place or someone (to); kill: a character dies; fade: the screen fades to black and back (count = seconds of black); sound: play a sound (what); weather: change the weather (what, or "clear" to go back to normal); message: a notification on screen (what); startQuest: start another quest (what = its Editor ID); movePlayer: move the player to a place (to)',
+    ),
+  targetKey: z.string().nullable().describe('Who or what it happens to: a character, item or location key from this plan, or the Editor ID or name of something already in the world (a door, a character); null for the player or where not needed'),
+  toKey: z.string().nullable().describe('For moveTo and movePlayer: the place or character to go to (key or Editor ID); otherwise null'),
+  what: z.string().nullable().describe('spawn: enemy type, e.g. "bandit", "draugr", "wolf" or an Editor ID; sound / weather: name or Editor ID; message: the text; startQuest: the quest; otherwise null'),
+  count: z.number().int().nullable().describe('spawn: how many (1–10); fade: seconds of black; otherwise null'),
+  note: z.string().describe('What happens, in a few words'),
+});
+
 export const PlanRewardSchema = z.object({
   atStage: z.number().int(),
   gold: z.number().int().nullable(),
@@ -138,6 +155,7 @@ export const QuestPlanSchema = z.object({
   conversations: z.array(PlanConversationSchema),
   rewards: z.array(PlanRewardSchema),
   animations: z.array(PlanAnimationSchema).describe('Characters playing a gesture when the quest reaches a stage (outside dialogue)'),
+  events: z.array(PlanEventSchema).describe('Things that happen in the world when the quest reaches a stage: enemies appear, someone turns hostile, a door unlocks, something appears or vanishes, a fade to black, a sound, the weather'),
   assumptions: z.array(z.string()).describe('Every decision not stated in the source text, for the author to confirm'),
   questions: z.array(z.string()).describe('Things the author should decide that you could not'),
 });
@@ -148,6 +166,15 @@ export type PlanLocation = z.infer<typeof PlanLocationSchema>;
 export type PlanItem = z.infer<typeof PlanItemSchema>;
 export type PlanLook = z.infer<typeof PlanLookSchema>;
 export type PlanStep = z.infer<typeof PlanStepSchema>;
+export type PlanEvent = z.infer<typeof PlanEventSchema>;
+
+/** Fill in lists added to the plan format later, so plans saved by older versions still load. */
+export function normalizePlan(plan: QuestPlan): QuestPlan {
+  plan.events ??= [];
+  plan.animations ??= [];
+  plan.rewards ??= [];
+  return plan;
+}
 
 export interface PlanIssue {
   severity: 'error' | 'warning';
@@ -173,6 +200,7 @@ export function emptyPlan(): QuestPlan {
     conversations: [],
     rewards: [],
     animations: [],
+    events: [],
     assumptions: [],
     questions: [],
   };
@@ -242,6 +270,20 @@ export function validatePlan(plan: QuestPlan): PlanIssue[] {
   for (const a of plan.animations ?? []) {
     if (!stages.has(a.atStage)) err(`An animation plays at stage ${a.atStage}, which doesn't exist`);
     if (!isKind(a.characterKey, 'character')) err(`An animation is played by "${a.characterKey}", who isn't a character in the plan`);
+  }
+  const needTarget: PlanEventKind[] = ['hostile', 'friendly', 'unlock', 'lock', 'show', 'hide', 'moveTo', 'kill'];
+  const needWhat: PlanEventKind[] = ['spawn', 'sound', 'weather', 'message', 'startQuest'];
+  for (const e of plan.events ?? []) {
+    const what = `The “${e.note || e.kind}” event`;
+    if (!stages.has(e.atStage)) err(`${what} happens at stage ${e.atStage}, which doesn't exist`);
+    if (needTarget.includes(e.kind) && !e.targetKey?.trim()) err(`${what} needs a target (who or what it happens to)`);
+    if (needWhat.includes(e.kind) && !e.what?.trim()) err(`${what} needs ${e.kind === 'spawn' ? 'an enemy type' : e.kind === 'message' ? 'the text' : e.kind === 'startQuest' ? 'the quest to start' : `the ${e.kind}`}`);
+    if ((e.kind === 'moveTo' || e.kind === 'movePlayer') && !e.toKey?.trim()) err(`${what} needs somewhere to go`);
+    if (e.kind === 'spawn' && e.count !== null && (e.count < 1 || e.count > 10)) err(`${what} spawns ${e.count}; use 1 to 10`);
+    if (e.kind === 'kill') {
+      const c = (plan.characters ?? []).find((x) => x.key === e.targetKey);
+      if (c?.essential) warn(`${c.name} is essential, so “${e.note || e.kind}” can't kill them`);
+    }
   }
   return issues;
 }

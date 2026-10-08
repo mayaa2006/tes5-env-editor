@@ -4,6 +4,8 @@ Each version here is published as a Windows installer and portable exe on the [r
 
 ## 0.5.0
 
+- **Things happen at quest stages:** a quest plan can now make enemies appear, turn someone hostile or friendly, unlock or lock a door or chest, make something appear or vanish, move or kill a character, fade to black, play a sound, change the weather, show a message, start another quest or move the player when a stage is reached. Claude adds them from your text ("bandits ambush you", "the door unlocks"); check and change them in the plan's **What happens at stages** card. **Change with a plan** updates them too.
+- **Undo in the plan review:** **Undo edit** takes back your last edit to a plan before you build it.
 - **Face files (FaceGen export) like the CK's Ctrl+F4, as a list:** Release → Character faces lists every character in your plugin and whether its face files are up to date, out of date or missing.
   - **Generate faces** makes every changed one; tick any others and **Export ticked** to write them again.
   - Face tints are now written like the Creation Kit's: compressed (BC3) with mipmaps, about a third of the size.
