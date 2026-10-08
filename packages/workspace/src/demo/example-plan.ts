@@ -18,6 +18,7 @@ export function exampleQuestPlan(): QuestPlan {
     editorId: 'InnkeeperRingQuest',
     summary: 'Find Brynja’s lost ring in the Demo Tavern and return it to her.',
     startsWithGame: true,
+    startsWhen: null,
     characters: [
       { key: 'brynja', name: 'Brynja', existing: 'DemoInnkeeper', basedOn: null, sex: 'female', race: null, role: 'Innkeeper who lost the ring and gives the quest', appearance: 'As she is', look: null, voice: null, locationKey: null, spot: null, essential: null, className: null, level: null, outfit: null, factions: [], inventory: [], routine: [] },
       {

@@ -2,6 +2,12 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.7.0
+
+- **Quests can start when something happens:** a quest plan can now start the quest when the player enters a place, reads a note, picks something up or uses something, instead of from the start of the game. Claude picks this from your text ("when the player finds the letter…"). Check and change it in the plan's **How the quest starts** card.
+- **Questlines:** a quest can start when another of your quests reaches a stage (its end, unless you pick one), so part two follows part one. Claude sees the quests already in your plugin.
+- **The quest map shows what starts the quest**, next to **Running from game start**.
+
 ## 0.6.0
 
 - **Things happen at quest stages:** a quest plan can now make enemies appear, turn someone hostile or friendly, unlock or lock a door or chest, make something appear or vanish, move or kill a character, fade to black, play a sound, change the weather, show a message, start another quest or move the player when a stage is reached. Claude adds them from your text ("bandits ambush you", "the door unlocks"); check and change them in the plan's **What happens at stages** card. **Change with a plan** updates them too.

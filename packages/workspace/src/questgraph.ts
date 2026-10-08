@@ -16,6 +16,7 @@ import type { ScriptService } from './scripts';
 import { newTriggerId, type TriggerEventKind, type TriggerHost, type TriggerService, type TriggerSpec } from './triggers';
 import { WorldService } from './world';
 import { gestureActorName, gestureCode, parseGestureLine } from './gestures';
+import { formExpression } from './dialogue';
 
 export type QuestEdgeKind = TriggerEventKind | 'talk' | 'script';
 
@@ -53,8 +54,19 @@ export interface QuestStageNode {
   gestures: { line: string; actor: string; gesture: string; label: string }[];
 }
 
+/** Something that starts a quest: the game itself, a trigger on a placed object, or another quest's stage. */
+export type QuestStart =
+  | { kind: 'game'; label: string }
+  | { kind: 'trigger'; label: string; ref: FormKey; event: TriggerEventKind }
+  | { kind: 'afterQuest'; label: string; quest: FormKey; stage: number };
+
+/** What a quest can be started by, for "start when…" (cells, items or another quest). */
+export type QuestStartWhen = { kind: 'arrive' | 'read' | 'pickup' | 'activate'; target: FormKey } | { kind: 'afterQuest'; quest: FormKey; stage: number };
+
 export interface QuestGraph {
   quest: FormKey;
+  /** What starts the quest. */
+  starts: QuestStart[];
   editorId?: string;
   name?: string;
   startGameEnabled: boolean;
@@ -179,7 +191,14 @@ export class QuestGraphService {
     }
 
     // Triggers on the quest's aliases and on placed objects in the active plugin.
+    const starts: QuestStart[] = [];
+    if ((q.flags & QuestFlag.StartGameEnabled) !== 0) starts.push({ kind: 'game', label: 'Starts with the game' });
     const fromTriggers = (spec: TriggerSpec, src: QuestEdgeSource, target: FormKey | null, where: string) => {
+      if (src.type === 'ref-trigger' && spec.actions.some((a) => a.kind === 'startQuest' && a.quest === quest)) {
+        // Arriving is about the place, not the hidden marker that listens for it.
+        const cell = spec.event.kind === 'arrive' ? this.ws.view(src.ref)?.parent.cell : undefined;
+        starts.push({ kind: 'trigger', label: `${eventVerb(spec.event.kind)} ${cell ? this.name(cell) : where}`, ref: src.ref, event: spec.event.kind });
+      }
       const cond = spec.conditions.find((c) => c.kind === 'questStage' && c.quest === quest && c.op === '==');
       for (const a of spec.actions) {
         if (a.kind !== 'setStage' || a.quest !== quest) continue;
@@ -202,6 +221,8 @@ export class QuestGraphService {
       }
     }
 
+    for (const st of await this.startedBy(quest)) starts.push({ kind: 'afterQuest', label: `${this.name(st.quest)} reaches stage ${st.stage}`, quest: st.quest, stage: st.stage });
+
     const problems: string[] = [];
     const sge = (q.flags & QuestFlag.StartGameEnabled) !== 0;
     if (!sge && edges.some((e) => e.kind === 'talk' && e.from === null)) problems.push('Dialogue only appears while the quest is running. Turn on “Starts with the game” or start it from another quest.');
@@ -221,6 +242,7 @@ export class QuestGraphService {
 
     return {
       quest,
+      starts,
       editorId: q.editorId,
       name: q.name,
       startGameEnabled: sge,
@@ -381,6 +403,65 @@ export class QuestGraphService {
   }
 
   /** Add lines to a stage's script (keeping what's there). */
+  /** The line in another quest's stage script that starts this one. */
+  startLine(quest: FormKey): string {
+    return `(${formExpression(quest)} as Quest).Start()`;
+  }
+
+  /** Stages of quests in your plugin whose scripts start this quest. */
+  private async startedBy(quest: FormKey): Promise<{ quest: FormKey; stage: number }[]> {
+    const out: { quest: FormKey; stage: number }[] = [];
+    const active = this.ws.active;
+    if (!active?.plugin) return out;
+    const line = this.startLine(quest);
+    for (const r of active.plugin.recordsOfType('QUST')) {
+      if (!r.peek('VMAD')) continue;
+      const other = this.ws.keyOf(active, r.formId)!;
+      if (other === quest) continue;
+      for (const st of this.quests.quest(other).stages) if ((await this.fragmentCode(other, st.index)).split('\n').some((l) => l.trim() === line)) out.push({ quest: other, stage: st.index });
+    }
+    return out;
+  }
+
+  /**
+   * Start a quest when something happens: the player arrives in a cell, reads,
+   * picks up or uses an object (a trigger on the placed object, which works
+   * while the quest isn't running), or another quest reaches a stage (a line
+   * in that stage's script). Returns where it went, to remove it again.
+   */
+  async addStart(quest: FormKey, when: QuestStartWhen): Promise<{ ref: FormKey } | { quest: FormKey; stage: number; line: string }> {
+    return this.ws.transactionAsync('Start the quest', async () => {
+      if (when.kind === 'afterQuest') {
+        const line = this.startLine(quest);
+        if (!this.quests.quest(when.quest).stages.some((s) => s.index === when.stage)) throw new WorkspaceError(`${this.name(when.quest)} has no stage ${when.stage}`);
+        if (!(await this.fragmentCode(when.quest, when.stage)).split('\n').some((l) => l.trim() === line)) await this.appendStageCode(when.quest, when.stage, [line]);
+        return { quest: when.quest, stage: when.stage, line };
+      }
+      let ref = when.target;
+      const v = this.ws.view(ref);
+      if (!v) throw new WorkspaceError(`${ref} not found`);
+      if (v.sig === 'CELL') {
+        if (when.kind !== 'arrive') throw new WorkspaceError('Pick an object for this, not a cell');
+        ref = this.markerIn(quest, ref);
+      } else if (v.sig !== 'REFR' && v.sig !== 'ACHR') throw new WorkspaceError(`Pick a placed object (got ${v.typeName})`);
+      const host: TriggerHost = { kind: 'ref', ref };
+      const { specs } = await this.triggers.list(host);
+      specs.push({ id: newTriggerId(), name: `Start ${this.name(quest)}`, event: { kind: when.kind }, conditions: [], actions: [{ kind: 'startQuest', quest }], once: true });
+      await this.triggers.set(host, specs);
+      return { ref };
+    });
+  }
+
+  /** Undo addStart: remove the triggers on `ref` that start this quest, or the line in the other quest's stage. */
+  async removeStart(quest: FormKey, where: { ref: FormKey } | { quest: FormKey; stage: number; line: string }): Promise<void> {
+    if ('line' in where) return this.removeStageLine(where.quest, where.stage, where.line);
+    if (!this.ws.exists(where.ref)) return;
+    const host: TriggerHost = { kind: 'ref', ref: where.ref };
+    const { specs } = await this.triggers.list(host);
+    const kept = specs.filter((sp) => !sp.actions.some((a) => a.kind === 'startQuest' && a.quest === quest));
+    if (kept.length !== specs.length) await this.triggers.set(host, kept);
+  }
+
   async appendStageCode(quest: FormKey, stage: number, lines: string[]): Promise<void> {
     if (!lines.length) return;
     const code = await this.fragmentCode(quest, stage);

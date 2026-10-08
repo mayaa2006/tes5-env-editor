@@ -54,6 +54,7 @@ How to plan:
 - Rewards are gold and/or items given at a stage (usually the final one).
 - Events are what happens in the world when a stage is reached, outside dialogue: enemies appear (spawn, with an enemy type like "bandit" or "draugr" and how many), a character turns on the player or calms down (hostile / friendly), a door or chest unlocks or locks, something appears or vanishes (show / hide; shown things start hidden), someone moves somewhere (moveTo), someone dies (kill), the screen fades to black and back (fade, e.g. for time passing or being knocked out; moves at the same stage happen in the dark), a sound plays, the weather changes, a message shows, another quest starts (startQuest, for questlines), or the player is moved (movePlayer). Add one wherever the text says something happens ("bandits ambush you", "the door unlocks", "he draws his sword"). Pair a hostile character or spawned enemies with a death step when killing them moves the quest on.
 - Set startsWithGame true when the quest begins by talking to someone (their opening dialogue only appears while the quest runs).
+- When the quest begins some other way, set startsWithGame false and say what starts it in startsWhen: the player entering a place ("arrive", a location key), reading a note or book ("read", an item key; the item must start in a location), picking something up ("pickup"), using something ("activate"), or another quest reaching a stage ("afterQuest", that quest's Editor ID, and the stage or null for its end). Use afterQuest for questlines: part two starts when part one ends. A quest that begins with talking to someone keeps startsWithGame true and startsWhen null.
 
 Conversations are written in this screenplay format. Each top-level PLAYER line is something the player can say; NPC lines under it are the answers; indent player choices under the NPC line they answer, and that NPC's answers under them:
 
@@ -91,6 +92,11 @@ export function planCatalog(ws: Workspace, opts: { limit?: number } = {}): strin
     const shown = items.slice(0, limit).map((s) => (s.name && s.name !== s.editorId ? `${s.editorId ?? s.formKey} "${s.name}"` : (s.editorId ?? s.formKey)));
     return `${shown.join('\n') || '(none)'}${items.length > limit ? `\n…and ${items.length - limit} more` : ''}`;
   };
+  const yours = ws
+    .search({ sigs: ['QUST'], limit: 100_000 })
+    .items.filter((s) => s.inActive && !s.deleted && s.editorId)
+    .slice(0, limit)
+    .map((s) => (s.name ? `${s.editorId} "${s.name}"` : s.editorId!));
   const world = new WorldService(ws);
   const cells = world
     .cells({ interiorOnly: true })
@@ -106,6 +112,7 @@ export function planCatalog(ws: Workspace, opts: { limit?: number } = {}): strin
     `Classes:\n${list(['CLAS'])}`,
     `Factions:\n${list(['FACT'])}`,
     `Outfits:\n${list(['OTFT'], (_, e) => !!e)}`,
+    `Quests in your plugin (for questlines):\n${yours.join('\n') || '(none)'}`,
   ].join('\n\n');
 }
 
@@ -205,6 +212,7 @@ export class QuestPlanner {
       json = normalize(JSON.parse(text));
       // Lists added to the plan format later may be left out.
       if (schema === (QuestPlanSchema as unknown) && json && typeof json === 'object' && !('events' in json)) (json as Record<string, unknown>).events = [];
+      if (schema === (QuestPlanSchema as unknown) && json && typeof json === 'object' && !('startsWhen' in json)) (json as Record<string, unknown>).startsWhen = null;
     } catch {
       throw new WorkspaceError("Claude's answer wasn't in the expected format. Try again.");
     }

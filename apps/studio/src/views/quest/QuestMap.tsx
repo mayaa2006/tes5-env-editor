@@ -275,6 +275,11 @@ function QuestMapInner({ quest, onOpenDialogue, onOpenStages }: { quest: FormKey
         </button>
         <span className="sep" />
         <Checkbox checked={g.startGameEnabled} onChange={(on) => engine((c) => c.call('setQuestStartGameEnabled', quest, on))} label="Running from game start" help="The quest runs from the moment the game loads. Dialogue-only quests usually need this, or their lines never appear." />
+        {g.starts.some((x) => x.kind !== 'game') && (
+          <span className="chip accent" title={`Also started by:\n${g.starts.filter((x) => x.kind !== 'game').map((x) => `• ${x.label}`).join('\n')}\n\nChange this with “Change with a plan”, or edit the trigger on the object.`} data-testid="map-starts">
+            ▶ Starts: {g.starts.filter((x) => x.kind !== 'game').map((x) => x.label).join('; ')}
+          </span>
+        )}
         <span className="spacer" />
         <span className="dim small">Drag from a stage’s right edge to another stage, or into empty space for a new one.</span>
         <button className={`btn small ${g.problems.length ? 'warn' : 'ghost'}`} onClick={() => setShowProblems(!showProblems)} data-testid="map-problems">

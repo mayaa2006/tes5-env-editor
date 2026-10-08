@@ -135,6 +135,15 @@ export const PlanEventSchema = z.object({
   note: z.string().describe('What happens, in a few words'),
 });
 
+export const PlanStartSchema = z.object({
+  kind: z
+    .enum(['game', 'arrive', 'read', 'pickup', 'activate', 'afterQuest'])
+    .describe('game: running from the start (needed when it begins by talking to someone); arrive: when the player enters a place (targetKey = location); read / pickup / activate: when the player reads, picks up or uses an item or object (targetKey); afterQuest: when another quest reaches a stage (quest, stage), for questlines'),
+  targetKey: z.string().nullable().describe('arrive / read / pickup / activate: location or item key from this plan, or the Editor ID of an existing place or placed object; otherwise null'),
+  quest: z.string().nullable().describe('afterQuest: Editor ID of the quest that comes before this one; otherwise null'),
+  stage: z.number().int().nullable().describe('afterQuest: the stage of that quest that starts this one; null for its last stage'),
+});
+
 export const PlanRewardSchema = z.object({
   atStage: z.number().int(),
   gold: z.number().int().nullable(),
@@ -146,6 +155,7 @@ export const QuestPlanSchema = z.object({
   editorId: z.string().describe('Editor ID: letters and digits only, e.g. "MyRingQuest"'),
   summary: z.string(),
   startsWithGame: z.boolean().describe('True when the quest must be running from the start so its opening dialogue is available'),
+  startsWhen: PlanStartSchema.nullable().describe('What starts the quest when it does not start with the game: entering a place, reading a note, picking something up, using something, or another quest reaching a stage; null when it starts with the game'),
   characters: z.array(PlanCharacterSchema),
   locations: z.array(PlanLocationSchema),
   items: z.array(PlanItemSchema),
@@ -167,10 +177,12 @@ export type PlanItem = z.infer<typeof PlanItemSchema>;
 export type PlanLook = z.infer<typeof PlanLookSchema>;
 export type PlanStep = z.infer<typeof PlanStepSchema>;
 export type PlanEvent = z.infer<typeof PlanEventSchema>;
+export type PlanStart = z.infer<typeof PlanStartSchema>;
 
 /** Fill in lists added to the plan format later, so plans saved by older versions still load. */
 export function normalizePlan(plan: QuestPlan): QuestPlan {
   plan.events ??= [];
+  if (plan.startsWhen === undefined) plan.startsWhen = null;
   plan.animations ??= [];
   plan.rewards ??= [];
   return plan;
@@ -181,6 +193,8 @@ export interface PlanIssue {
   message: string;
 }
 
+const START_VERB = { arrive: 'enters', read: 'reads', pickup: 'picks up', activate: 'uses' } as const;
+
 /** An empty plan to start from by hand. */
 export function emptyPlan(): QuestPlan {
   return {
@@ -188,6 +202,7 @@ export function emptyPlan(): QuestPlan {
     editorId: 'NewQuest',
     summary: '',
     startsWithGame: true,
+    startsWhen: null,
     characters: [],
     locations: [],
     items: [],
@@ -271,6 +286,17 @@ export function validatePlan(plan: QuestPlan): PlanIssue[] {
     if (!stages.has(a.atStage)) err(`An animation plays at stage ${a.atStage}, which doesn't exist`);
     if (!isKind(a.characterKey, 'character')) err(`An animation is played by "${a.characterKey}", who isn't a character in the plan`);
   }
+  const sw = plan.startsWhen;
+  if (sw && sw.kind !== 'game') {
+    if (sw.kind === 'afterQuest' && !sw.quest?.trim()) err('The quest starts after another quest, but doesn’t say which');
+    if (sw.kind !== 'afterQuest' && !sw.targetKey?.trim()) err(`The quest starts when the player ${START_VERB[sw.kind]} something, but doesn’t say what`);
+    if ((sw.kind === 'read' || sw.kind === 'pickup') && sw.targetKey && keys.get(sw.targetKey) === 'item') {
+      const i = (plan.items ?? []).find((x) => x.key === sw.targetKey)!;
+      if (i.startsWith !== 'location') err(`${i.name} starts the quest when ${sw.kind === 'read' ? 'read' : 'picked up'}, so it must be placed in a location`);
+    }
+    if (plan.startsWithGame) warn('The quest starts with the game, so “starts when…” never matters; turn one of them off');
+  }
+  if (!plan.startsWithGame && (!sw || sw.kind === 'game') && (plan.stages ?? []).length) warn('Nothing starts the quest: it doesn’t start with the game and has no “starts when…”');
   const needTarget: PlanEventKind[] = ['hostile', 'friendly', 'unlock', 'lock', 'show', 'hide', 'moveTo', 'kill'];
   const needWhat: PlanEventKind[] = ['spawn', 'sound', 'weather', 'message', 'startQuest'];
   for (const e of plan.events ?? []) {

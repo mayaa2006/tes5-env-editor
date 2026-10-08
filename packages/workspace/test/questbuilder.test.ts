@@ -337,6 +337,54 @@ describe('quest builder', () => {
     expect(report.warnings.some((w) => /A storm.*no weather like “NoSuchStorm”/.test(w))).toBe(true);
   });
 
+  it('starts quests when the player arrives, reads something, or another quest ends', async () => {
+    const { ws, builder, graphs } = await setup();
+    // Part one starts when the player walks into the tavern.
+    const one = exampleQuestPlan();
+    one.startsWithGame = false;
+    one.startsWhen = { kind: 'arrive', targetKey: 'tavern', quest: null, stage: null };
+    expect(validatePlan(one).filter((i) => i.severity === 'error')).toEqual([]);
+    const r1 = await builder.build(one);
+    const g1 = await graphs.graph(r1.quest!);
+    expect(g1.startGameEnabled).toBe(false);
+    expect(g1.starts).toEqual([expect.objectContaining({ kind: 'trigger', event: 'arrive' })]);
+    expect(r1.notes.some((n) => /starts when the player enters/.test(n))).toBe(true);
+
+    // Part two starts when part one ends (stage 100 completes it).
+    const two = exampleQuestPlan();
+    two.title = 'The Ring, Part Two';
+    two.editorId = 'RingPartTwo';
+    two.conversations = [];
+    two.steps = two.steps.filter((x) => x.kind !== 'talk');
+    two.startsWithGame = false;
+    two.startsWhen = { kind: 'afterQuest', targetKey: null, quest: 'InnkeeperRingQuest', stage: null };
+    const r2 = await builder.build(two);
+    expect(await graphs.fragmentCode(r1.quest!, 100)).toContain(`${graphs.startLine(r2.quest!)}`);
+    expect((await graphs.graph(r2.quest!)).starts).toEqual([{ kind: 'afterQuest', label: expect.stringContaining('reaches stage 100'), quest: r1.quest!, stage: 100 }]);
+
+    // A vanilla quest can't start it (its script would have to be rewritten).
+    const three = { ...two, editorId: 'RingPartThree', startsWhen: { kind: 'afterQuest' as const, targetKey: null, quest: 'NoSuchQuest', stage: null } };
+    const r3 = await builder.build(three);
+    expect(r3.warnings.some((w) => /no quest called that/.test(w))).toBe(true);
+
+    // Changing it with a plan swaps the start: now reading the ring would start part one.
+    const next = structuredClone(one);
+    next.startsWhen = { kind: 'pickup', targetKey: 'ring', quest: null, stage: null };
+    expect(await builder.previewUpdate(r1.quest!, next)).toContain('Change what starts the quest');
+    await builder.update(r1.quest!, next);
+    const starts = (await graphs.graph(r1.quest!)).starts;
+    expect(starts).toEqual([expect.objectContaining({ kind: 'trigger', event: 'pickup' })]);
+    expect(ws.summary((starts[0] as any).ref)!.sig).toBe('REFR');
+  });
+
+  it('says when nothing starts a quest', () => {
+    const p = exampleQuestPlan();
+    p.startsWithGame = false;
+    expect(validatePlan(p).map((i) => i.message)).toContain('Nothing starts the quest: it doesn’t start with the game and has no “starts when…”');
+    p.startsWhen = { kind: 'read', targetKey: null, quest: null, stage: null };
+    expect(validatePlan(p).map((i) => i.message)).toContain('The quest starts when the player reads something, but doesn’t say what');
+  });
+
   it('checks events before building', () => {
     const plan = exampleQuestPlan();
     plan.events = [
