@@ -2,6 +2,13 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.8.0
+
+- **New places come ready to use:** a new place in a quest plan can be laid out like an existing interior (an inn, a house, a cave…). Its walls, furniture, lights and clutter are copied, but not its people or quest objects. Claude picks one that fits; you can change it under **Places** in the plan (**Laid out like**).
+- **Doors in:** say where the player walks in from (**Door from**), and a door is put against a wall there and linked both ways with the new place's way out.
+- **Navmesh included:** new furnished places get a navmesh, so characters can walk there.
+- **Fix:** tools that list cells now see a cell made earlier in the same step (the new place's navmesh needed it).
+
 ## 0.7.0
 
 - **Quests can start when something happens:** a quest plan can now start the quest when the player enters a place, reads a note, picks something up or uses something, instead of from the start of the game. Claude picks this from your text ("when the player finds the letter…"). Check and change it in the plan's **How the quest starts** card.

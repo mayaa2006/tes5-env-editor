@@ -19,6 +19,7 @@ import { Placer } from './placement';
 import { createPackage, stageConditions, type PackageSpec } from './routines';
 import { normalizePlan, validatePlan, type PlanCharacter, type PlanEvent, type PlanItem, type PlanLocation, type PlanStep, type QuestPlan } from './questplan';
 import { WorldService } from './world';
+import { generateCellNavmesh } from './automations';
 
 const ESSENTIAL = 0x2;
 const UNIQUE = 0x20;
@@ -103,6 +104,8 @@ interface BuildSession {
   stageLines: BuildRecord['stageLines'];
   packages: Map<string, { base: FormKey[]; alias: FormKey[] }>;
   starts: StartPlace[];
+  /** New interiors made in this build: their copied load doors (or empty). */
+  newPlaces: Map<string, { loadDoors: FormKey[]; empty?: boolean }>;
   report: QuestBuildReport;
 }
 
@@ -277,7 +280,12 @@ export class QuestBuilder {
       if (l.existing) {
         const k = this.findForm(['CELL'], l.existing) ?? this.findForm(['CELL'], l.name);
         out.push(k ? { kind: 'location', key: l.key, name: l.name, existing: k, template: null, text: `Uses ${this.label(k)}` } : { kind: 'location', key: l.key, name: l.name, existing: null, template: null, text: `No cell called “${l.existing}”`, error: `${l.name}: no cell called “${l.existing}” in the load order` });
-      } else out.push({ kind: 'location', key: l.key, name: l.name, existing: null, template: null, text: 'New empty interior' });
+      } else {
+        const like = l.layoutLike ? this.findForm(['CELL'], l.layoutLike) : undefined;
+        const from = l.doorFrom ? (plan.locations.find((x) => x.key === l.doorFrom)?.name ?? (this.findForm(['CELL'], l.doorFrom) ? this.label(this.findForm(['CELL'], l.doorFrom)!) : undefined)) : undefined;
+        const text = [like ? `New, laid out like ${this.label(like)} (walls, furniture, lights and clutter copied)` : l.layoutLike ? `New empty interior (no interior called “${l.layoutLike}” to copy)` : 'New empty interior', from ? `with a door from ${from}` : l.doorFrom ? `(no place called “${l.doorFrom}” for its door)` : like ? 'with no door in yet' : ''].filter(Boolean).join(' ');
+        out.push({ kind: 'location', key: l.key, name: l.name, existing: null, template: like ?? null, text });
+      }
     }
     for (const i of plan.items) {
       const k = i.kind === 'gold' ? resolveItem(this.ws, 'gold') : i.existing ? (resolveItem(this.ws, i.existing) ?? resolveItem(this.ws, i.name) ?? this.characters.findLoose(ITEM_SIGS, i.existing)) : undefined;
@@ -340,6 +348,7 @@ export class QuestBuilder {
       stageLines: [...(record?.stageLines ?? [])],
       packages: new Map(Object.entries(record?.packages ?? {})),
       starts: [...(record?.starts ?? [])],
+      newPlaces: new Map(),
       report: { quest: record?.quest ?? null, editorId: record ? (this.ws.view(record.quest)?.editorId ?? plan.editorId) : '', created: [], changed: [], reused: [], updated: [], dialogue: { topics: 0, responses: 0, greetings: 0, scenes: 0 }, notes: [...plan.assumptions.map((a) => `Assumed: ${a}`)], warnings: [], problems: [] },
     };
   }
@@ -367,6 +376,7 @@ export class QuestBuilder {
       for (const st of stages) this.addStage(s.quest, st, start);
     }
     for (const l of plan.locations) this.buildLocation(s, l);
+    await this.connectPlaces(s, plan.locations);
     for (const i of plan.items) this.buildItem(s, i);
     for (const c of plan.characters) this.buildCharacter(s, c);
     for (const c of plan.characters) await this.placeCharacter(s, c);
@@ -407,10 +417,74 @@ export class QuestBuilder {
       s.report.reused.push({ kind: 'location', formKey: r.existing, label: this.label(r.existing) });
       return;
     }
-    const cell = this.world.createInteriorCell(this.ws.uniqueEditorId(`${s.prefix}${pascal(l.name)}`), l.name, { ambient: [60, 55, 50] });
+    const editorId = this.ws.uniqueEditorId(`${s.prefix}${pascal(l.name)}`);
+    const like = l.layoutLike ? this.findForm(['CELL'], l.layoutLike) : undefined;
+    if (l.layoutLike && !like) s.report.warnings.push(`${l.name} should look like “${l.layoutLike}”, but there's no interior called that, so it's empty.`);
+    if (like) {
+      try {
+        const copy = this.world.copyInterior(like, editorId, l.name);
+        s.cells.set(l.key, copy.cell);
+        s.newPlaces.set(l.key, { loadDoors: copy.loadDoors });
+        s.report.created.push({ kind: 'location', formKey: copy.cell, label: `${l.name} (new interior, laid out like ${this.label(like)}: ${copy.refs.length} objects)` });
+        return;
+      } catch (e) {
+        s.report.warnings.push(`${l.name} couldn't be laid out like ${this.label(like)} (${(e as Error).message}), so it's empty.`);
+      }
+    }
+    const cell = this.world.createInteriorCell(editorId, l.name, { ambient: [60, 55, 50] });
     s.cells.set(l.key, cell);
+    s.newPlaces.set(l.key, { loadDoors: [], empty: true });
     s.report.created.push({ kind: 'location', formKey: cell, label: `${l.name} (new interior)` });
     s.report.notes.push(`${l.name} is a new, empty interior. Build the room in World → Tools and connect a door to it.`);
+  }
+
+  /**
+   * Doors into new places from where the plan says the player comes from, and
+   * a navmesh for each furnished new place (so characters can walk in it).
+   */
+  private async connectPlaces(s: BuildSession, list: PlanLocation[]): Promise<void> {
+    for (const l of list) {
+      const place = s.newPlaces.get(l.key);
+      if (!place) continue;
+      const cell = s.cells.get(l.key)!;
+      if (l.doorFrom && !place.empty) {
+        const from = s.cells.get(l.doorFrom) ?? this.findForm(['CELL'], l.doorFrom);
+        if (!from) s.report.warnings.push(`${l.name}'s door should be in “${l.doorFrom}”, but there's no place called that; link a door yourself in World → Tools → Doors.`);
+        else {
+          // Inside: the copied layout's own way out, or a new door against a wall.
+          let inner = place.loadDoors[0];
+          const doorBase = (inner ? ((this.ws.view(inner)?.data as any)?.base as FormKey) : undefined) ?? this.anyDoorBase();
+          if (!doorBase) s.report.warnings.push(`No door in your load order to connect ${l.name} with.`);
+          else {
+            if (!inner) {
+              const spot = await this.env.doorSpot(cell);
+              inner = this.world.placeReference(cell, doorBase, { position: spot.position, rotation: { x: 0, y: 0, z: spot.yaw } }, { persistent: true });
+            }
+            const spot = await this.env.doorSpot(from, 7);
+            const outer = this.world.placeReference(from, doorBase, { position: spot.position, rotation: { x: 0, y: 0, z: spot.yaw } }, { persistent: true, editorId: this.ws.uniqueEditorId(`${s.prefix}${pascal(l.name)}Door`) });
+            await this.env.linkDoors(outer, inner);
+            s.report.created.push({ kind: 'placed', formKey: outer, label: `A door to ${l.name} in ${this.label(from)}${spot.onWall ? '' : ' (no wall found: move it where it belongs)'}` });
+            if (!spot.onWall) s.report.notes.push(`The door to ${l.name} stands in the middle of ${this.label(from)}; move it into place in the World tab (its link moves with it).`);
+            if (parseFormKey(from).plugin !== this.ws.activeName && !this.world.cells().find((c) => c.formKey === from)?.interior) s.report.notes.push(`The door outside is in ${this.label(from)}, an outdoor cell: check it doesn't clash with other mods there.`);
+          }
+        }
+      } else if (!l.doorFrom && !place.empty) s.report.notes.push(`${l.name} has no door in from anywhere yet; link one in World → Tools → Doors.`);
+      const extra = place.loadDoors.length - (l.doorFrom ? 1 : 0);
+      if (extra > 0) s.report.notes.push(`${l.name} has ${extra} more door${extra > 1 ? 's' : ''} from the layout it copies that lead${extra > 1 ? '' : 's'} nowhere yet: link or lock ${extra > 1 ? 'them' : 'it'} in the World tab.`);
+      if (!place.empty) {
+        try {
+          const nav = await generateCellNavmesh(this.ws, cell, { preset: 'interior' });
+          await this.env.stampNavmesh(cell);
+          s.report.notes.push(`${l.name} got a navmesh (${nav.triangles} triangles) so characters can walk there.`);
+        } catch (e) {
+          s.report.warnings.push(`${l.name} has no navmesh yet (${(e as Error).message}); generate one in World → Navmesh.`);
+        }
+      }
+    }
+  }
+
+  private anyDoorBase(): FormKey | undefined {
+    return this.ws.search({ sigs: ['DOOR'], limit: 200 }).items.find((d) => !d.deleted && (this.ws.view(d.formKey)?.data as any)?.model)?.formKey;
   }
 
   private buildItem(s: BuildSession, i: PlanItem): void {
@@ -1148,10 +1222,12 @@ export class QuestBuilder {
     // New places, items and characters; changed characters.
     const keysOf = <T extends { key: string }>(list: T[]) => new Map(list.map((x) => [x.key, x]));
     const oldChars = keysOf(old.characters);
-    for (const l of next.locations) if (!s.cells.has(l.key)) {
+    const addedPlaces = next.locations.filter((l) => !s.cells.has(l.key));
+    for (const l of addedPlaces) {
       this.buildLocation(s, l);
       say(`Added the place ${l.name}`);
     }
+    await this.connectPlaces(s, addedPlaces);
     const newItems = next.items.filter((i) => !s.items.has(i.key));
     for (const i of newItems) {
       this.buildItem(s, i);

@@ -46,7 +46,7 @@ export function exampleQuestPlan(): QuestPlan {
         ],
       },
     ],
-    locations: [{ key: 'tavern', name: 'The Demo Tavern', existing: 'DemoTavern', description: 'The tavern Brynja runs' }],
+    locations: [{ key: 'tavern', name: 'The Demo Tavern', existing: 'DemoTavern', description: 'The tavern Brynja runs', layoutLike: null, doorFrom: null }],
     items: [{ key: 'ring', name: "Brynja's Ring", kind: 'misc', existing: null, basedOn: null, value: 50, startsWith: 'location', startsAtKey: 'tavern', spot: 'on a table' }],
     stages: [
       { index: 0, journal: '', startsQuest: true, completesQuest: false, failsQuest: false },

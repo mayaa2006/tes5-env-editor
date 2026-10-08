@@ -385,6 +385,61 @@ export class WorldService {
     });
   }
 
+  /**
+   * A new interior laid out like an existing one: the cell's lighting, music
+   * and sound, and its walls, furniture, lights and clutter are copied.
+   * Characters, quest-controlled objects (initially disabled or with an enable
+   * parent), scripts, ownership and links to other places are left out. Load
+   * doors are kept but lead nowhere until linked; they're returned.
+   */
+  copyInterior(source: FormKey, editorId: string, name?: string): { cell: FormKey; refs: FormKey[]; loadDoors: FormKey[]; skipped: number } {
+    const src = this.ws.view(source);
+    if (!src || src.sig !== 'CELL') throw new WorkspaceError(`${source} isn't a cell`);
+    if (!this.cells({ interiorOnly: true }).some((c) => c.formKey === source)) throw new WorkspaceError(`${src.editorId ?? source} is outdoors; only interiors can be copied`);
+    return this.ws.transaction(`New place like ${src.editorId ?? source}`, () => {
+      const data = structuredClone(src.data) as Record<string, any>;
+      for (const k of ['ownership', 'location', 'encounterZone', 'regions', 'lockList', 'scripts']) delete data[k];
+      data.editorId = editorId;
+      if (name) data.name = name;
+      else delete data.name;
+      const cell = this.ws.createRecord('CELL', data);
+      const map = new Map<FormKey, FormKey>();
+      const loadDoors: FormKey[] = [];
+      let skipped = 0;
+      const made: { key: FormKey; data: Record<string, any>; unknown: unknown }[] = [];
+      for (const r of this.references(source)) {
+        const v = this.ws.view(r.formKey);
+        if (!v || r.deleted || r.sig !== 'REFR' || !r.base) {
+          if (r.sig !== 'REFR') skipped++;
+          continue;
+        }
+        const d = structuredClone(v.data) as Record<string, any>;
+        if (r.disabled || d.enableParent) {
+          skipped++;
+          continue;
+        }
+        const wasLoadDoor = !!d.teleport;
+        for (const k of ['editorId', 'scripts', 'ownership', 'linkedRefs', 'activateParents', 'persistLocation', 'locationRefType', 'locationReference', 'encounterZone', 'navmeshDoorLink', 'teleport', 'teleportMessage', 'spawnContainer', 'enableParent', 'leveledItemBase']) delete d[k];
+        const key = this.ws.createRecord('REFR', d, { cell, persistent: r.persistent || wasLoadDoor }, (v.flags & ~RecordFlags.Compressed & ~RecordFlags.InitiallyDisabled) | (wasLoadDoor ? RecordFlags.Persistent : 0));
+        map.set(r.formKey, key);
+        made.push({ key, data: d, unknown: v.unknown });
+        if (wasLoadDoor) loadDoors.push(key);
+      }
+      // Links between copied objects (rooms, portals, multibounds) point at the copies.
+      const remap = (x: unknown): unknown => {
+        if (typeof x === 'string') return map.get(x as FormKey) ?? x;
+        if (Array.isArray(x)) return x.map(remap);
+        if (x && typeof x === 'object' && !(x instanceof Uint8Array)) return Object.fromEntries(Object.entries(x).map(([k, y]) => [k, remap(y)]));
+        return x;
+      };
+      for (const m of made) {
+        const next = remap(m.data) as Record<string, any>;
+        if (JSON.stringify(next) !== JSON.stringify(m.data)) this.ws.updateRecord(m.key, next, { unknown: this.ws.view(m.key)!.unknown });
+      }
+      return { cell, refs: [...map.values()], loadDoors, skipped };
+    });
+  }
+
   /** Create an interior cell. */
   createInteriorCell(editorId: string, name?: string, lighting?: { ambient: [number, number, number] }): FormKey {
     const data: Record<string, unknown> = {

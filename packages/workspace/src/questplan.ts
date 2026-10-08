@@ -69,6 +69,8 @@ export const PlanLocationSchema = z.object({
   name: z.string(),
   existing: z.string().nullable().describe('Editor ID or name of an existing cell; null to create a new interior'),
   description: z.string(),
+  layoutLike: z.string().nullable().describe('For a new interior: Editor ID of an existing interior from the load order whose rooms, furniture, lights and clutter are copied (pick one that fits: an inn, a house, a cave, a shop…); null leaves it empty'),
+  doorFrom: z.string().nullable().describe('For a new interior: location key or Editor ID of the place the player enters it from (a door is put there and linked); null for no door'),
 });
 
 export const PlanItemSchema = z.object({
@@ -182,6 +184,10 @@ export type PlanStart = z.infer<typeof PlanStartSchema>;
 /** Fill in lists added to the plan format later, so plans saved by older versions still load. */
 export function normalizePlan(plan: QuestPlan): QuestPlan {
   plan.events ??= [];
+  for (const l of plan.locations ?? []) {
+    if (l.layoutLike === undefined) l.layoutLike = null;
+    if (l.doorFrom === undefined) l.doorFrom = null;
+  }
   if (plan.startsWhen === undefined) plan.startsWhen = null;
   plan.animations ??= [];
   plan.rewards ??= [];
@@ -255,6 +261,10 @@ export function validatePlan(plan: QuestPlan): PlanIssue[] {
       if (r.hours && (r.hours.from < 0 || r.hours.from > 23 || r.hours.to < 0 || r.hours.to > 24)) err(`${c.name}'s routine hours must be 0–23`);
     }
     if (c.outfit?.saveAs && !/^[A-Za-z][A-Za-z0-9_]*$/.test(c.outfit.saveAs)) err(`The outfit name “${c.outfit.saveAs}” must be an Editor ID (letters, digits and _)`);
+  }
+  for (const l of plan.locations ?? []) {
+    if (l.existing && (l.layoutLike || l.doorFrom)) warn(`${l.name} already exists, so its layout and door are left as they are`);
+    if (l.doorFrom && l.doorFrom === l.key) err(`${l.name} can't have its door in itself`);
   }
   for (const c of plan.characters ?? []) if (c.locationKey && !isKind(c.locationKey, 'location')) err(`${c.name} stands in "${c.locationKey}", which isn't a location in the plan`);
   for (const i of plan.items ?? []) {

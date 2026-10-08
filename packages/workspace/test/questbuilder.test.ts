@@ -154,7 +154,7 @@ describe('quest builder', () => {
     const { ws, builder, graphs, world } = await setup();
     const plan = exampleQuestPlan();
     plan.editorId = 'CellarQuest';
-    plan.locations.push({ key: 'cellar', name: 'Old Cellar', existing: null, description: 'Under the tavern' });
+    plan.locations.push({ key: 'cellar', name: 'Old Cellar', existing: null, description: 'Under the tavern', layoutLike: null, doorFrom: null });
     plan.characters[1]!.locationKey = 'cellar';
     plan.items.push({ key: 'note', name: 'Crumpled Note', kind: 'book', existing: null, basedOn: null, value: 1, startsWith: 'character', startsAtKey: 'eirik', spot: null });
     plan.items.push({ key: 'charm', name: 'Lucky Charm', kind: 'misc', existing: null, basedOn: null, value: 10, startsWith: 'player', startsAtKey: null, spot: null });
@@ -182,6 +182,46 @@ describe('quest builder', () => {
     expect(end).toContain('SetObjectiveCompleted(20)');
     expect(end).toContain('AddItem(Game.GetFormFromFile(0x00000F, "Skyrim.esm"), 25)');
     expect(r.problems).toContain('Nothing leads to stage 50.');
+  });
+
+  it('lays out a new place like an existing one and puts a door to it', async () => {
+    const { ws, builder, world } = await setup();
+    const plan = exampleQuestPlan();
+    plan.editorId = 'BackRoomQuest';
+    plan.locations.push({ key: 'backroom', name: 'Back Room', existing: null, description: 'Behind the tavern', layoutLike: 'DemoTavern', doorFrom: 'tavern' });
+    plan.characters[1]!.locationKey = 'backroom';
+    expect(validatePlan(plan)).toEqual([]);
+    const tavern = ws.byEditorId('DemoTavern')!;
+    const before = world.references(tavern).length;
+    const r = await builder.build(plan, { seed: 3 });
+    const room = ws.byEditorId('BackRoomQuestBackRoom')!;
+    const refs = world.references(room);
+    // The tavern's statics, furniture and lights, without its people.
+    const src = world.references(tavern).filter((x) => x.sig === 'REFR' && !x.disabled);
+    expect(refs.filter((x) => x.sig === 'REFR').length).toBeGreaterThanOrEqual(src.length - 1);
+    expect(refs.filter((x) => x.sig === 'ACHR').map((x) => ws.summary(x.base!)?.name)).toEqual(['Eirik']);
+    expect(ws.view(room)!.data.lighting).toEqual(ws.view(tavern)!.data.lighting);
+    // A new door in the tavern, linked both ways with the copied way out.
+    const added = world.references(tavern).filter((x) => x.baseSig === 'DOOR' && x.source === 'Built.esp');
+    expect(world.references(tavern).length).toBe(before + 2); // the door, and the ring on a table
+    expect(added).toHaveLength(1);
+    const outer = added[0]!;
+    const inner = outer.teleport!;
+    expect(ws.view(inner)!.parent.cell).toBe(room);
+    expect((ws.view(inner)!.data as any).teleport.door).toBe(outer.formKey);
+    expect(r.notes.some((n) => /Back Room got a navmesh/.test(n))).toBe(true);
+    expect(ws.search({ sigs: ['NAVM'], limit: 100 }).items.some((n) => ws.view(n.formKey)?.parent.cell === room)).toBe(true);
+    // The door is against a wall, with floor in front of it.
+    expect(r.notes.some((n) => /stands in the middle/.test(n))).toBe(false);
+  });
+
+  it('refuses to copy an outdoor cell, and says so', async () => {
+    const { builder } = await setup();
+    const plan = exampleQuestPlan();
+    plan.editorId = 'OutQuest';
+    plan.locations.push({ key: 'yard', name: 'Yard', existing: null, description: '', layoutLike: 'NoSuchCell', doorFrom: null });
+    const r = await builder.build(plan);
+    expect(r.warnings).toContain('Yard should look like “NoSuchCell”, but there\'s no interior called that, so it\'s empty.');
   });
 
   it('changes existing characters, with no quest needed', async () => {
