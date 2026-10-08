@@ -324,6 +324,7 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
                       {r.text}
                     </span>
                     {kind === 'location' && !r.existing && !r.error && <NewPlaceFields plan={draft} placeKey={r.key} edit={edit} />}
+                    {kind === 'character' && !r.error && <CharacterRoleFields plan={draft} charKey={r.key} edit={edit} />}
                     {r.changes?.map((c) => (
                       <span key={c} className="small" style={{ whiteSpace: 'normal' }} data-testid="character-change">
                         • {c}
@@ -419,6 +420,7 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
         </div>
       </div>
 
+      <EncountersCard plan={draft} edit={edit} nameOf={nameOf} />
       <EventsCard plan={draft} edit={edit} nameOf={nameOf} />
       <FailuresCard plan={draft} edit={edit} nameOf={nameOf} />
         </>
@@ -463,6 +465,118 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
         <button className="btn primary" disabled={errors > 0} onClick={() => void build()} data-testid="build-quest" title={existing ? 'Shows what will change before anything is changed' : 'Creates everything as one step you can undo'}>
           <Icon name="check" size={13} /> {existing ? 'See what will change' : draft.stages.length ? 'Build the quest' : 'Make the changes'}
         </button>
+      </div>
+    </div>
+  );
+}
+
+const TRAIN_SKILLS = ['One-handed', 'Two-handed', 'Archery', 'Block', 'Smithing', 'Heavy Armor', 'Light Armor', 'Pickpocket', 'Lockpicking', 'Sneak', 'Alchemy', 'Speech', 'Alteration', 'Conjuration', 'Destruction', 'Illusion', 'Restoration', 'Enchanting'];
+
+/** A character's roles and how they fight, as switches (folded away until opened). */
+function CharacterRoleFields({ plan, charKey, edit }: { plan: QuestPlan; charKey: string; edit: (fn: (p: QuestPlan) => void) => Promise<void> }) {
+  const c = plan.characters.find((x) => x.key === charKey);
+  if (!c) return null;
+  const roles = c.roles ?? { follower: false, marriage: false, innkeeper: false, merchant: null, trainer: null };
+  const combat = c.combat ?? { hostile: null, levelScaled: null, skills: [], spells: [], perks: [], combatStyle: null };
+  const setRoles = (change: Partial<typeof roles>) => void edit((p) => void (p.characters.find((x) => x.key === charKey)!.roles = { ...roles, ...change }));
+  const setCombat = (change: Partial<typeof combat>) => void edit((p) => void (p.characters.find((x) => x.key === charKey)!.combat = { ...combat, ...change }));
+  const tick = (label: string, title: string, checked: boolean, on: (v: boolean) => void, testId: string) => (
+    <label className="row small" style={{ gap: 4 }} title={title}>
+      <input type="checkbox" checked={checked} onChange={(e) => on(e.target.checked)} data-testid={testId} />
+      {label}
+    </label>
+  );
+  return (
+    <details className="small" style={{ width: '100%', marginTop: 2 }} data-testid="character-roles">
+      <summary className="dim" style={{ cursor: 'pointer' }} title="Follower, merchant, trainer, marriage, and whether they attack the player">
+        Roles and fighting
+      </summary>
+      <div className="col" style={{ gap: 4, marginTop: 4 }}>
+        <div className="row wrap" style={{ gap: 10 }}>
+          {tick('Follower', 'Can be asked to follow the player (the game’s own follower dialogue)', roles.follower, (v) => setRoles({ follower: v }), 'role-follower')}
+          {tick('Marriage', 'Can be married by a player wearing the Amulet of Mara', roles.marriage, (v) => setRoles({ marriage: v }), 'role-marriage')}
+          {tick('Innkeeper', 'Runs an inn: sells food and drink', roles.innkeeper, (v) => setRoles({ innkeeper: v }), 'role-innkeeper')}
+          {tick('Hostile', 'Attacks the player on sight', combat.hostile === true, (v) => setCombat({ hostile: v ? true : null }), 'combat-hostile')}
+          {tick('Levels with the player', 'Stays a match for the player instead of a fixed level', !!combat.levelScaled, (v) => setCombat({ levelScaled: v ? { min: 1, max: 50 } : null }), 'combat-levelled')}
+        </div>
+        <label className="col" style={{ gap: 2 }} title="What they sell, e.g. general goods, weapons, potions, food. Leave empty if they don't trade.">
+          <span className="dim">Sells</span>
+          <input className="input" placeholder="Not a merchant" defaultValue={roles.merchant?.sells ?? ''} key={`m-${roles.merchant?.sells}`} onBlur={(e) => e.target.value.trim() !== (roles.merchant?.sells ?? '') && setRoles({ merchant: e.target.value.trim() ? { sells: e.target.value.trim(), hours: roles.merchant?.hours ?? null } : null })} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); e.stopPropagation(); }} data-testid="role-sells" />
+        </label>
+        <div className="row" style={{ gap: 6 }}>
+          <label className="col grow" style={{ gap: 2 }} title="A skill they train for gold">
+            <span className="dim">Trains</span>
+            <Select value={roles.trainer?.skill ?? ''} options={[{ value: '', label: 'Nothing' }, ...TRAIN_SKILLS.map((k) => ({ value: k, label: k }))]} onChange={(v) => setRoles({ trainer: v ? { skill: v, maxLevel: roles.trainer?.maxLevel ?? 50 } : null })} />
+          </label>
+          {roles.trainer && (
+            <label className="col" style={{ gap: 2 }} title="The highest level they train to">
+              <span className="dim">Up to</span>
+              <Select value={roles.trainer.maxLevel} options={[{ value: 50, label: '50 (apprentice)' }, { value: 75, label: '75 (expert)' }, { value: 90, label: '90 (master)' }]} onChange={(v) => setRoles({ trainer: { ...roles.trainer!, maxLevel: v } })} />
+            </label>
+          )}
+        </div>
+      </div>
+    </details>
+  );
+}
+
+/** Groups of enemies waiting somewhere (from the load order's own enemies). */
+function EncountersCard({ plan, edit, nameOf }: { plan: QuestPlan; edit: (fn: (p: QuestPlan) => void) => Promise<void>; nameOf: (k: string | null) => string }) {
+  const list = plan.encounters ?? [];
+  const set = (i: number, change: Partial<NonNullable<QuestPlan['encounters']>[number]>) => void edit((p) => void Object.assign(p.encounters![i]!, change));
+  const add = () =>
+    void edit((p) => {
+      let n = 1;
+      while ([...p.characters, ...p.items, ...p.locations, ...(p.encounters ?? [])].some((x) => x.key === `enemies${n}`)) n++;
+      (p.encounters ??= []).push({ key: `enemies${n}`, what: 'bandit', count: 3, locationKey: p.locations[0]?.key ?? '', spot: null });
+    });
+  return (
+    <div className="card" data-testid="plan-encounters">
+      <div className="card-title row" style={{ gap: 6 }}>
+        Enemy groups
+        <Help text="Enemies from your load order placed in a place (bandits in a cave, draugr in a tomb). Pick a levelled one (Lvl…) so they match the player. A “Defeat” step moves the quest on when they're all dead." />
+        <span className="grow" />
+        <button className="btn small ghost" onClick={add} disabled={!plan.locations.length} title={plan.locations.length ? 'Add a group of enemies to a place in the plan' : 'Add a place to the plan first'} data-testid="add-encounter">
+          <Icon name="plus" size={12} /> Add enemies
+        </button>
+      </div>
+      {!list.length && <p className="dim small" style={{ margin: 0 }}>No enemy groups. Add some for a cave full of bandits or a tomb of draugr.</p>}
+      <div className="col" style={{ gap: 8 }}>
+        {list.map((e, i) => (
+          <div key={e.key} className="row wrap" style={{ gap: 6, alignItems: 'flex-end' }} data-testid="plan-encounter">
+            <label className="col small" style={{ gap: 2, width: 70 }}>
+              <span className="dim">How many</span>
+              <input className="input" type="number" min={1} max={12} defaultValue={e.count} key={`c-${e.key}-${e.count}`} onBlur={(ev) => Number(ev.target.value) !== e.count && set(i, { count: Math.round(Number(ev.target.value)) || 1 })} data-testid="encounter-count" />
+            </label>
+            <label className="col small" style={{ gap: 2, flex: '1 1 160px' }} title="An enemy type (bandit, draugr, wolf) or an Editor ID from your load order">
+              <span className="dim">Enemy</span>
+              <input className="input" defaultValue={e.what} key={`w-${e.key}-${e.what}`} onBlur={(ev) => ev.target.value.trim() && ev.target.value.trim() !== e.what && set(i, { what: ev.target.value.trim() })} onKeyDown={(ev) => { if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur(); ev.stopPropagation(); }} data-testid="encounter-what" />
+            </label>
+            <label className="col small" style={{ gap: 2 }}>
+              <span className="dim">In</span>
+              <Select value={e.locationKey} options={plan.locations.map((l) => ({ value: l.key, label: l.name }))} onChange={(v) => set(i, { locationKey: v })} />
+            </label>
+            <label className="col small" style={{ gap: 2 }} title="Move the quest on to this stage once every one of them is dead">
+              <span className="dim">When all are dead</span>
+              <Select
+                value={plan.steps.find((st) => st.kind === 'clear' && st.targetKey === e.key)?.to ?? -1}
+                options={[{ value: -1, label: 'Nothing happens' }, ...plan.stages.map((st) => ({ value: st.index, label: `Go to stage ${st.index}` }))]}
+                onChange={(v) =>
+                  void edit((p) => {
+                    p.steps = p.steps.filter((st) => !(st.kind === 'clear' && st.targetKey === e.key));
+                    if (v >= 0) p.steps.push({ from: null, to: v, kind: 'clear', targetKey: e.key, note: `Defeat the ${e.what}` });
+                  })
+                }
+              />
+            </label>
+            <button className="btn small ghost icon" onClick={() => void edit((p) => void (p.encounters!.splice(i, 1), (p.steps = p.steps.filter((st) => !(st.kind === 'clear' && st.targetKey === e.key)))))} title="Remove this group (Undo edit brings it back)" data-testid="remove-encounter">
+              <Icon name="trash" size={12} />
+            </button>
+            <span className="dim small" style={{ flexBasis: '100%' }}>
+              {e.count} {e.what} wait in {nameOf(e.locationKey) || 'the place'}.
+            </span>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -776,6 +890,7 @@ const STEP_VERBS: Record<QuestPlan['steps'][number]['kind'], string> = {
   equip: 'Equip',
   drop: 'Drop',
   script: 'Right away',
+  clear: 'Defeat',
 };
 
 // ------------------------------------------------------------------ 3. result

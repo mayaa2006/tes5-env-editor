@@ -196,6 +196,19 @@ export class QuestGraphService {
     const starts: QuestStart[] = [];
     if ((q.flags & QuestFlag.StartGameEnabled) !== 0) starts.push({ kind: 'game', label: 'Starts with the game' });
     const fromTriggers = (spec: TriggerSpec, src: QuestEdgeSource, target: FormKey | null, where: string) => {
+      // "Clear: …" — every enemy in a group dead (one edge for the whole group).
+      if (src.type === 'ref-trigger' && spec.name?.startsWith('Clear: ')) {
+        const own = `(${formExpression(quest)} as Quest).SetStage(`;
+        for (const a of spec.actions) {
+          if (a.kind !== 'custom') continue;
+          const i = a.code.indexOf(own);
+          if (i < 0) continue;
+          const to = Number(/^(\d+)/.exec(a.code.slice(i + own.length))?.[1]);
+          const cond = spec.conditions.find((c) => c.kind === 'questStage' && c.quest === quest && c.op === '==');
+          const id = `clear:${spec.id}:${to}`;
+          if (!edges.some((x) => x.id === id)) edges.push({ id, from: cond && cond.kind === 'questStage' ? cond.stage : null, to, kind: 'death', label: `Defeat ${spec.name.slice(7)}`, target, source: src });
+        }
+      }
       if (src.type === 'ref-trigger' && spec.actions.some((a) => a.kind === 'startQuest' && a.quest === quest)) {
         // Arriving is about the place, not the hidden marker that listens for it.
         const cell = spec.event.kind === 'arrive' ? this.ws.view(src.ref)?.parent.cell : undefined;
@@ -409,6 +422,25 @@ export class QuestGraphService {
   }
 
   /** Add lines to a stage's script (keeping what's there). */
+  /**
+   * Set a stage when every one of a group of placed enemies is dead: the same
+   * run-once death trigger on each of them checks the others.
+   */
+  async addClearEdge(quest: FormKey, refs: FormKey[], e: { from: number | null; to: number; label: string }): Promise<void> {
+    await this.ws.transactionAsync('Add connection', async () => {
+      if (!this.quests.quest(quest).stages.some((s) => s.index === e.to)) this.quests.addStage(quest, e.to);
+      const id = newTriggerId();
+      const dead = refs.map((r) => `(${formExpression(r)} as Actor).IsDead()`).join(' && ');
+      const code = [`If ${dead}`, `\t(${formExpression(quest)} as Quest).SetStage(${e.to})`, 'EndIf'].join('\n');
+      for (const ref of refs) {
+        const host: TriggerHost = { kind: 'ref', ref };
+        const { specs } = await this.triggers.list(host);
+        specs.push({ id, name: `Clear: ${e.label}`, event: { kind: 'death' }, conditions: e.from === null ? [] : [{ kind: 'questStage', quest, op: '==', stage: e.from }], actions: [{ kind: 'custom', code }], once: true });
+        await this.triggers.set(host, specs);
+      }
+    });
+  }
+
   // ---------------------------------------------------------------- failing
 
   /**

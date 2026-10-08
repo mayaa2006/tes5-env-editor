@@ -17,7 +17,7 @@ import type { NewQuestEdge, QuestGraphService } from './questgraph';
 import { lintQuestDialogue } from './dialoguelint';
 import { Placer } from './placement';
 import { createPackage, stageConditions, type PackageSpec } from './routines';
-import { normalizePlan, validatePlan, type PlanCharacter, type PlanEvent, type PlanItem, type PlanLocation, type PlanStep, type QuestPlan } from './questplan';
+import { normalizePlan, validatePlan, type PlanCharacter, type PlanEncounter, type PlanEvent, type PlanItem, type PlanLocation, type PlanStep, type QuestPlan } from './questplan';
 import { WorldService } from './world';
 import { generateCellNavmesh } from './automations';
 
@@ -47,7 +47,7 @@ export interface QuestBuildReport {
   /** The quest, or null for a plan that only changes characters, places and items. */
   quest: FormKey | null;
   editorId: string;
-  created: { kind: PlanEntryKind | 'quest' | 'placed' | 'outfit' | 'package'; formKey: FormKey; label: string }[];
+  created: { kind: PlanEntryKind | 'quest' | 'placed' | 'outfit' | 'package' | 'role'; formKey: FormKey; label: string }[];
   /** Existing characters that were changed. */
   changed: { formKey: FormKey; label: string; changes: string[] }[];
   reused: { kind: PlanEntryKind; formKey: FormKey; label: string }[];
@@ -84,6 +84,8 @@ export interface BuildRecord {
   starts?: StartPlace[];
   /** Fail conditions added (death triggers on aliases, the time limit). */
   failParts?: FailPart[];
+  /** Encounter key → the enemies placed for it. */
+  encounters?: Record<string, FormKey[]>;
 }
 
 type FailPart = { alias: number; trigger: string } | { timeLimit: true };
@@ -109,6 +111,7 @@ interface BuildSession {
   packages: Map<string, { base: FormKey[]; alias: FormKey[] }>;
   starts: StartPlace[];
   failParts: FailPart[];
+  encounters: Map<string, FormKey[]>;
   /** New interiors made in this build: their copied load doors (or empty). */
   newPlaces: Map<string, { loadDoors: FormKey[]; empty?: boolean }>;
   report: QuestBuildReport;
@@ -122,8 +125,12 @@ function startStageOf(plan: QuestPlan): number {
 /** What changed about a character between two plans, as a character entry carrying only the changes (null if nothing). */
 function characterDelta(was: PlanCharacter, now: PlanCharacter): PlanCharacter | null {
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
-  const d: PlanCharacter = { ...now, spot: null, outfit: null, inventory: [], factions: [], className: null, level: null, look: null, essential: null, routine: [] };
+  const d: PlanCharacter = { ...now, spot: null, outfit: null, inventory: [], factions: [], className: null, level: null, look: null, essential: null, routine: [], combat: null, roles: null, relationships: [] };
   let changed = false;
+  if (!same(was.combat ?? null, now.combat ?? null) && now.combat) (d.combat = now.combat), (changed = true);
+  if (!same(was.roles ?? null, now.roles ?? null) && now.roles) (d.roles = now.roles), (changed = true);
+  const newRels = (now.relationships ?? []).filter((r) => !(was.relationships ?? []).some((x) => same(x, r)));
+  if (newRels.length) (d.relationships = newRels), (changed = true);
   if (!same(was.outfit, now.outfit) && now.outfit) (d.outfit = now.outfit), (changed = true);
   if (!same(was.factions, now.factions)) (d.factions = now.factions.filter((f) => !was.factions.some((x) => same(x, f)))), (changed ||= d.factions.length > 0);
   if (!same(was.inventory, now.inventory)) (d.inventory = now.inventory.filter((i) => !was.inventory.some((x) => same(x, i)))), (changed ||= d.inventory.length > 0);
@@ -355,6 +362,7 @@ export class QuestBuilder {
       packages: new Map(Object.entries(record?.packages ?? {})),
       starts: [...(record?.starts ?? [])],
       failParts: [...(record?.failParts ?? [])],
+      encounters: new Map(Object.entries(record?.encounters ?? {})),
       newPlaces: new Map(),
       report: { quest: record?.quest ?? null, editorId: record ? (this.ws.view(record.quest)?.editorId ?? plan.editorId) : '', created: [], changed: [], reused: [], updated: [], dialogue: { topics: 0, responses: 0, greetings: 0, scenes: 0 }, notes: [...plan.assumptions.map((a) => `Assumed: ${a}`)], warnings: [], problems: [] },
     };
@@ -386,7 +394,9 @@ export class QuestBuilder {
     await this.connectPlaces(s, plan.locations);
     for (const i of plan.items) this.buildItem(s, i);
     for (const c of plan.characters) this.buildCharacter(s, c);
+    this.buildRelationships(s, plan.characters);
     for (const c of plan.characters) await this.placeCharacter(s, c);
+    for (const e of plan.encounters) await this.placeEncounter(s, e);
     await this.placeItems(s, plan.items);
     if (!s.quest) {
       await this.buildRoutines(s, plan.characters);
@@ -509,7 +519,7 @@ export class QuestBuilder {
       prefix: s.prefix,
       random: s.random,
       isNew,
-      created: (kind: 'outfit', formKey: FormKey, label: string) => void s.report.created.push({ kind, formKey, label }),
+      created: (kind: 'outfit' | 'role', formKey: FormKey, label: string) => void s.report.created.push({ kind, formKey, label }),
       note: (t: string) => void s.report.notes.push(t),
       warn: (t: string) => void s.report.warnings.push(t),
     };
@@ -530,6 +540,15 @@ export class QuestBuilder {
     const npc = this.createCharacter(c, r.template!, s.prefix, s.random, s.report);
     this.characters.apply(npc, c, this.changeCtx(s, true));
     s.npcs.set(c.key, npc);
+  }
+
+  /** How characters feel about each other and the player (after all of them exist). */
+  private buildRelationships(s: BuildSession, list: PlanCharacter[]): void {
+    for (const c of list)
+      for (const r of c.relationships ?? []) {
+        const npc = s.npcs.get(c.key);
+        if (npc) this.characters.relate(npc, r.with, r.rank, c, this.changeCtx(s, false), (k) => s.npcs.get(k));
+      }
   }
 
   private async placeCharacter(s: BuildSession, c: PlanCharacter): Promise<void> {
@@ -888,6 +907,34 @@ export class QuestBuilder {
     return ref && parseFormKey(ref).plugin === this.ws.activeName ? ref : undefined;
   }
 
+  private encounterLabel(s: BuildSession, key: string): string {
+    const e = s.plan.encounters.find((x) => x.key === key);
+    return e ? `${e.count} ${e.what}` : key;
+  }
+
+  /** A group of enemies from the load order, spread around a place (persistent, so the quest can tell when they're all dead). */
+  private async placeEncounter(s: BuildSession, e: PlanEncounter): Promise<void> {
+    const cell = s.cells.get(e.locationKey) ?? this.findForm(['CELL'], e.locationKey);
+    if (!cell) {
+      s.report.warnings.push(`${e.count} ${e.what}: there's no place called “${e.locationKey}” to put them.`);
+      return;
+    }
+    const base = this.findLoose(['NPC_'], e.what);
+    if (!base) {
+      s.report.warnings.push(`${e.count} ${e.what}: no character like “${e.what}” in the load order to place.`);
+      return;
+    }
+    const refs: FormKey[] = [];
+    const n = Math.max(1, Math.min(12, e.count));
+    for (let i = 0; i < n; i++) {
+      const spot = await s.placer.actorSpot(cell, e.spot);
+      refs.push(this.world.placeReference(cell, base, { position: spot.position, rotation: { x: 0, y: 0, z: spot.yaw } }, { persistent: true }));
+    }
+    s.encounters.set(e.key, refs);
+    s.report.created.push({ kind: 'placed', formKey: refs[0]!, label: `${n} × ${this.label(base)} in ${this.label(cell)}${e.spot ? `, ${e.spot}` : ''}` });
+    if (!/^lvl/i.test(this.ws.summary(base)?.editorId ?? '')) s.report.notes.push(`${e.count} ${e.what} are ${this.label(base)}, a fixed character rather than a levelled one; pick a “Lvl…” character if they should match the player's level.`);
+  }
+
   /** Ways the quest fails: a character dying, or a time limit. */
   private async buildFailures(s: BuildSession): Promise<void> {
     const quest = s.quest!;
@@ -960,6 +1007,15 @@ export class QuestBuilder {
       else await this.graphs.addEdge(quest, { from: st.from, to: st.to, kind: 'script' });
       return;
     }
+    if (st.kind === 'clear') {
+      const refs = s.encounters.get(st.targetKey ?? '') ?? [];
+      if (!refs.length) {
+        s.report.warnings.push(`“${st.note}” can't be detected: the group “${st.targetKey}” wasn't placed.`);
+        return;
+      }
+      await this.graphs.addClearEdge(quest, refs, { from: st.from, to: st.to, label: this.encounterLabel(s, st.targetKey!) });
+      return;
+    }
     if (st.targetKey && s.inContainer.has(st.targetKey)) {
       await this.graphs.addAliasEdge(quest, this.aliasOf(s, st.targetKey)!, { from: st.from, to: st.to, kind: st.kind });
       return;
@@ -1013,7 +1069,7 @@ export class QuestBuilder {
           });
           (questBound ? alias : base).push(pk);
           if (topic) alias.push(topic);
-          s.report.created.push({ kind: 'package', formKey: pk, label: `${c.name}: ${this.characters.describe({ ...c, spot: null, outfit: null, inventory: [], factions: [], className: null, level: null, look: null, essential: null, existing: null, routine: [r] }).join('')}` });
+          s.report.created.push({ kind: 'package', formKey: pk, label: `${c.name}: ${this.characters.describe({ ...c, spot: null, outfit: null, inventory: [], factions: [], className: null, level: null, look: null, essential: null, existing: null, routine: [r], combat: null, roles: null, relationships: [] }).join('')}` });
         } catch (e) {
           if (e instanceof WorkspaceError) s.report.warnings.push(`${c.name}: ${e.message}`);
           else throw e;
@@ -1087,6 +1143,7 @@ export class QuestBuilder {
       packages: obj(s.packages),
       starts: s.starts,
       failParts: s.failParts,
+      encounters: obj(s.encounters),
     };
     // Written as part of the edit, so undo and redo keep the record in step with the plugin.
     const path = this.recordPath();
@@ -1142,7 +1199,7 @@ export class QuestBuilder {
       if (sum?.sig === 'NPC_') {
         const key = unique(keyOf(name));
         keys.set(target, key);
-        characters.push({ key, name, existing: sum.editorId ?? target, basedOn: null, sex: null, race: null, role: a.name, appearance: '', look: null, voice: null, locationKey: null, spot: null, essential: null, className: null, level: null, outfit: null, factions: [], inventory: [], routine: [] });
+        characters.push({ key, name, existing: sum.editorId ?? target, basedOn: null, sex: null, race: null, role: a.name, appearance: '', look: null, voice: null, locationKey: null, spot: null, essential: null, className: null, level: null, outfit: null, factions: [], inventory: [], routine: [], combat: null, roles: null, relationships: [] });
       }
     }
     // People who speak in its dialogue are characters of the quest too.
@@ -1152,7 +1209,7 @@ export class QuestBuilder {
       const name = sum.name ?? sum.editorId ?? i.speaker;
       const key = unique(keyOf(name));
       keys.set(i.speaker, key);
-      characters.push({ key, name, existing: sum.editorId ?? i.speaker, basedOn: null, sex: null, race: null, role: 'Speaks in the quest', appearance: '', look: null, voice: null, locationKey: null, spot: null, essential: null, className: null, level: null, outfit: null, factions: [], inventory: [], routine: [] });
+      characters.push({ key, name, existing: sum.editorId ?? i.speaker, basedOn: null, sex: null, race: null, role: 'Speaks in the quest', appearance: '', look: null, voice: null, locationKey: null, spot: null, essential: null, className: null, level: null, outfit: null, factions: [], inventory: [], routine: [], combat: null, roles: null, relationships: [] });
     }
     const stages = g.nodes.map((n) => ({ index: n.stage, journal: n.text, startsQuest: n.startUp, completesQuest: n.completesQuest, failsQuest: n.failsQuest }));
     const objectives = g.objectives.map((o) => ({ index: o.index, text: o.text, shownAtStage: g.nodes.find((n) => n.shows.includes(o.index))?.stage ?? stages[0]?.index ?? 0, completedAtStage: g.nodes.find((n) => n.completes.includes(o.index))?.stage ?? null, targetKey: null }));
@@ -1174,6 +1231,7 @@ export class QuestBuilder {
       characters,
       locations,
       items,
+      encounters: [],
       stages,
       objectives,
       steps,
@@ -1277,6 +1335,7 @@ export class QuestBuilder {
       const was = oldChars.get(c.key);
       if (!was || !s.npcs.has(c.key)) {
         this.buildCharacter(s, c);
+        this.buildRelationships(s, [c]);
         await this.placeCharacter(s, c);
         say(`Added ${c.name}`);
         continue;
@@ -1284,6 +1343,7 @@ export class QuestBuilder {
       const delta = characterDelta(was, c);
       if (delta) {
         this.characters.apply(s.npcs.get(c.key)!, delta, this.changeCtx(s, false));
+        this.buildRelationships(s, [delta]);
         say(`Changed ${c.name}: ${this.characters.describe(delta).join('; ')}`);
       }
       if (JSON.stringify(was.routine ?? []) !== JSON.stringify(c.routine ?? [])) {
@@ -1294,6 +1354,11 @@ export class QuestBuilder {
     }
     for (const c of old.characters) if (!next.characters.some((x) => x.key === c.key)) s.report.notes.push(`${c.name} is no longer in the plan, but was left in the plugin (delete them yourself if they're not needed).`);
     for (const c of next.characters) if (!oldChars.has(c.key) && c.routine?.length) await this.buildRoutines(s, [c]);
+    for (const e of next.encounters) if (!s.encounters.has(e.key)) {
+      await this.placeEncounter(s, e);
+      say(`Added ${e.count} ${e.what}`);
+    }
+    for (const e of old.encounters ?? []) if (!next.encounters.some((x) => x.key === e.key)) s.report.notes.push(`${e.count} ${e.what} are no longer in the plan, but were left where they are (delete them in the World tab if they're not needed).`);
     await this.placeItems(s, newItems);
     // Objectives.
     const oldObj = new Map(old.objectives.map((o) => [o.index, o]));

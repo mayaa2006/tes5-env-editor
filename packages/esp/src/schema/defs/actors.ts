@@ -26,7 +26,9 @@ import {
   zstring,
 } from '../dsl';
 import type { RecordDef } from '../types';
-import { ATTACKS, DEST, EDID, FLOAT_COLOR, FULL, ITEMS, KEYWORDS, MODEL, OBND, SOUND_LEVEL, SPELLS, VMAD, DESC } from './common';
+import { ATTACKS, CONDITIONS, DEST, EDID, FLOAT_COLOR, FULL, ITEMS, KEYWORDS, MODEL, OBND, SOUND_LEVEL, SPELLS, VMAD, DESC } from './common';
+
+const FACTION_FLAGS = flagList('Hidden From PC', 'Special Combat', '', '', '', '', 'Track Crime', 'Ignore Crimes: Murder', 'Ignore Crimes: Assault', 'Ignore Crimes: Stealing', 'Ignore Crimes: Trespass', 'Do Not Report Crimes Against Members', 'Crime Gold: Use Defaults', 'Ignore Crimes: Pickpocket', 'Vendor', 'Can Be Owner', 'Ignore Crimes: Werewolf');
 
 export const SKILLS = [
   'OneHanded', 'TwoHanded', 'Marksman', 'Block', 'Smithing', 'HeavyArmor', 'LightArmor', 'Pickpocket', 'Lockpicking',
@@ -324,7 +326,29 @@ export const OTFT: RecordDef = record('OTFT', 'Outfit', [EDID, sub('INAM', 'item
 export const CLAS: RecordDef = record(
   'CLAS',
   'Class',
-  [EDID, FULL, DESC, sub('ICON', 'icon', 'Icon', zstring()), sub('DATA', 'data', 'Data', bytes())],
+  [
+    EDID,
+    FULL,
+    DESC,
+    sub('ICON', 'icon', 'Icon', zstring()),
+    sub(
+      'DATA',
+      'data',
+      'Data',
+      struct([
+        ['unknown', 'Unknown', u32({ hidden: true })],
+        ['teaches', 'Teaches (skill index, -1 none)', s8()],
+        ['maxTrainingLevel', 'Max Training Level', u8()],
+        ['skillWeights', 'Skill Weights', array(u8(), 18)],
+        ['bleedoutDefault', 'Bleedout Default', f32()],
+        ['voicePoints', 'Voice Points', u32()],
+        ['healthWeight', 'Health Weight', u8()],
+        ['magickaWeight', 'Magicka Weight', u8()],
+        ['staminaWeight', 'Stamina Weight', u8()],
+        ['flags', 'Flags', u8()],
+      ]),
+    ),
+  ],
   { category: 'Character' },
 );
 
@@ -348,7 +372,65 @@ export const FACT: RecordDef = record(
         ]),
       ),
     ),
-    sub('DATA', 'flags', 'Flags', u32()),
+    sub('DATA', 'flags', 'Flags', flags('u32', FACTION_FLAGS)),
+    sub('JAIL', 'exteriorJailMarker', 'Exterior Jail Marker', formid(['REFR'])),
+    sub('WAIT', 'followerWaitMarker', 'Follower Wait Marker', formid(['REFR'])),
+    sub('STOL', 'stolenGoodsContainer', 'Stolen Goods Container', formid(['REFR'])),
+    sub('PLCN', 'playerInventoryContainer', 'Player Inventory Container', formid(['REFR'])),
+    sub('CRGR', 'sharedCrimeFactions', 'Shared Crime Faction List', formid(['FLST'])),
+    sub('JOUT', 'jailOutfit', 'Jail Outfit', formid(['OTFT'])),
+    sub('CRVA', 'crimeValues', 'Crime Values', bytes(undefined, { hidden: true })),
+    rarray(
+      'ranks',
+      'Ranks',
+      rstruct('rank', 'Rank', [
+        { ...sub('RNAM', 'number', 'Rank', u32()), required: true },
+        sub('MNAM', 'maleTitle', 'Male Title', lstring()),
+        sub('FNAM', 'femaleTitle', 'Female Title', lstring()),
+      ]),
+    ),
+    sub('VEND', 'vendorList', 'Vendor Buy/Sell List', formid(['FLST'])),
+    sub('VENC', 'merchantContainer', 'Merchant Container', formid(['REFR'])),
+    sub(
+      'VENV',
+      'vendor',
+      'Vendor Values',
+      struct([
+        ['startHour', 'Start Hour', u16()],
+        ['endHour', 'End Hour', u16()],
+        ['radius', 'Radius', u32()],
+        ['buysStolen', 'Buys Stolen Items', u8()],
+        ['notBuySell', 'Buy/Sell Everything Not In List', u8()],
+        ['buysNonStolen', 'Buys Non-Stolen Items', u8()],
+        ['unused', 'Unused', unused(1)],
+      ]),
+    ),
+    sub('PLVD', 'vendorLocation', 'Vendor Location', bytes(undefined, { hidden: true })),
+    counted('CITC', 'u32', 'conditions', 'Vendor Conditions', CONDITIONS),
+  ],
+  { category: 'Actors' },
+);
+
+/** Relationship between two characters (how they feel about each other, and the player). */
+export const RELA: RecordDef = record(
+  'RELA',
+  'Relationship',
+  [
+    EDID,
+    sub(
+      'DATA',
+      'data',
+      'Data',
+      struct([
+        ['parent', 'Parent', formid(['NPC_'])],
+        ['child', 'Child', formid(['NPC_'])],
+        ['rank', 'Rank', enumOf('u16', enumList('Lover', 'Ally', 'Confidant', 'Friend', 'Acquaintance', 'Rival', 'Foe', 'Enemy', 'Archnemesis'))],
+        ['unknown', 'Unknown', u8({ hidden: true })],
+        ['flags', 'Flags', flags('u8', { 7: 'Secret' })],
+        ['associationType', 'Association Type', formid(['ASTP'])],
+      ]),
+      { required: true },
+    ),
   ],
   { category: 'Actors' },
 );

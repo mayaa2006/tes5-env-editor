@@ -2,6 +2,20 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.10.0
+
+- **Characters who fight:** a quest plan can make a character attack the player on sight, level with the player, and set their skills, spells, perks and fighting style.
+- **Enemy groups:** "six bandits in the cave": enemies from your load order are placed in a place, and **When all are dead** moves the quest on. See the new **Enemy groups** card in the plan.
+- **Roles:**
+  - **Followers** and characters the player can **marry**.
+  - **Merchants**, with their own shop faction, opening hours, what they buy and sell, and a chest of stock.
+  - **Trainers**: a skill and how far they teach (50, 75 or 90).
+  - **Innkeepers.**
+  - Switch these on under **Roles and fighting** on each character in the plan.
+- **Relationships:** how characters feel about each other and the player (friend, ally, rival, enemy, lover…).
+- **Under the hood:** factions (vendor data, ranks, crime settings), classes (what they teach) and relationships are now fully readable and editable. Every vanilla faction, class and relationship reads and writes back unchanged.
+- **Fix:** the plan's build report no longer repeats a character's other changes after each routine line.
+
 ## 0.9.0
 
 - **Choices the quest remembers:** put `[remember spared]` on a line, and `[if chose spared]` (or `[if not chose spared]`) on later lines that react to it. Claude uses them when your text has choices that matter later.

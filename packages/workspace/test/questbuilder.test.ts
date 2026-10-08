@@ -234,7 +234,7 @@ describe('quest builder', () => {
         look: { weight: null, height: null, hair: null, hairColor: 'grey', facialHair: 'none', eyes: null, scar: null },
         voice: null, locationKey: null, spot: null, essential: false, className: null, level: null,
         outfit: { items: ['fine blue clothes', 'hood', 'Leather Boots', 'golden crown'], saveAs: 'HalvarSundayBest' },
-        factions: [{ faction: 'Merchants', rank: 1 }], inventory: [{ item: 'tankard', count: 3 }], routine: [],
+        factions: [{ faction: 'Merchants', rank: 1 }], inventory: [{ item: 'tankard', count: 3 }], routine: [], combat: null, roles: null, relationships: [],
       },
     ];
     const res = builder.resolve(plan).find((r) => r.key === 'halvar')!;
@@ -477,6 +477,63 @@ describe('quest builder', () => {
     expect(msgs).toContain('“Dies” needs the character who mustn\'t die');
     expect(msgs).toContain('“Hurry” sets stage 100, which doesn\'t fail the quest; tick “Fails the quest” on it');
     expect(msgs).toContain('“Hurry” needs a number of days');
+  });
+
+  it('makes fighters, followers, merchants and trainers, with relationships', async () => {
+    const { ws, builder } = await setup();
+    const plan = exampleQuestPlan();
+    const eirik = plan.characters[1]!;
+    eirik.combat = { hostile: true, levelScaled: { min: 5, max: 30 }, skills: [{ skill: 'One-handed', value: 60 }, { skill: 'Archery', value: 45 }, { skill: 'Juggling', value: 10 }], spells: [], perks: [], combatStyle: null };
+    eirik.roles = { follower: true, marriage: false, innkeeper: false, merchant: { sells: 'general goods', hours: { from: 9, to: 18 } }, trainer: { skill: 'Sneak', maxLevel: 50 } };
+    eirik.relationships = [{ with: 'brynja', rank: 'friend' }, { with: 'player', rank: 'ally' }];
+    eirik.level = null;
+    expect(validatePlan(plan)).toEqual([]);
+    const r = await builder.build(plan);
+    const npc = ws.byEditorId('InnkeeperRingQuestEirik')!;
+    const d = ws.view(npc)!.data as any;
+    expect(d.ai.aggression).toBe(2);
+    expect(d.config.flags & 0x80).toBe(0x80);
+    expect([d.config.level, d.config.calcMinLevel, d.config.calcMaxLevel]).toEqual([1000, 5, 30]);
+    expect(d.skills.values[0]).toBe(60);
+    expect(d.skills.values[2]).toBe(45);
+    expect(r.warnings.some((w) => /“Juggling” isn't a skill/.test(w))).toBe(true);
+    const factions = (d.factions as any[]).map((f) => ws.summary(f.faction)!.editorId);
+    expect(factions).toEqual(expect.arrayContaining(['PotentialFollowerFaction', 'CurrentFollowerFaction', 'JobMerchantFaction', 'JobTrainerFaction', 'InnkeeperRingQuestEirikVendorFaction']));
+    expect((d.factions as any[]).find((f) => ws.summary(f.faction)!.editorId === 'CurrentFollowerFaction').rank).toBe(-1);
+    // The shop: vendor hours, the buy/sell list, and a chest in a cell nobody visits.
+    const shop = ws.view(ws.byEditorId('InnkeeperRingQuestEirikVendorFaction')!)!.data as any;
+    expect(shop.flags & (1 << 14)).toBeTruthy();
+    expect(shop.vendor).toMatchObject({ startHour: 9, endHour: 18 });
+    expect(ws.summary(shop.vendorList)!.editorId).toBe('VendorItemsGeneralStore');
+    expect(ws.view(shop.merchantContainer)!.parent.cell).toBe(ws.byEditorId('InnkeeperRingQuestMerchantChests'));
+    // Training lives on the class: their own copy teaches Sneak.
+    const cls = ws.view(d.class)!;
+    expect(cls.editorId).toBe('InnkeeperRingQuestEirikTrainerClass');
+    expect((cls.data as any).data).toMatchObject({ teaches: 9, maxTrainingLevel: 50 });
+    // Relationships: with Brynja made; with the player skipped (no Skyrim.esm in the demo).
+    const rels = ws.search({ sigs: ['RELA'], limit: 10 }).items.map((x) => (ws.view(x.formKey)!.data as any).data);
+    expect(rels).toEqual([expect.objectContaining({ parent: npc, child: ws.byEditorId('DemoInnkeeper'), rank: 3 })]);
+    expect(r.warnings.some((w) => /relationship with player was left out/.test(w))).toBe(true);
+    // The plugin still saves and reads back.
+    expect(ws.view(ws.byEditorId('InnkeeperRingQuestEirikVendorFaction')!)!.lossless).toBe(true);
+  });
+
+  it('places groups of enemies and moves on when they are all dead', async () => {
+    const { ws, builder, graphs, world } = await setup();
+    const plan = exampleQuestPlan();
+    plan.encounters = [{ key: 'guards', what: 'Town Guard', count: 3, locationKey: 'tavern', spot: null }];
+    plan.stages.push({ index: 30, journal: 'I fought off the guards.', startsQuest: false, completesQuest: false, failsQuest: false });
+    plan.steps.push({ from: 20, to: 30, kind: 'clear', targetKey: 'guards', note: 'Defeat the guards' });
+    expect(validatePlan(plan)).toEqual([]);
+    const r = await builder.build(plan);
+    const tavern = ws.byEditorId('DemoTavern')!;
+    const guards = world.references(tavern).filter((x) => x.sig === 'ACHR' && x.base === ws.byEditorId('DemoGuard') && x.source === 'Built.esp');
+    expect(guards).toHaveLength(3);
+    expect(guards.every((g) => g.persistent)).toBe(true);
+    const g = await graphs.graph(r.quest!);
+    const edge = g.edges.filter((e) => e.to === 30);
+    expect(edge).toEqual([expect.objectContaining({ from: 20, kind: 'death', label: 'Defeat 3 Town Guard' })]);
+    expect(r.notes.some((n) => /fixed character rather than a levelled one/.test(n))).toBe(true);
   });
 
   it('checks events before building', () => {

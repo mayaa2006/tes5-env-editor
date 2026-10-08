@@ -6,7 +6,7 @@
  * that already exist. Words are matched to the load order loosely ("fine
  * blue clothes" finds "Fine Clothes"), and every guess is reported.
  */
-import { parseFormKey, type FormKey } from '@tes5/esp';
+import { RecordFlags, SKILLS, parseFormKey, type FormKey } from '@tes5/esp';
 import { ITEM_SIGS } from './dialogue';
 import { WorkspaceError, type Workspace } from './engine';
 import type { HeadPartInfo, NpcService } from './npc';
@@ -15,6 +15,18 @@ import type { PlanCharacter, PlanLook } from './questplan';
 import { ROUTINE_LABELS } from './routines';
 
 const ESSENTIAL = 0x2;
+const AUTO_CALC_STATS = 0x10;
+/** Vendor faction flag (FACT DATA bit 14). */
+const VENDOR = 1 << 14;
+const RANKS = ['lover', 'ally', 'confidant', 'friend', 'acquaintance', 'rival', 'foe', 'enemy', 'archnemesis'] as const;
+
+/** Skill names as people write them → index in the game's skill list. */
+export function skillIndex(name: string): number {
+  const n = name.toLowerCase().replace(/[^a-z]/g, '');
+  const alias: Record<string, string> = { archery: 'marksman', bow: 'marksman', speech: 'speechcraft', onehand: 'onehanded', twohand: 'twohanded', lockpick: 'lockpicking', pickpocketing: 'pickpocket' };
+  const want = alias[n] ?? n;
+  return SKILLS.findIndex((s) => s.toLowerCase() === want);
+}
 const PC_LEVEL_MULT = 0x80;
 const STOP = new Set(['the', 'a', 'an', 'of', 'and', 'with', 'set', 'some', 'pair', 'his', 'her', 'their']);
 const SYNONYMS: Record<string, string[]> = { grey: ['gray'], gray: ['grey'], blond: ['blonde'], blonde: ['blond'], beard: ['facialhair'], clothes: ['clothing', 'outfit'], clothing: ['clothes'], shoes: ['boots'], boots: ['shoes'], hood: ['hat', 'cap'], hat: ['hood', 'cap'] };
@@ -48,7 +60,7 @@ export interface CharacterChangeContext {
   random: () => number;
   /** A character just created (so the look is filled in for everything the plan doesn't say). */
   isNew: boolean;
-  created: (kind: 'outfit', key: FormKey, label: string) => void;
+  created: (kind: 'outfit' | 'role', key: FormKey, label: string) => void;
   note: (text: string) => void;
   warn: (text: string) => void;
 }
@@ -104,6 +116,24 @@ export class CharacterEditor {
       const bits = [ROUTINE_LABELS[r.activity], r.where && `at ${r.where}`, r.hours && `${String(r.hours.from).padStart(2, '0')}:00–${String(r.hours.to).padStart(2, '0')}:00`, (r.fromStage !== null || r.untilStage !== null) && `from stage ${r.fromStage ?? 'start'} until ${r.untilStage ?? 'the end'}`, r.line && `“${r.line}”`].filter(Boolean);
       out.push(bits.join(' '));
     }
+    const cb = c.combat;
+    if (cb) {
+      if (cb.hostile !== null) out.push(cb.hostile ? 'attacks the player on sight' : 'never starts fights');
+      if (cb.levelScaled) out.push(`levels with the player (${cb.levelScaled.min}–${cb.levelScaled.max})`);
+      if (cb.skills.length) out.push(cb.skills.map((k) => `${k.skill} ${k.value}`).join(', '));
+      if (cb.spells.length) out.push(`knows ${cb.spells.join(', ')}`);
+      if (cb.perks.length) out.push(`perks: ${cb.perks.join(', ')}`);
+      if (cb.combatStyle) out.push(`fights like a ${cb.combatStyle.toLowerCase()}`);
+    }
+    const r = c.roles;
+    if (r) {
+      if (r.follower) out.push('can follow the player');
+      if (r.marriage) out.push('can be married');
+      if (r.innkeeper) out.push('runs an inn');
+      if (r.merchant) out.push(`sells ${r.merchant.sells}${r.merchant.hours ? ` ${String(r.merchant.hours.from).padStart(2, '0')}:00–${String(r.merchant.hours.to).padStart(2, '0')}:00` : ''}`);
+      if (r.trainer) out.push(`trains ${r.trainer.skill} up to ${r.trainer.maxLevel}`);
+    }
+    for (const rel of c.relationships ?? []) out.push(`${rel.rank} of ${rel.with}`);
     const l = c.look;
     if (l) {
       const bits = [l.hair && `${l.hair} hair`, l.hairColor && `${l.hairColor} hair colour`, l.facialHair && (NONE.test(l.facialHair) ? 'no beard' : l.facialHair), l.eyes && `${l.eyes} eyes`, l.scar, l.weight !== null && `build ${Math.round(l.weight)}`, l.height !== null && `height ${l.height}`].filter(Boolean);
@@ -156,10 +186,188 @@ export class CharacterEditor {
           }
           d.items = inv;
         }
+        if (c.combat) this.applyCombat(d, c, ctx);
       });
+      if (c.roles) this.applyRoles(npc, c, ctx);
       if (c.outfit) this.applyOutfit(npc, c, ctx);
       this.applyLook(npc, c, ctx);
     });
+  }
+
+  /** How they fight: hostility, levelling with the player, skills, spells, perks, combat style. */
+  private applyCombat(d: any, c: PlanCharacter, ctx: CharacterChangeContext): void {
+    const cb = c.combat!;
+    if (cb.hostile !== null) {
+      d.ai = { aggression: 0, confidence: 2, energy: 50, responsibility: 1, mood: 0, assistance: 1, aggroRadiusBehavior: 0, unknown: new Uint8Array(1), warn: 0, warnAttack: 0, attack: 0, ...(d.ai ?? {}) };
+      // Very Aggressive attacks anyone who isn't a friend or ally, the player included.
+      d.ai.aggression = cb.hostile ? 2 : 0;
+      if (cb.hostile && (d.factions ?? []).some((f: any) => /town|citizen|merchant|guard/i.test(this.ws.summary(f.faction)?.editorId ?? '')))
+        ctx.note(`${c.name} is hostile but belongs to a town faction; townsfolk and guards will fight them too.`);
+    }
+    if (cb.levelScaled) {
+      d.config.flags = (d.config.flags ?? 0) | PC_LEVEL_MULT;
+      d.config.level = 1000; // level multiplier 1.0
+      d.config.calcMinLevel = Math.max(1, cb.levelScaled.min);
+      d.config.calcMaxLevel = Math.max(cb.levelScaled.min, cb.levelScaled.max);
+    }
+    if (cb.skills.length) {
+      if (!d.skills) ctx.warn(`${c.name} has no skill data to change.`);
+      else {
+        const values = [...(d.skills.values ?? [])];
+        for (const k of cb.skills) {
+          const i = skillIndex(k.skill);
+          if (i < 0) ctx.warn(`${c.name}: “${k.skill}” isn't a skill (try One-handed, Archery, Destruction, Sneak…).`);
+          else values[i] = Math.max(0, Math.min(100, k.value));
+        }
+        d.skills = { ...d.skills, values };
+        // Skills are only used when the class doesn't calculate them.
+        if (((d.config.flags ?? 0) & AUTO_CALC_STATS) !== 0) {
+          d.config.flags &= ~AUTO_CALC_STATS;
+          ctx.note(`${c.name}'s stats are now set by hand instead of from their class, so their skills stay as written.`);
+        }
+      }
+    }
+    if (cb.spells.length) {
+      const list: FormKey[] = [...(d.spells ?? [])];
+      for (const sp of cb.spells) {
+        const k = this.findLoose(['SPEL', 'SHOU', 'LVSP'], sp);
+        if (!k) ctx.warn(`${c.name}: no spell like “${sp}” in the load order.`);
+        else if (!list.includes(k)) list.push(k);
+      }
+      d.spells = list;
+    }
+    if (cb.perks.length) {
+      const list: any[] = [...(d.perks ?? [])];
+      for (const pk of cb.perks) {
+        const k = this.findLoose(['PERK'], pk);
+        if (!k) ctx.warn(`${c.name}: no perk like “${pk}” in the load order.`);
+        else if (!list.some((x) => x.perk === k)) list.push({ perk: k, rank: 1, unused: new Uint8Array(3) });
+      }
+      d.perks = list;
+    }
+    if (cb.combatStyle) {
+      const k = this.findLoose(['CSTY'], cb.combatStyle) ?? this.findLoose(['CSTY'], `cs ${cb.combatStyle}`);
+      if (k) d.combatStyle = k;
+      else ctx.warn(`${c.name}: no combat style like “${cb.combatStyle}”.`);
+    }
+  }
+
+  private addFaction(d: any, faction: FormKey, rank: number): void {
+    const list: any[] = [...(d.factions ?? [])];
+    const have = list.find((x) => x.faction === faction);
+    if (have) have.rank = rank;
+    else list.push({ faction, rank, unused: new Uint8Array(3) });
+    d.factions = list;
+  }
+
+  /** A vanilla faction by Editor ID (the game's own dialogue and AI look for these). */
+  private gameFaction(editorId: string, c: PlanCharacter, ctx: CharacterChangeContext, what: string): FormKey | undefined {
+    const k = this.ws.byEditorId(editorId);
+    if (k && this.ws.summary(k)?.sig === 'FACT') return k;
+    ctx.warn(`${c.name} can't ${what}: ${editorId} isn't in the load order (it's in Skyrim.esm).`);
+    return undefined;
+  }
+
+  /** Followers, marriage, merchants (own faction, buy list and chest), trainers, innkeepers. */
+  private applyRoles(npc: FormKey, c: PlanCharacter, ctx: CharacterChangeContext): void {
+    const r = c.roles!;
+    const add: [FormKey, number][] = [];
+    const want = (edid: string, rank: number, what: string) => {
+      const f = this.gameFaction(edid, c, ctx, what);
+      if (f) add.push([f, rank]);
+      return !!f;
+    };
+    if (r.follower) {
+      want('PotentialFollowerFaction', 0, 'be a follower');
+      want('CurrentFollowerFaction', -1, 'be a follower');
+      this.relate(npc, 'player', 'ally', c, ctx);
+      ctx.note(`${c.name} can be asked to follow the player (the game's own follower dialogue).`);
+    }
+    if (r.marriage) {
+      want('PotentialMarriageFaction', 0, 'be married');
+      if (!r.follower) this.relate(npc, 'player', 'friend', c, ctx);
+      ctx.note(`${c.name} can be married by a player wearing the Amulet of Mara.`);
+    }
+    if (r.innkeeper) want('JobInnkeeperFaction', 0, 'run an inn');
+    const merchant = r.merchant ?? (r.innkeeper ? { sells: 'food and drink', hours: null } : null);
+    if (merchant) {
+      want('JobMerchantFaction', 0, 'trade');
+      const vendor = this.vendorFaction(c, merchant, ctx);
+      if (vendor) add.push([vendor, 0]);
+    }
+    if (r.trainer) {
+      const i = skillIndex(r.trainer.skill);
+      if (i < 0) ctx.warn(`${c.name} can't train “${r.trainer.skill}”: it isn't a skill.`);
+      else {
+        want('JobTrainerFaction', 0, 'train');
+        const specific = this.ws.byEditorId(`JobTrainer${SKILLS[i]}Faction`);
+        if (specific) add.push([specific, 0]);
+        // Who teaches what lives on the class, so the character gets their own copy of it.
+        const cls = (this.ws.view(npc)?.data as any)?.class as FormKey | undefined;
+        const base = cls && this.ws.view(cls)?.data ? cls : this.findLoose(['CLAS'], 'citizen');
+        if (!base) ctx.warn(`${c.name} can't train: there's no class to copy.`);
+        else {
+          const editorId = this.ws.uniqueEditorId(`${ctx.prefix}${c.name.replace(/[^A-Za-z0-9]/g, '')}TrainerClass`);
+          const copy = this.ws.duplicateRecord(base, editorId);
+          this.ws.editRecord(copy, (d: any) => void (d.data = { ...(d.data ?? {}), teaches: i, maxTrainingLevel: Math.max(1, Math.min(100, r.trainer!.maxLevel)) }));
+          this.ws.editRecord(npc, (d: any) => void (d.class = copy));
+          ctx.created('role', copy, `${editorId}: ${c.name} trains ${r.trainer.skill} up to ${r.trainer.maxLevel}`);
+        }
+      }
+    }
+    if (add.length) this.ws.editRecord(npc, (d: any) => void add.forEach(([f, rank]) => this.addFaction(d, f, rank)));
+  }
+
+  /**
+   * A merchant's own faction: vendor hours, what they buy and sell (the
+   * game's VendorItems… list), and a chest of stock in a cell nobody visits.
+   */
+  private vendorFaction(c: PlanCharacter, m: { sells: string; hours: { from: number; to: number } | null }, ctx: CharacterChangeContext): FormKey | undefined {
+    const name = c.name.replace(/[^A-Za-z0-9]/g, '');
+    const list = this.findLoose(['FLST'], `VendorItems ${m.sells}`) ?? this.findLoose(['FLST'], `VendorItems ${m.sells.split(/\s+/)[0]}`);
+    if (!list) ctx.note(`${c.name}: no “VendorItems…” list like “${m.sells}”, so they buy and sell anything.`);
+    const chestBase = this.findLoose(['CONT'], `Merchant ${m.sells} chest`) ?? this.findLoose(['CONT'], 'merchant chest') ?? this.ws.search({ sigs: ['CONT'], limit: 1 }).items[0]?.formKey;
+    let chest: FormKey | undefined;
+    if (!chestBase) ctx.warn(`${c.name}: no container in the load order to keep their stock in.`);
+    else {
+      const holding = this.ws.byEditorId(`${ctx.prefix}MerchantChests`) ?? this.ws.createRecord('CELL', { editorId: `${ctx.prefix}MerchantChests`, flags: 0x1 });
+      chest = this.ws.createRecord('REFR', { base: chestBase, placement: { position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 } } }, { cell: holding, persistent: true }, RecordFlags.Persistent);
+      if (!/merchant/i.test(this.ws.summary(chestBase)?.editorId ?? '')) ctx.note(`${c.name}'s stock is a ${this.label(chestBase)}; fill it with what they sell (it's in the ${ctx.prefix}MerchantChests cell).`);
+    }
+    const hours = m.hours ?? { from: 8, to: 20 };
+    const editorId = this.ws.uniqueEditorId(`${ctx.prefix}${name}VendorFaction`);
+    const f = this.ws.createRecord('FACT', {
+      editorId,
+      name: `${c.name}'s shop`,
+      relations: [],
+      flags: VENDOR,
+      ...(list ? { vendorList: list } : {}),
+      ...(chest ? { merchantContainer: chest } : {}),
+      vendor: { startHour: hours.from, endHour: hours.to, radius: 0, buysStolen: 0, notBuySell: list ? 0 : 1, buysNonStolen: 1, unused: new Uint8Array(1) },
+    });
+    ctx.created('role', f, `${editorId}: ${c.name} sells ${m.sells}, ${String(hours.from).padStart(2, '0')}:00–${String(hours.to).padStart(2, '0')}:00`);
+    return f;
+  }
+
+  /** How a character feels about someone ("player", a plan key resolved by the caller, or an Editor ID). */
+  relate(npc: FormKey, other: string | FormKey, rank: (typeof RANKS)[number], c: PlanCharacter, ctx: CharacterChangeContext, resolve?: (key: string) => FormKey | undefined): void {
+    const target = other.toLowerCase() === 'player' ? (this.ws.byEditorId('Player') ?? (this.ws.slots.some((s) => s.name.toLowerCase() === 'skyrim.esm') ? ('000007:Skyrim.esm' as FormKey) : undefined)) : (resolve?.(other) ?? this.findLoose(['NPC_'], other));
+    if (!target) {
+      ctx.warn(`${c.name}'s relationship with ${other} was left out: ${other.toLowerCase() === 'player' ? 'the player character (Skyrim.esm) isn\'t loaded' : 'no character by that name'}.`);
+      return;
+    }
+    const existing = this.ws
+      .search({ sigs: ['RELA'], limit: 100_000 })
+      .items.find((x) => {
+        const d = (this.ws.view(x.formKey)?.data as any)?.data;
+        return d && d.parent === npc && d.child === target;
+      });
+    const data = { parent: npc, child: target, rank: RANKS.indexOf(rank), unknown: 0, flags: 0, associationType: null };
+    if (existing && parseFormKey(existing.formKey).plugin === this.ws.activeName) this.ws.editRecord(existing.formKey, (d: any) => void (d.data = { ...d.data, rank: data.rank }));
+    else {
+      const editorId = this.ws.uniqueEditorId(`${ctx.prefix}${c.name.replace(/[^A-Za-z0-9]/g, '')}${rank[0]!.toUpperCase()}${rank.slice(1)}Rel`);
+      this.ws.createRecord('RELA', { editorId, data: { ...data, associationType: undefined } });
+    }
   }
 
   private applyOutfit(npc: FormKey, c: PlanCharacter, ctx: CharacterChangeContext): void {

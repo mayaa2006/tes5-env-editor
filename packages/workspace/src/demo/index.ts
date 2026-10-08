@@ -327,7 +327,12 @@ function buildDemoMaster(): Plugin {
     }
     r.markModified();
   }
-  const cls = rec(p, 'CLAS', id(), { editorId: 'DemoWarriorClass', name: 'Warrior', description: 'Fights things.', data: new Uint8Array(36) });
+  const cls = rec(p, 'CLAS', id(), {
+    editorId: 'DemoWarriorClass',
+    name: 'Warrior',
+    description: 'Fights things.',
+    data: { unknown: 0, teaches: -1, maxTrainingLevel: 0, skillWeights: new Array(18).fill(0), bleedoutDefault: 0.1, voicePoints: 0, healthWeight: 1, magickaWeight: 0, staminaWeight: 1, flags: 0 },
+  });
   const faction = rec(p, 'FACT', id(), { editorId: 'DemoTownFaction', name: 'Townsfolk', relations: [], flags: 0 });
   const gold = rec(p, 'GLOB', id(), { editorId: 'DemoGoldReward', type: 115, value: 100 });
   const msg = rec(p, 'MESG', id(), { editorId: 'DemoWelcomeMsg', description: 'Welcome to the Demo Tavern!', icon: 0, flags: 1, displayTime: 2 });
@@ -424,6 +429,10 @@ function buildDemoMaster(): Plugin {
   armo('DemoHoodBrown', 'Brown Hood', 0x1 | 0x2, 5);
   rec(p, 'OTFT', id(), { editorId: 'DemoFarmerOutfit', items: [shirt, boots] });
   rec(p, 'FACT', id(), { editorId: 'DemoMerchantFaction', name: 'Merchants', relations: [], flags: 0 });
+  // Stand-ins for the factions the game's own follower, marriage, shop and training dialogue looks for (same Editor IDs as Skyrim.esm).
+  for (const edid of ['PotentialFollowerFaction', 'CurrentFollowerFaction', 'PotentialMarriageFaction', 'JobMerchantFaction', 'JobTrainerFaction', 'JobInnkeeperFaction']) rec(p, 'FACT', id(), { editorId: edid, relations: [], flags: 0 });
+  rec(p, 'FLST', id(), { editorId: 'VendorItemsGeneralStore', forms: [] });
+
   // AI package templates (synthetic stand-ins for the game's Sandbox, Sleep, Eat, Travel, Follow and ForceGreet templates).
   const none = new Uint8Array(0);
   const boolIn = (on: number) => ({ type: 'Bool', value: new Uint8Array([on]), topics: [] });

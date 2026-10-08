@@ -1,5 +1,5 @@
 import type { RecordDef } from '../types';
-import { CLAS, CLFM, FACT, HDPT, LVLN, NPC_, OTFT, RACE, VTYP } from './actors';
+import { CLAS, CLFM, FACT, HDPT, LVLN, NPC_, OTFT, RACE, RELA, VTYP } from './actors';
 import { ALCH, AMMO, APPA, ARMA, ARMO, BOOK, COBJ, INGR, KEYM, LVLI, MISC, SLGM, WEAP } from './items';
 import { ENCH, LVSP, MGEF, PERK, SCRL, SHOU, SPEL, WOOP } from './magic';
 import { DIAL, DLBR, DLVW, FLST, GLOB, GMST, IDLE, INFO, KYWD, LCTN, MESG, PACK, QUST, SCEN } from './quests';
@@ -13,7 +13,7 @@ export * from './quests';
 export * from './world';
 
 const ALL: RecordDef[] = [
-  NPC_, HDPT, VTYP, CLFM, OTFT, CLAS, FACT, LVLN, RACE,
+  NPC_, HDPT, VTYP, CLFM, OTFT, CLAS, FACT, LVLN, RACE, RELA,
   QUST, DIAL, INFO, DLBR, DLVW, MESG, GLOB, KYWD, FLST, GMST, PACK, SCEN, LCTN, IDLE,
   CELL, WRLD, REFR, ACHR, NAVM, LAND, STAT, MSTT, ACTI, DOOR, CONT, LIGH, FURN, FLOR, TREE, TXST, SCOL,
   ARMO, WEAP, BOOK, MISC, KEYM, AMMO, ALCH, INGR, SLGM, ARMA, APPA, LVLI, COBJ,
