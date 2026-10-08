@@ -13,6 +13,7 @@ test('draft journal entries and objectives', async ({ page }) => {
   await dlg.getByTestId('use-example').click();
 
   // In the plan: empty a journal entry, and the writer fills it from the steps.
+  await dlg.getByTestId('plan-tab-story').click();
   const stage20 = dlg.getByTestId('plan-stages').locator('textarea').nth(2);
   await stage20.fill('');
   await stage20.blur();

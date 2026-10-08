@@ -17,6 +17,7 @@ for (const size of [
     const dlg = page.getByRole('dialog');
     await dlg.getByTestId('use-example').click();
 
+    await dlg.getByTestId('plan-tab-story').click();
     const card = dlg.getByTestId('plan-start');
     await expect(card.locator('select')).toHaveValue('game');
     await card.locator('select').selectOption('arrive');

@@ -11,6 +11,7 @@ import { Field, Help, Icon, Modal, Select, TextInput } from '../../components/ui
 import { engine, useStore } from '../../state/store';
 
 type Review = { plan: QuestPlan; issues: PlanIssue[]; resolution: PlanResolution[] };
+type PlanSection = 'overview' | 'cast' | 'story' | 'events' | 'dialogue';
 
 const MODES: { id: PlannerMode; title: string; text: string; placeholder: string }[] = [
   {
@@ -232,6 +233,20 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
   };
 
   const errors = issues.filter((i) => i.severity === 'error').length + resolution.filter((r) => r.error).length;
+  const [section, setSection] = useState<PlanSection>('overview');
+  const quest = draft.stages.length > 0;
+  const n = (k: number, one: string, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
+  const sections: { id: PlanSection; label: string; hint: string; count?: number; summary: string }[] = [
+    { id: 'overview', label: 'Overview', hint: 'Name, problems to fix, and what Claude decided on its own', count: errors || undefined, summary: '' },
+    { id: 'cast', label: 'Cast & places', hint: 'Characters (with roles and fighting), places, items and enemy groups', count: draft.characters.length + draft.locations.length + draft.items.length + (draft.encounters?.length ?? 0), summary: [n(draft.characters.length, 'character'), n(draft.locations.length, 'place'), n(draft.items.length, 'item'), draft.encounters?.length ? n(draft.encounters.length, 'enemy group') : ''].filter(Boolean).join(', ') },
+    ...(quest
+      ? [
+          { id: 'story' as const, label: 'Story', hint: 'How it starts, stages and journal, objectives, what moves it on, how it can fail', count: draft.stages.length, summary: `${n(draft.stages.length, 'stage')}, ${n(draft.objectives.length, 'objective')}, ${n(draft.steps.length, 'step')}${draft.failures?.length ? `, ${n(draft.failures.length, 'way', 'ways')} to fail` : ''}` },
+          { id: 'events' as const, label: 'World events', hint: 'What happens in the world when a stage is reached', count: draft.events?.length || undefined, summary: draft.events?.length ? n(draft.events.length, 'event') : 'nothing yet' },
+        ]
+      : []),
+    { id: 'dialogue', label: 'Dialogue', hint: 'The conversations, as scripts you can edit', count: draft.conversations.length || undefined, summary: draft.conversations.length ? n(draft.conversations.length, 'conversation') : 'none yet' },
+  ];
   const res = (key: string) => resolution.find((r) => r.key === key);
   const nameOf = (key: string | null) => (key ? (res(key)?.name ?? key) : '');
 
@@ -271,6 +286,17 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
         </div>
       </div>
 
+      <div className="panel-tabs plan-tabs" role="tablist" data-testid="plan-tabs">
+        {sections.map((t) => (
+          <button key={t.id} role="tab" aria-selected={section === t.id} className={`panel-tab ${section === t.id ? 'active' : ''}`} onClick={() => setSection(t.id)} title={t.hint} data-testid={`plan-tab-${t.id}`}>
+            {t.label}
+            {t.count ? <span className={`chip ${t.id === 'overview' && errors ? 'err' : 'dim'}`} style={{ marginLeft: 6 }}>{t.count}</span> : null}
+          </button>
+        ))}
+      </div>
+
+      {section === 'overview' && (
+        <>
       {(issues.length > 0 || resolution.some((r) => r.error)) && (
         <ul className="list release-list" data-testid="plan-issues">
           {[...resolution.filter((r) => r.error).map((r) => ({ severity: 'error' as const, message: r.error! })), ...issues].map((i, n) => (
@@ -307,6 +333,36 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
         </div>
       )}
 
+      <div className="card" data-testid="plan-contents">
+        <div className="card-title">In this plan</div>
+        <ul className="always-list">
+          {sections.filter((t) => t.id !== 'overview').map((t) => (
+            <li key={t.id}>
+              <Icon name="chevron" size={12} />
+              <button className="link-button" onClick={() => setSection(t.id)}>{t.label}</button>
+              <span className="dim">{t.summary}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+        </>
+      )}
+
+      {section !== 'overview' && errors > 0 && (
+        <ul className="list release-list" data-testid="plan-issues">
+          {[...resolution.filter((r) => r.error).map((r) => r.error!), ...issues.filter((i) => i.severity === 'error').map((i) => i.message)].map((m, n) => (
+            <li key={n} className="release-item error">
+              <span className="chip err" style={{ flex: 'none' }}>
+                Must fix
+              </span>
+              <span className="grow">{m}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {section === 'cast' && (
+        <>
       <div className="card-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 10 }}>
         {(['character', 'location', 'item'] as const).map((kind) => {
           const list = resolution.filter((r) => r.kind === kind);
@@ -338,9 +394,12 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
         })}
       </div>
 
-      {draft.stages.length === 0 ? (
-        <div className="card dim small">No quest: only the characters, places and items above are created or changed.</div>
-      ) : (
+      {draft.stages.length === 0 && <div className="card dim small">No quest: only the characters, places and items above are created or changed.</div>}
+      <EncountersCard plan={draft} edit={edit} nameOf={nameOf} />
+        </>
+      )}
+
+      {section === 'story' && draft.stages.length > 0 && (
         <>
       <StartCard plan={draft} edit={edit} />
       <div className="card" data-testid="plan-stages">
@@ -420,11 +479,15 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
         </div>
       </div>
 
-      <EncountersCard plan={draft} edit={edit} nameOf={nameOf} />
-      <EventsCard plan={draft} edit={edit} nameOf={nameOf} />
       <FailuresCard plan={draft} edit={edit} nameOf={nameOf} />
         </>
       )}
+
+      {section === 'events' && draft.stages.length > 0 && <EventsCard plan={draft} edit={edit} nameOf={nameOf} />}
+
+      {section === 'dialogue' && (
+        <>
+          {!draft.conversations.length && <p className="dim small">No conversations in this plan. Ask Claude below to write some (“Brynja greets the player and asks for help”).</p>}
       {draft.conversations.map((c, i) => (
         <div key={i} className="card">
           <div className="card-title">
@@ -437,6 +500,10 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
         </div>
       ))}
 
+        </>
+      )}
+
+      <div className="plan-footer col" style={{ gap: 8 }}>
       <div className="card" style={{ padding: 10 }}>
         <div className="row" style={{ gap: 6 }}>
           <input
@@ -461,10 +528,15 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
           <Icon name="undo" size={13} /> Undo edit
         </button>
         <span className="grow" />
-        {errors > 0 && <span className="small err">Fix {errors} problem(s) first</span>}
+        {errors > 0 && (
+          <button className="link-button small err" onClick={() => setSection('overview')} title="Show the problems on the Overview tab" data-testid="plan-show-problems">
+            Fix {errors} problem(s) first
+          </button>
+        )}
         <button className="btn primary" disabled={errors > 0} onClick={() => void build()} data-testid="build-quest" title={existing ? 'Shows what will change before anything is changed' : 'Creates everything as one step you can undo'}>
           <Icon name="check" size={13} /> {existing ? 'See what will change' : draft.stages.length ? 'Build the quest' : 'Make the changes'}
         </button>
+      </div>
       </div>
     </div>
   );

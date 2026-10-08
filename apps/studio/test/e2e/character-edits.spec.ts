@@ -48,6 +48,7 @@ test('change an existing character from a description', async ({ page }) => {
   await dlg.getByTestId('plan-quest').click();
 
   const review = dlg.getByTestId('plan-review');
+  await review.getByTestId('plan-tab-cast').click();
   await expect(review).toContainText('existing, changed');
   await expect(review.getByTestId('character-change').first()).toContainText('wears Blue Fine Clothes, Brown Hood, Leather Boots (saved as HalvarSundayBest)');
   await expect(review).toContainText('joins Merchants');

@@ -18,6 +18,7 @@ test('change a built quest through its plan', async ({ page }) => {
   const review = dlg.getByTestId('plan-review');
   await expect(review).toBeVisible();
   await expect(dlg.getByTestId('not-from-plan')).toHaveCount(0);
+  await review.getByTestId('plan-tab-story').click();
   const stage10 = review.getByTestId('plan-stages').locator('textarea').nth(1);
   await stage10.fill('Brynja has lost her ring. I said I would look for it.');
   await stage10.blur();

@@ -53,8 +53,10 @@ test('write a quest, let Claude plan it, check it and build it', async ({ page }
   expect(bodies[0].messages[0].content).toContain('There are no tags in it');
   expect(bodies[0].messages[0].content).toContain('Brynja: I lost my ring.');
   await expect(review.getByTestId('plan-assumptions')).toContainText('Should Eirik be suspicious');
+  await review.getByTestId('plan-tab-cast').click();
   await expect(review).toContainText('Uses Brynja (DemoInnkeeper)');
   await expect(review).toContainText(/New, copied from/);
+  await review.getByTestId('plan-tab-story').click();
   await expect(review.getByTestId('plan-steps')).toContainText('Stage 10 → 20: Pick up Brynja\'s Ring');
   if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/15-quest-plan.png` });
 
@@ -70,6 +72,7 @@ test('write a quest, let Claude plan it, check it and build it', async ({ page }
   await stage10.blur();
   await review.locator('input').nth(1).fill('Bad ID!');
   await review.locator('input').nth(1).blur();
+  await review.getByTestId('plan-show-problems').click();
   await expect(review.getByTestId('plan-issues')).toContainText('Editor ID');
   await expect(review.getByTestId('build-quest')).toBeDisabled();
   await review.locator('input').nth(1).fill('StolenRingQuest');

@@ -2,6 +2,15 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.11.0
+
+- **The quest plan is in tabs:** **Overview**, **Cast & places**, **Story**, **World events** and **Dialogue**, instead of one long page.
+  - Each tab shows how much is in it.
+  - Overview lists what's in the plan, with links to each tab.
+  - Problems that must be fixed show on the tab you're working on.
+  - **Ask Claude to change the plan**, **Undo edit** and **Build** stay at the bottom while you scroll.
+- **README:** the feature list is grouped by area (world, characters, quests and dialogue, items and magic, your mod) with links, instead of one big table.
+
 ## 0.10.0
 
 - **Characters who fight:** a quest plan can make a character attack the player on sight, level with the player, and set their skills, spells, perks and fighting style.
