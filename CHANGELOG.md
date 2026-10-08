@@ -2,6 +2,10 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.13.2
+
+- **Quests list shows only quests with names by default.** A new **Only quests with names** checkbox above the list is ticked at the start; untick it to see unnamed quests too.
+
 ## 0.13.1
 
 - **Fix: characters in the World view no longer show white skin and black clothes while loading.** A character stays a simple placeholder until all its textures are in, then appears complete.

@@ -334,7 +334,7 @@ export class EngineHost {
 
   // ---------------------------------------------------------------- records
 
-  search(opts: { sigs?: string[]; query?: string; plugin?: string; limit?: number; offset?: number }) {
+  search(opts: { sigs?: string[]; query?: string; plugin?: string; named?: boolean; limit?: number; offset?: number }) {
     return this.requireWs().search(opts);
   }
 

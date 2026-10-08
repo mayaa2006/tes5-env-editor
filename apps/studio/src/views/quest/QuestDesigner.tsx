@@ -99,7 +99,8 @@ function QuestList() {
   }, [newRequest]);
   const [mine, setMine] = useState(false);
   const activePlugin = useStore((s) => s.session.activePlugin);
-  const { data } = useQuery(() => client?.call('search', { sigs: ['QUST'], query: dq, limit: 500, plugin: mine ? activePlugin : undefined }), [dq, mine, activePlugin]);
+  const [namedOnly, setNamedOnly] = useState(true);
+  const { data } = useQuery(() => client?.call('search', { sigs: ['QUST'], query: dq, limit: 500, plugin: mine ? activePlugin : undefined, named: namedOnly }), [dq, mine, activePlugin, namedOnly]);
   return (
     <div className="panel" style={{ width: 260, flex: 'none', borderRight: '1px solid var(--border)', background: 'var(--panel)' }}>
       <div className="panel-header">
@@ -113,6 +114,9 @@ function QuestList() {
       </div>
       <div className="searchbox">
         <input className="input" placeholder="Find quest…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <div style={{ marginTop: 4 }}>
+          <Checkbox checked={namedOnly} onChange={setNamedOnly} label="Only quests with names" help="Hide quests that have no display name (mostly hidden internal quests). Untick to see every quest." />
+        </div>
         {activePlugin && (
           <div style={{ marginTop: 4 }}>
             <Checkbox checked={mine} onChange={setMine} label={`Only ones in ${activePlugin}`} help="Show only the quests your plugin adds or changes." />
@@ -128,7 +132,7 @@ function QuestList() {
           </li>
         ))}
         {data && data.total > data.items.length && <li className="list-item dim small" style={{ cursor: 'default' }}>Showing {data.items.length} of {data.total}. Type a name to find the rest.</li>}
-        {data && !data.items.length && <li className="dim small" style={{ padding: '8px 10px', whiteSpace: 'normal' }}>{mine ? 'Your plugin has no quests yet. Click New to start one, or untick the box to see them all.' : 'No quest matches.'}</li>}
+        {data && !data.items.length && <li className="dim small" style={{ padding: '8px 10px', whiteSpace: 'normal' }}>{mine ? 'Your plugin has no quests yet. Click New to start one, or untick the box to see them all.' : namedOnly ? 'No named quest matches. Untick "Only quests with names" to include unnamed ones.' : 'No quest matches.'}</li>}
       </ul>
       {creating && <NewQuestDialog onClose={() => setCreating(false)} />}
       {writing && (
