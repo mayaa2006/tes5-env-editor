@@ -25,7 +25,8 @@ export type IfClause =
   | { kind: 'gold' | 'speech' | 'level'; op: CompareOp; value: number }
   | { kind: 'sex'; female: boolean }
   | { kind: 'race'; race: string }
-  | { kind: 'questDone'; quest: string };
+  | { kind: 'questDone'; quest: string }
+  | { kind: 'choice'; name: string; not: boolean };
 
 /** Run on the player (in dialogue, "Target" is the player). */
 const TARGET = 1;
@@ -60,7 +61,8 @@ export function parseIf(value: string | undefined): IfClause[] {
     } else if (l === 'female' || l === 'male') out.push({ kind: 'sex', female: l === 'female' });
     else if ((m = /^race\s+(.+)$/i.exec(part))) out.push({ kind: 'race', race: m[1]!.trim() });
     else if ((m = /^quest\s+(\S+)\s+(?:done|completed|complete)$/i.exec(part))) out.push({ kind: 'questDone', quest: m[1]! });
-    else throw new Error(`[if ${part}] isn't understood. Try: stage 10, done 20, has Ring, gold 100, speech 50, level 10, female, race Nord, quest MyQuest done`);
+    else if ((m = /^(not\s+)?(?:chose|remembered|remembers)\s+([A-Za-z][\w-]*)$/i.exec(part))) out.push({ kind: 'choice', name: m[2]!, not: !!m[1] });
+    else throw new Error(`[if ${part}] isn't understood. Try: stage 10, done 20, has Ring, gold 100, speech 50, level 10, female, race Nord, quest MyQuest done, chose spared`);
   }
   return out;
 }
@@ -75,6 +77,30 @@ function cond(name: string, init: Partial<Condition>): Condition {
   const fn = conditionFunctionByName(name);
   if (!fn) throw new Error(`Condition function ${name} is unknown`);
   return { ...newCondition(fn.index), ...init };
+}
+
+/**
+ * The global that remembers a choice made in a quest ([remember spared] sets
+ * it to 1, [forget spared] back to 0). Made on first use, named after the quest.
+ */
+export function choiceGlobal(ws: Workspace, quest: FormKey, name: string): FormKey {
+  const qid = (ws.view(quest)?.editorId ?? 'Quest').replace(/[^A-Za-z0-9_]/g, '');
+  const word = name.replace(/[^A-Za-z0-9]+/g, ' ').trim().split(' ').map((w) => w[0]!.toUpperCase() + w.slice(1)).join('');
+  if (!word) throw new Error(`“${name}” can't be used as a choice name; use letters and digits`);
+  const editorId = `${qid}Chose${word}`;
+  const found = ws.byEditorId(editorId);
+  if (found) return found;
+  return ws.createRecord('GLOB', { editorId, type: 115, value: 0 });
+}
+
+/** Choices a quest remembers: the globals made by choiceGlobal (name → global). */
+export function questChoices(ws: Workspace, quest: FormKey): { name: string; global: FormKey }[] {
+  const qid = (ws.view(quest)?.editorId ?? 'Quest').replace(/[^A-Za-z0-9_]/g, '');
+  const prefix = `${qid}Chose`.toLowerCase();
+  return ws
+    .search({ sigs: ['GLOB'], query: `${qid}Chose`, limit: 500 })
+    .items.filter((g) => !g.deleted && g.editorId?.toLowerCase().startsWith(prefix))
+    .map((g) => ({ name: g.editorId!.slice(prefix.length).replace(/^./, (c) => c.toLowerCase()), global: g.formKey }));
 }
 
 /** Turn clauses into CK conditions (forms are looked up in the load order). */
@@ -113,6 +139,9 @@ export function clauseConditions(ws: Workspace, quest: FormKey, clauses: IfClaus
         out.push(cond('GetIsRace', { param1: race, op: '==', value: 1, runOn: TARGET }));
         break;
       }
+      case 'choice':
+        out.push(cond('GetGlobalValue', { param1: choiceGlobal(ws, quest, c.name), op: '==', value: c.not ? 0 : 1 }));
+        break;
       case 'questDone': {
         const q = ws.byEditorId(c.quest);
         if (!q || ws.summary(q)?.sig !== 'QUST') throw new Error(`[if quest ${c.quest} done]: no quest with that Editor ID`);

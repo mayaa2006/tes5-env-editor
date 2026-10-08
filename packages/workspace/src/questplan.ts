@@ -146,6 +146,15 @@ export const PlanStartSchema = z.object({
   stage: z.number().int().nullable().describe('afterQuest: the stage of that quest that starts this one; null for its last stage'),
 });
 
+export const PlanFailureSchema = z.object({
+  kind: z.enum(['death', 'timeLimit']).describe('death: the quest fails if this character dies before it is finished; timeLimit: it fails if not finished within some in-game days'),
+  targetKey: z.string().nullable().describe('death: character key from this plan, or the Editor ID of an existing character; otherwise null'),
+  days: z.number().nullable().describe('timeLimit: in-game days allowed (e.g. 3); otherwise null'),
+  fromStage: z.number().int().nullable().describe('timeLimit: the stage at which the clock starts; null for the first stage'),
+  failStage: z.number().int().describe('The stage set when it fails (a stage with failsQuest true and a journal entry saying what went wrong)'),
+  note: z.string().describe('What happens, in a few words'),
+});
+
 export const PlanRewardSchema = z.object({
   atStage: z.number().int(),
   gold: z.number().int().nullable(),
@@ -167,6 +176,7 @@ export const QuestPlanSchema = z.object({
   conversations: z.array(PlanConversationSchema),
   rewards: z.array(PlanRewardSchema),
   animations: z.array(PlanAnimationSchema).describe('Characters playing a gesture when the quest reaches a stage (outside dialogue)'),
+  failures: z.array(PlanFailureSchema).describe('Ways the quest fails: someone dies, or time runs out'),
   events: z.array(PlanEventSchema).describe('Things that happen in the world when the quest reaches a stage: enemies appear, someone turns hostile, a door unlocks, something appears or vanishes, a fade to black, a sound, the weather'),
   assumptions: z.array(z.string()).describe('Every decision not stated in the source text, for the author to confirm'),
   questions: z.array(z.string()).describe('Things the author should decide that you could not'),
@@ -180,10 +190,12 @@ export type PlanLook = z.infer<typeof PlanLookSchema>;
 export type PlanStep = z.infer<typeof PlanStepSchema>;
 export type PlanEvent = z.infer<typeof PlanEventSchema>;
 export type PlanStart = z.infer<typeof PlanStartSchema>;
+export type PlanFailure = z.infer<typeof PlanFailureSchema>;
 
 /** Fill in lists added to the plan format later, so plans saved by older versions still load. */
 export function normalizePlan(plan: QuestPlan): QuestPlan {
   plan.events ??= [];
+  plan.failures ??= [];
   for (const l of plan.locations ?? []) {
     if (l.layoutLike === undefined) l.layoutLike = null;
     if (l.doorFrom === undefined) l.doorFrom = null;
@@ -222,6 +234,7 @@ export function emptyPlan(): QuestPlan {
     rewards: [],
     animations: [],
     events: [],
+    failures: [],
     assumptions: [],
     questions: [],
   };
@@ -307,6 +320,23 @@ export function validatePlan(plan: QuestPlan): PlanIssue[] {
     if (plan.startsWithGame) warn('The quest starts with the game, so “starts when…” never matters; turn one of them off');
   }
   if (!plan.startsWithGame && (!sw || sw.kind === 'game') && (plan.stages ?? []).length) warn('Nothing starts the quest: it doesn’t start with the game and has no “starts when…”');
+  for (const f of plan.failures ?? []) {
+    const what = `“${f.note || (f.kind === 'death' ? 'Fails on death' : 'Time limit')}”`;
+    const st = (plan.stages ?? []).find((x) => x.index === f.failStage);
+    if (!st) err(`${what} sets stage ${f.failStage}, which doesn't exist`);
+    else if (!st.failsQuest) warn(`${what} sets stage ${f.failStage}, which doesn't fail the quest; tick “Fails the quest” on it`);
+    if (f.kind === 'death' && !f.targetKey?.trim()) err(`${what} needs the character who mustn't die`);
+    if (f.kind === 'death' && f.targetKey && keys.has(f.targetKey) && keys.get(f.targetKey) !== 'character') err(`${what}: “${f.targetKey}” isn't a character`);
+    if (f.kind === 'death') {
+      const c = (plan.characters ?? []).find((x) => x.key === f.targetKey);
+      if (c?.essential) warn(`${c.name} is essential (can't die), so ${what} never happens`);
+    }
+    if (f.kind === 'timeLimit') {
+      if (!(f.days && f.days > 0)) err(`${what} needs a number of days`);
+      if (f.fromStage !== null && !stages.has(f.fromStage)) err(`${what} starts the clock at stage ${f.fromStage}, which doesn't exist`);
+    }
+  }
+  if ((plan.failures ?? []).filter((f) => f.kind === 'timeLimit').length > 1) err('A quest can have one time limit');
   const needTarget: PlanEventKind[] = ['hostile', 'friendly', 'unlock', 'lock', 'show', 'hide', 'moveTo', 'kill'];
   const needWhat: PlanEventKind[] = ['spawn', 'sound', 'weather', 'message', 'startQuest'];
   for (const e of plan.events ?? []) {

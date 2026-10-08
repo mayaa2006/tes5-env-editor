@@ -2,6 +2,13 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.9.0
+
+- **Choices the quest remembers:** put `[remember spared]` on a line, and `[if chose spared]` (or `[if not chose spared]`) on later lines that react to it. Claude uses them when your text has choices that matter later.
+- **Several endings:** Claude gives each outcome its own completing stage, closing journal entry and rewards.
+- **Quests can fail:** if a character dies before the quest is finished, or if it isn't done within some in-game days. Set them in the plan's new **How the quest can fail** card (it adds a failing stage if there isn't one). The quest map shows them as arrows into the failing stage, and **Change with a plan** updates them.
+- **Undo edit** in the plan review covers all of these.
+
 ## 0.8.0
 
 - **New places come ready to use:** a new place in a quest plan can be laid out like an existing interior (an inn, a house, a cave…). Its walls, furniture, lights and clutter are copied, but not its people or quest objects. Claude picks one that fits; you can change it under **Places** in the plan (**Laid out like**).

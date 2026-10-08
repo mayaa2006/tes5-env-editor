@@ -420,13 +420,14 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
       </div>
 
       <EventsCard plan={draft} edit={edit} nameOf={nameOf} />
+      <FailuresCard plan={draft} edit={edit} nameOf={nameOf} />
         </>
       )}
       {draft.conversations.map((c, i) => (
         <div key={i} className="card">
           <div className="card-title">
             Conversation: {c.title}
-            <Help text="Each top-level PLAYER line is something the player can say; indented lines are choices and answers. Tags: [stage N] sets a stage, [if stage N] only offers the line at that stage, [goodbye] ends the conversation, [gives item xN] / [takes item xN] hand items over, [emotion happy] sets the delivery." />
+            <Help text="Each top-level PLAYER line is something the player can say; indented lines are choices and answers. Tags: [stage N] sets a stage, [if stage N] only offers the line at that stage, [goodbye] ends the conversation, [gives item xN] / [takes item xN] hand items over, [emotion happy] sets the delivery, [remember spared] stores a choice and [if chose spared] only offers a line after it." />
           </div>
           <div className="plan-screenplay">
             <TextInput value={c.screenplay} multiline mono onCommit={(v) => void edit((p) => void (p.conversations[i]!.screenplay = v))} />
@@ -510,6 +511,77 @@ function NewPlaceFields({ plan, placeKey, edit }: { plan: QuestPlan; placeKey: s
       </datalist>
       {input('layoutLike', 'Laid out like', 'An existing interior whose walls, furniture, lights and clutter are copied into this new place. Leave empty for an empty room.', 'Empty room (pick an interior to copy)')}
       {input('doorFrom', 'Door from', 'Where the player walks in from: a linked door is put against a wall there, and the way out of the copied layout leads back.', 'No door (pick a place)')}
+    </div>
+  );
+}
+
+/** Ways the quest can fail: someone dies, or time runs out. */
+function FailuresCard({ plan, edit, nameOf }: { plan: QuestPlan; edit: (fn: (p: QuestPlan) => void) => Promise<void>; nameOf: (k: string | null) => string }) {
+  const failures = plan.failures ?? [];
+  const stages = [...plan.stages].sort((a, b) => a.index - b.index);
+  const failStages = stages.filter((s) => s.failsQuest);
+  const set = (i: number, change: Partial<NonNullable<QuestPlan['failures']>[number]>) => void edit((p) => void Object.assign(p.failures![i]!, change));
+  const add = (kind: 'death' | 'timeLimit') =>
+    void edit((p) => {
+      // A failing stage to go to: an existing one, or a new one after the last stage.
+      let fail = p.stages.find((s) => s.failsQuest)?.index;
+      if (fail === undefined) {
+        fail = Math.max(0, ...p.stages.map((s) => s.index)) + 100;
+        p.stages.push({ index: fail, journal: kind === 'death' ? 'Someone I needed is dead. I have failed.' : 'I took too long, and failed.', startsQuest: false, completesQuest: false, failsQuest: true });
+      }
+      (p.failures ??= []).push(
+        kind === 'death'
+          ? { kind, targetKey: p.characters[0]?.key ?? null, days: null, fromStage: null, failStage: fail, note: 'Fails if they die' }
+          : { kind, targetKey: null, days: 3, fromStage: p.stages.find((s) => s.startsQuest)?.index ?? null, failStage: fail, note: 'Time limit' },
+      );
+    });
+  return (
+    <div className="card" data-testid="plan-failures">
+      <div className="card-title row" style={{ gap: 6 }}>
+        How the quest can fail
+        <Help text="The quest fails (goes to a stage that fails it) if a character dies before it's finished, or if it isn't finished within some in-game days. Leave this empty for a quest that can't fail." />
+        <span className="grow" />
+        <button className="btn small ghost" onClick={() => add('death')} disabled={!stages.length} title="Fail the quest if a character dies before it's finished. Adds a failing stage if there isn't one." data-testid="add-fail-death">
+          <Icon name="plus" size={12} /> If someone dies
+        </button>
+        <button className="btn small ghost" onClick={() => add('timeLimit')} disabled={!stages.length || failures.some((f) => f.kind === 'timeLimit')} title={failures.some((f) => f.kind === 'timeLimit') ? 'A quest can have one time limit' : 'Fail the quest if it isn’t finished in time. Adds a failing stage if there isn’t one.'} data-testid="add-fail-time">
+          <Icon name="plus" size={12} /> Time limit
+        </button>
+      </div>
+      {!failures.length && <p className="dim small" style={{ margin: 0 }}>The quest can't fail. Add a way to fail if someone must stay alive, or the player has to hurry.</p>}
+      <div className="col" style={{ gap: 8 }}>
+        {failures.map((f, i) => (
+          <div key={i} className="row wrap" style={{ gap: 6, alignItems: 'flex-end' }} data-testid="plan-failure">
+            {f.kind === 'death' ? (
+              <label className="col small" style={{ gap: 2, flex: '1 1 160px' }}>
+                <span className="dim">Fails if this character dies</span>
+                <Select value={f.targetKey ?? ''} options={[{ value: '', label: '(pick someone)' }, ...plan.characters.map((c) => ({ value: c.key, label: c.name }))]} onChange={(v) => set(i, { targetKey: v || null })} />
+              </label>
+            ) : (
+              <>
+                <label className="col small" style={{ gap: 2, width: 110 }} title="In-game days (one in-game day is about 72 real minutes at the default timescale)">
+                  <span className="dim">Days allowed</span>
+                  <input className="input" type="number" min={0.5} step={0.5} defaultValue={f.days ?? 3} key={`d-${i}-${f.days}`} onBlur={(e) => Number(e.target.value) !== f.days && set(i, { days: Number(e.target.value) || null })} data-testid="fail-days" />
+                </label>
+                <label className="col small" style={{ gap: 2 }}>
+                  <span className="dim">Clock starts at stage</span>
+                  <Select value={f.fromStage ?? stages[0]?.index ?? 0} options={stages.map((s) => ({ value: s.index, label: String(s.index) }))} onChange={(v) => set(i, { fromStage: v })} />
+                </label>
+              </>
+            )}
+            <label className="col small" style={{ gap: 2 }} title="The stage the quest goes to when it fails; tick “Fails the quest” on it">
+              <span className="dim">Goes to stage</span>
+              <Select value={f.failStage} options={(failStages.length ? failStages : stages).map((s) => ({ value: s.index, label: `${s.index}${s.failsQuest ? ' (fails)' : ''}` }))} onChange={(v) => set(i, { failStage: v })} />
+            </label>
+            <button className="btn small ghost icon" onClick={() => void edit((p) => void p.failures!.splice(i, 1))} title="Remove this way to fail (Undo edit brings it back)" data-testid="remove-failure">
+              <Icon name="trash" size={12} />
+            </button>
+            <span className="dim small" style={{ flexBasis: '100%' }}>
+              {f.kind === 'death' ? `If ${nameOf(f.targetKey) || 'they'} dies before the quest is finished, it fails.` : `If the quest isn't finished ${f.days ?? '?'} in-game day${f.days === 1 ? '' : 's'} after stage ${f.fromStage ?? stages[0]?.index ?? 0}, it fails.`}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

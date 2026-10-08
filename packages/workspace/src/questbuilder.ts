@@ -82,7 +82,11 @@ export interface BuildRecord {
   packages: Record<string, { base: FormKey[]; alias: FormKey[] }>;
   /** What was added to start the quest (a trigger on a placed object, or a line in another quest's stage). */
   starts?: StartPlace[];
+  /** Fail conditions added (death triggers on aliases, the time limit). */
+  failParts?: FailPart[];
 }
+
+type FailPart = { alias: number; trigger: string } | { timeLimit: true };
 
 type StartPlace = { ref: FormKey } | { quest: FormKey; stage: number; line: string };
 
@@ -104,6 +108,7 @@ interface BuildSession {
   stageLines: BuildRecord['stageLines'];
   packages: Map<string, { base: FormKey[]; alias: FormKey[] }>;
   starts: StartPlace[];
+  failParts: FailPart[];
   /** New interiors made in this build: their copied load doors (or empty). */
   newPlaces: Map<string, { loadDoors: FormKey[]; empty?: boolean }>;
   report: QuestBuildReport;
@@ -167,6 +172,7 @@ export function describeDiff(old: QuestPlan, next: QuestPlan, fromRecord: boolea
   if (!same(old.rewards, next.rewards)) out.push('Update the rewards');
   if (!same(old.animations, next.animations)) out.push('Update the animations at quest stages');
   if (!same(old.events ?? [], next.events ?? [])) out.push('Update the events at quest stages');
+  if (!same(old.failures ?? [], next.failures ?? [])) out.push('Update how the quest fails');
   if (!same(old.startsWhen ?? null, next.startsWhen ?? null)) out.push(next.startsWhen && next.startsWhen.kind !== 'game' ? 'Change what starts the quest' : 'Remove what starts the quest');
   return out.length ? out : ['Nothing needs changing'];
 }
@@ -348,6 +354,7 @@ export class QuestBuilder {
       stageLines: [...(record?.stageLines ?? [])],
       packages: new Map(Object.entries(record?.packages ?? {})),
       starts: [...(record?.starts ?? [])],
+      failParts: [...(record?.failParts ?? [])],
       newPlaces: new Map(),
       report: { quest: record?.quest ?? null, editorId: record ? (this.ws.view(record.quest)?.editorId ?? plan.editorId) : '', created: [], changed: [], reused: [], updated: [], dialogue: { topics: 0, responses: 0, greetings: 0, scenes: 0 }, notes: [...plan.assumptions.map((a) => `Assumed: ${a}`)], warnings: [], problems: [] },
     };
@@ -391,6 +398,7 @@ export class QuestBuilder {
     for (const conv of plan.conversations) await this.buildConversation(s, conv);
     for (const st of plan.steps) await this.buildStep(s, st);
     await this.buildStart(s);
+    await this.buildFailures(s);
     await this.buildRoutines(s, plan.characters);
     await this.buildStageLines(s, 'gesture');
     await this.buildStageLines(s, 'reward');
@@ -880,6 +888,36 @@ export class QuestBuilder {
     return ref && parseFormKey(ref).plugin === this.ws.activeName ? ref : undefined;
   }
 
+  /** Ways the quest fails: a character dying, or a time limit. */
+  private async buildFailures(s: BuildSession): Promise<void> {
+    const quest = s.quest!;
+    const endings = s.plan.stages.filter((x) => x.completesQuest).map((x) => x.index);
+    for (const f of s.plan.failures) {
+      if (f.kind === 'death') {
+        const who = (f.targetKey && s.npcs.get(f.targetKey)) || this.findForm(['NPC_', 'ACHR'], f.targetKey);
+        if (!who) {
+          s.report.warnings.push(`“${f.note}” was left out: there's no character called “${f.targetKey}”.`);
+          continue;
+        }
+        s.failParts.push(await this.graphs.addFailOnDeath(quest, who, f.failStage, endings));
+        s.report.notes.push(`The quest fails (stage ${f.failStage}) if ${this.label(who)} dies before it's finished.`);
+      } else {
+        const from = f.fromStage ?? startStageOf(s.plan);
+        await this.graphs.setTimeLimit(quest, { days: f.days ?? 1, fromStage: from, failStage: f.failStage, unlessDone: endings });
+        s.failParts.push({ timeLimit: true });
+        s.report.notes.push(`The quest fails (stage ${f.failStage}) if it isn't finished ${f.days} in-game day${f.days === 1 ? '' : 's'} after stage ${from}.`);
+      }
+    }
+  }
+
+  private async removeFailures(s: BuildSession): Promise<void> {
+    for (const p of s.failParts) {
+      if ('timeLimit' in p) await this.graphs.setTimeLimit(s.quest!, null);
+      else await this.graphs.removeFailOnDeath(s.quest!, p);
+    }
+    s.failParts = [];
+  }
+
   /** What starts the quest when it doesn't start with the game. */
   private async buildStart(s: BuildSession): Promise<void> {
     const sw = s.plan.startsWhen;
@@ -1048,6 +1086,7 @@ export class QuestBuilder {
       stageLines: s.stageLines,
       packages: obj(s.packages),
       starts: s.starts,
+      failParts: s.failParts,
     };
     // Written as part of the edit, so undo and redo keep the record in step with the plugin.
     const path = this.recordPath();
@@ -1142,6 +1181,7 @@ export class QuestBuilder {
       rewards: [],
       animations: [],
       events: [],
+      failures: g.timeLimit ? [{ kind: 'timeLimit', targetKey: null, days: g.timeLimit.days, fromStage: g.timeLimit.fromStage, failStage: g.timeLimit.failStage, note: 'Time limit' }] : [],
       assumptions: [],
       questions: [],
     };
@@ -1323,6 +1363,12 @@ export class QuestBuilder {
       if (oldSteps.has(k)) continue;
       await this.buildStep(s, st);
       if (st.kind !== 'talk') say(`Added “${st.note}”`);
+    }
+    if (JSON.stringify(old.failures ?? []) !== JSON.stringify(next.failures ?? [])) {
+      if (!s.failParts.length && (await this.graphs.timeLimit(quest))) s.failParts.push({ timeLimit: true });
+      await this.removeFailures(s);
+      await this.buildFailures(s);
+      say('Updated how the quest fails');
     }
     if (startChanged) {
       // A quest made by hand: what starts it is read from the quest.

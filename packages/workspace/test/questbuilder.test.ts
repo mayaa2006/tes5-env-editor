@@ -425,6 +425,60 @@ describe('quest builder', () => {
     expect(validatePlan(p).map((i) => i.message)).toContain('The quest starts when the player reads something, but doesn’t say what');
   });
 
+  it('remembers choices, fails if someone dies or time runs out, and has two endings', async () => {
+    const { ws, builder, graphs, dialogue, scripts } = await setup();
+    const plan = exampleQuestPlan();
+    plan.stages.push({ index: 110, journal: 'I kept the ring for myself.', startsQuest: false, completesQuest: true, failsQuest: false });
+    plan.stages.push({ index: 200, journal: 'Brynja is dead. I will never return her ring now.', startsQuest: false, completesQuest: false, failsQuest: true });
+    plan.stages.push({ index: 210, journal: 'I took too long. Brynja has given up on her ring.', startsQuest: false, completesQuest: false, failsQuest: true });
+    plan.conversations[1]!.screenplay += `\nPLAYER: Keep quiet about the ring and I'll split it with you. [if stage 20]\nEIRIK: Deal. [remember bribed] [stage 110] [goodbye]\nPLAYER: Anything else? [if chose bribed]\nEIRIK: Not a word, friend. [goodbye]`;
+    plan.steps.push({ from: 20, to: 110, kind: 'talk', targetKey: null, note: 'Make a deal with Eirik' });
+    plan.failures = [
+      { kind: 'death', targetKey: 'brynja', days: null, fromStage: null, failStage: 200, note: 'Brynja dies' },
+      { kind: 'timeLimit', targetKey: null, days: 3, fromStage: 10, failStage: 210, note: 'Three days' },
+    ];
+    expect(validatePlan(plan)).toEqual([]);
+    const r = await builder.build(plan);
+    const q = r.quest!;
+    // The choice is a global that the line sets, and later lines check.
+    const glob = ws.byEditorId('InnkeeperRingQuestChoseBribed')!;
+    expect(ws.summary(glob)!.sig).toBe('GLOB');
+    const deal = dialogue.graph(q).infos.find((i) => i.lines[0]?.startsWith('Deal.'))!;
+    const frag = (ws.view(deal.formKey)!.data as any).scripts.fragments.fileName as string;
+    expect(await scripts.read(frag)).toMatch(/\(Game\.GetFormFromFile\(0x[0-9A-F]{6}, "Built\.esp"\) as GlobalVariable\)\.SetValue\(1\)/);
+    const later = dialogue.graph(q).infos.find((i) => i.lines[0]?.startsWith('Not a word'))!;
+    expect(JSON.stringify(ws.view(later.formKey)!.data.conditions)).toContain(glob);
+    // Dying fails it, unless it's finished; the map shows both ways to fail.
+    const g = await graphs.graph(q);
+    expect(g.edges.find((e) => e.kind === 'death' && e.to === 200)).toBeTruthy();
+    expect(g.timeLimit).toEqual({ days: 3, fromStage: 10, failStage: 210 });
+    expect(g.edges.find((e) => e.id === 'timelimit')).toMatchObject({ from: 10, to: 210, label: 'Time runs out (3 days)' });
+    expect(await graphs.fragmentCode(q, 10)).toContain('RegisterForSingleUpdateGameTime(72)');
+    expect(g.problems.filter((p) => /stage (200|210)/.test(p))).toEqual([]);
+    // Updating removes the time limit.
+    const next = structuredClone(plan);
+    next.failures = next.failures.filter((f) => f.kind === 'death');
+    expect(await builder.previewUpdate(q, next)).toContain('Update how the quest fails');
+    await builder.update(q, next);
+    const g2 = await graphs.graph(q);
+    expect(g2.timeLimit).toBeUndefined();
+    expect(await graphs.fragmentCode(q, 10)).not.toContain('RegisterForSingleUpdateGameTime');
+    expect(g2.edges.filter((e) => e.kind === 'death' && e.to === 200)).toHaveLength(1);
+  });
+
+  it('checks fail conditions before building', () => {
+    const plan = exampleQuestPlan();
+    plan.failures = [
+      { kind: 'death', targetKey: null, days: null, fromStage: null, failStage: 300, note: 'Dies' },
+      { kind: 'timeLimit', targetKey: null, days: null, fromStage: 10, failStage: 100, note: 'Hurry' },
+    ];
+    const msgs = validatePlan(plan).map((i) => i.message);
+    expect(msgs).toContain('“Dies” sets stage 300, which doesn\'t exist');
+    expect(msgs).toContain('“Dies” needs the character who mustn\'t die');
+    expect(msgs).toContain('“Hurry” sets stage 100, which doesn\'t fail the quest; tick “Fails the quest” on it');
+    expect(msgs).toContain('“Hurry” needs a number of days');
+  });
+
   it('checks events before building', () => {
     const plan = exampleQuestPlan();
     plan.events = [
