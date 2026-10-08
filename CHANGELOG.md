@@ -2,6 +2,14 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.12.0
+
+- **Paint the ground:** World tools → **Terrain** → **Paint**. Pick a landscape texture (search it, see its colour), press **Start painting** and drag. Ctrl+drag fades it.
+  - Works like the CK: each quarter of a cell keeps its base texture plus up to six painted ones. You're told when a spot is full.
+  - The ground picture updates while you paint. Each stroke is one undo step.
+- **Under the hood:** landscape textures (LTEX: texture set, material, friction, specular, grass) are fully readable and editable. Every vanilla one writes back unchanged.
+- The demo has three ground textures to try (grass, rock, dirt).
+
 ## 0.11.0
 
 - **The quest plan is in tabs:** **Overview**, **Cast & places**, **Story**, **World events** and **Dialogue**, instead of one long page.

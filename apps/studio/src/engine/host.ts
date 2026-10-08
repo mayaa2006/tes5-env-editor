@@ -478,6 +478,24 @@ export class EngineHost {
     return (await this.landTextures!.bake(cell)) ?? null;
   }
 
+  /** Landscape textures to paint the ground with (yours first). */
+  landscapeTextures() {
+    return this.requireWs()
+      .search({ sigs: ['LTEX'], limit: 5000 })
+      .items.filter((t) => !t.deleted)
+      .sort((a, b) => Number(b.inActive) - Number(a.inActive) || (a.editorId ?? '').localeCompare(b.editorId ?? ''))
+      .map((t) => ({ formKey: t.formKey, editorId: t.editorId, name: t.name }));
+  }
+
+  /** A small swatch of a landscape texture (average colour), for the picker. */
+  async landscapeSwatch(ltex: FormKey) {
+    return this.landTextures!.swatch(ltex);
+  }
+
+  paintGroundTexture(cell: FormKey, points: { x: number; y: number }[], opts: { texture: FormKey; radius: number; strength: number; erase?: boolean }) {
+    return this.terrainService!.paintTexture(cell, points, opts);
+  }
+
   sculptTerrain(cell: FormKey, points: { x: number; y: number }[], opts: { mode: SculptMode; radius: number; strength: number }) {
     return this.terrainService!.sculpt(cell, points, opts);
   }

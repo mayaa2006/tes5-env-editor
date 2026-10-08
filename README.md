@@ -33,9 +33,11 @@ Three.js viewport with Blender controls:
 - **Outdoors:** an outdoor cell opens with its neighbours around it (View → **Outdoors, also load**: 0, 1 or 2 cells around), and the **W / N / S / E** buttons step to the next cell. Objects you drop land in the cell under them. The outliner lists everything in view, or **only the current cell**.
 - **Characters as people:** placed characters show with their body, outfit and head (their face file, or the race's head) instead of a capsule, following templates and leveled lists like the game. Turn it off under View.
 
-#### Terrain sculpting
+#### Terrain sculpting and ground painting
 
 World tools → **Terrain**: **Raise**, **Lower**, **Smooth** and **Flatten** brushes with a brush size and strength. Drag on the ground to sculpt (Ctrl swaps raise and lower); you see the change live, across cell borders without seams. Each stroke is one undo step. Afterwards, objects that stood where you sculpted are listed with **Put them on the ground**.
+
+**Paint** paints ground textures, like the CK's landscape painting. Pick a texture from the list (search by name, each has a colour swatch), press **Start painting** and drag on the ground; Ctrl+drag fades the texture away. The picture updates as you paint, across cell borders. Each quarter of a cell holds its base texture plus up to six painted ones, as in the game; you are told when a spot is full. Each stroke is one undo step.
 
 #### World tools
 
