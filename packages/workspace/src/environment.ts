@@ -916,6 +916,55 @@ export class EnvironmentService {
     return { position: { x: p.x + f.x * 96, y: p.y + f.y * 96, z: floor ? floor.point.z : p.z }, rotation: { x: 0, y: 0, z: wrapAngle(yaw + (dir === 1 ? 0 : Math.PI)) } };
   }
 
+  /**
+   * A place for a new door in a cell: against a wall, facing into open floor,
+   * away from other doors. Outdoors (or with no walls) it's on the ground near
+   * the middle of what's there. Yaw turns the door's front (+Y) into the room.
+   */
+  async doorSpot(cell: FormKey, seed = 1): Promise<{ position: Vec3; yaw: number; onWall: boolean }> {
+    const random = rng(seed);
+    const surfaces = await this.surfaces(cell);
+    const refs = this.world.references(cell).filter((r) => !r.deleted);
+    const doors = refs.filter((r) => r.baseSig === 'DOOR').map((r) => r.transform.position);
+    // Floor: the most common up-facing height.
+    const floorPts: Vec3[] = [];
+    for (let t = 0; t < surfaces.count; t++) {
+      const a = surfaces.vertex(t, 0);
+      const c = cross(sub(surfaces.vertex(t, 1), a), sub(surfaces.vertex(t, 2), a));
+      const area = len(c) / 2;
+      if (area < 200 || Math.abs(c.z) / (2 * area) < 0.97) continue;
+      floorPts.push({ x: (a.x + surfaces.vertex(t, 1).x + surfaces.vertex(t, 2).x) / 3, y: (a.y + surfaces.vertex(t, 1).y + surfaces.vertex(t, 2).y) / 3, z: (a.z + surfaces.vertex(t, 1).z + surfaces.vertex(t, 2).z) / 3 });
+    }
+    const counts = new Map<number, number>();
+    for (const p of floorPts) counts.set(Math.round(p.z / 8), (counts.get(Math.round(p.z / 8)) ?? 0) + 1);
+    const floorZ = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+    const floor = floorZ === undefined ? [] : floorPts.filter((p) => Math.abs(Math.round(p.z / 8) - floorZ) <= 1);
+    let best: { position: Vec3; yaw: number; score: number } | undefined;
+    for (let i = 0; i < Math.min(200, floor.length * 4); i++) {
+      const p = floor[Math.floor(random() * floor.length)]!;
+      const free = surfaces.down(p.x, p.y, p.z + 200, 220);
+      if (!free || Math.abs(free.point.z - p.z) > 4) continue; // something stands here
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const hit = surfaces.raycast({ x: p.x, y: p.y, z: p.z + 100 }, { x: dx, y: dy, z: 0 }, 400);
+        if (!hit || hit.distance < 60) continue;
+        const at = { x: p.x + dx * (hit.distance - 4), y: p.y + dy * (hit.distance - 4), z: p.z };
+        // The wall must be tall and clear at head height and near the floor, and the floor must continue in front.
+        const low = surfaces.raycast({ x: p.x, y: p.y, z: p.z + 30 }, { x: dx, y: dy, z: 0 }, hit.distance + 16);
+        const high = surfaces.raycast({ x: p.x, y: p.y, z: p.z + 180 }, { x: dx, y: dy, z: 0 }, hit.distance + 16);
+        if (!low || !high || Math.abs(low.distance - hit.distance) > 8 || Math.abs(high.distance - hit.distance) > 8) continue;
+        const nearDoor = Math.min(Infinity, ...doors.map((d) => Math.hypot(d.x - at.x, d.y - at.y)));
+        if (nearDoor < 200) continue;
+        const score = Math.min(nearDoor, 1000) + random() * 50;
+        if (!best || score > best.score) best = { position: at, yaw: wrapAngle(Math.atan2(dx, -dy)), score };
+      }
+    }
+    if (best) return { position: best.position, yaw: best.yaw, onWall: true };
+    const pts = refs.length ? refs.map((r) => r.transform.position) : [{ x: 0, y: 0, z: 0 }];
+    const c = { x: pts.reduce((a, p) => a + p.x, 0) / pts.length, y: pts.reduce((a, p) => a + p.y, 0) / pts.length };
+    const ground = surfaces.down(c.x, c.y, 100_000, 200_000);
+    return { position: { x: c.x, y: c.y, z: ground?.point.z ?? 0 }, yaw: 0, onWall: false };
+  }
+
   /** Make two doors lead to each other (sets both teleport destinations and markers). */
   async linkDoors(a: FormKey, b: FormKey): Promise<void> {
     if (a === b) throw new WorkspaceError('Pick two different doors');

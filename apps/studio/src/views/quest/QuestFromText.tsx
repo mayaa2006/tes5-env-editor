@@ -323,6 +323,7 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
                     <span className="dim small" style={{ whiteSpace: 'normal' }}>
                       {r.text}
                     </span>
+                    {kind === 'location' && !r.existing && !r.error && <NewPlaceFields plan={draft} placeKey={r.key} edit={edit} />}
                     {r.changes?.map((c) => (
                       <span key={c} className="small" style={{ whiteSpace: 'normal' }} data-testid="character-change">
                         • {c}
@@ -462,6 +463,53 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
           <Icon name="check" size={13} /> {existing ? 'See what will change' : draft.stages.length ? 'Build the quest' : 'Make the changes'}
         </button>
       </div>
+    </div>
+  );
+}
+
+/** For a new place: which interior to copy the layout of, and where its door is. */
+function NewPlaceFields({ plan, placeKey, edit }: { plan: QuestPlan; placeKey: string; edit: (fn: (p: QuestPlan) => void) => Promise<void> }) {
+  const l = plan.locations.find((x) => x.key === placeKey);
+  const [interiors, setInteriors] = useState<{ editorId?: string; name?: string }[]>([]);
+  useEffect(() => {
+    void engine((c) => c.call('cells', { interiorOnly: true }), { refreshSession: false }).then((list) => list && setInteriors(list.filter((c) => c.editorId).slice(0, 2000)));
+  }, []);
+  if (!l) return null;
+  const set = (k: 'layoutLike' | 'doorFrom', v: string) => void edit((p) => void (p.locations.find((x) => x.key === placeKey)![k] = v.trim() || null));
+  const input = (k: 'layoutLike' | 'doorFrom', label: string, title: string, placeholder: string) => (
+    <label className="col small" style={{ gap: 2, width: '100%' }} title={title}>
+      <span className="dim">{label}</span>
+      <input
+        className="input"
+        list="plan-interiors"
+        placeholder={placeholder}
+        defaultValue={l[k] ?? ''}
+        key={`${k}-${l[k]}`}
+        onBlur={(e) => e.target.value.trim() !== (l[k] ?? '') && set(k, e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          e.stopPropagation();
+        }}
+        data-testid={`place-${k}`}
+      />
+    </label>
+  );
+  return (
+    <div className="col" style={{ gap: 4, width: '100%', marginTop: 4 }}>
+      <datalist id="plan-interiors">
+        {plan.locations.filter((x) => x.key !== placeKey).map((x) => (
+          <option key={x.key} value={x.key}>
+            {x.name}
+          </option>
+        ))}
+        {interiors.map((c) => (
+          <option key={c.editorId} value={c.editorId}>
+            {c.name ?? ''}
+          </option>
+        ))}
+      </datalist>
+      {input('layoutLike', 'Laid out like', 'An existing interior whose walls, furniture, lights and clutter are copied into this new place. Leave empty for an empty room.', 'Empty room (pick an interior to copy)')}
+      {input('doorFrom', 'Door from', 'Where the player walks in from: a linked door is put against a wall there, and the way out of the copied layout leads back.', 'No door (pick a place)')}
     </div>
   );
 }

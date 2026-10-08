@@ -750,8 +750,15 @@ export class Workspace {
 
   /** Run a mutation with undo support. */
   transaction<T>(label: string, fn: () => T): T {
-    // Nested transactions fold into the outermost one (one undo step).
-    if (this.txDepth > 0) return fn();
+    // Nested transactions fold into the outermost one (one undo step), but
+    // still count as a change, so cached lists (cells…) see what they made.
+    if (this.txDepth > 0) {
+      try {
+        return fn();
+      } finally {
+        this.revision++;
+      }
+    }
     const a = this.requireActive();
     const before = a.plugin.serialize();
     this.txDepth++;
@@ -782,7 +789,13 @@ export class Workspace {
    * becomes one undo step.
    */
   async transactionAsync<T>(label: string, fn: () => Promise<T>): Promise<T> {
-    if (this.txDepth > 0) return fn();
+    if (this.txDepth > 0) {
+      try {
+        return await fn();
+      } finally {
+        this.revision++;
+      }
+    }
     const a = this.requireActive();
     const before = a.plugin.serialize();
     this.txDepth++;
