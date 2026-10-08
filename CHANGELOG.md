@@ -2,6 +2,10 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.15.0
+
+- **Save into a new folder, whatever your setup.** On the start screen, **Where my files are saved → Save into a new folder** puts your plugin and everything else the editor writes (scripts, SEQ and face files, backups) into one folder you choose, made if it doesn't exist. It's the same with a Skyrim folder or Mod Organizer 2, so it suits any mod manager. The choice is remembered, and the plugin screen shows where files will go. Off by default: saves go to Data, or MO2's Overwrite, as before.
+
 ## 0.14.1
 
 - **Closing a dialog no longer loses what you typed.** New quest, New character, New script, New cell / worldspace and the quest-from-text box keep their fields when you cancel, press Esc or click outside, and are filled in again next time you open them. They start fresh once the thing is created.
