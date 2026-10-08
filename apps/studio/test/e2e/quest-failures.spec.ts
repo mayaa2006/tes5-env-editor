@@ -17,6 +17,7 @@ for (const size of [
     const dlg = page.getByRole('dialog');
     await dlg.getByTestId('use-example').click();
 
+    await dlg.getByTestId('plan-tab-story').click();
     const card = dlg.getByTestId('plan-failures');
     await expect(card).toContainText("The quest can't fail");
     await card.getByTestId('add-fail-death').click();

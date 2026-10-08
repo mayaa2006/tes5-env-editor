@@ -13,6 +13,7 @@ test('characters gesture in dialogue and at quest stages', async ({ page }) => {
   await page.getByTestId('quest-from-writing').click();
   const dlg = page.getByRole('dialog');
   await dlg.getByTestId('use-example').click();
+  await dlg.getByTestId('plan-tab-story').click();
   await expect(dlg.getByTestId('plan-stages')).toContainText('Eirik: laugh');
   await dlg.getByTestId('build-quest').click();
   await dlg.getByTestId('open-built-quest').click();

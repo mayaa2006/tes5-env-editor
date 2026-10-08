@@ -18,6 +18,7 @@ for (const size of [
     await dlg.getByTestId('use-example').click();
 
     // Eirik: follower, sells general goods, trains Sneak.
+    await dlg.getByTestId('plan-tab-cast').click();
     const eirik = dlg.locator('.list-item', { hasText: 'Eirik' });
     await eirik.locator('summary', { hasText: 'Roles and fighting' }).click();
     await eirik.getByTestId('role-follower').check();
@@ -35,9 +36,11 @@ for (const size of [
     await enemies.getByTestId('encounter-what').fill('Town Guard');
     await enemies.getByTestId('encounter-what').press('Enter');
     await enemies.locator('label', { hasText: 'When all are dead' }).locator('select').selectOption('100');
+    await dlg.getByTestId('plan-tab-story').click();
     await expect(dlg.getByTestId('plan-steps')).toContainText('Defeat');
     if (process.env.SCREENSHOT_DIR) {
       await eirik.screenshot({ path: `${process.env.SCREENSHOT_DIR}/roles-${size.width}.png` });
+      await dlg.getByTestId('plan-tab-cast').click();
       await enemies.screenshot({ path: `${process.env.SCREENSHOT_DIR}/enemies-${size.width}.png` });
     }
 

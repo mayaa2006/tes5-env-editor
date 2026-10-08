@@ -18,6 +18,7 @@ for (const size of [
     await dlg.getByTestId('use-example').click();
 
     // None yet: the card says what to do.
+    await dlg.getByTestId('plan-tab-events').click();
     const card = dlg.getByTestId('plan-events');
     await expect(card).toContainText('Add an event for an ambush');
     await expect(dlg.getByTestId('plan-undo')).toBeDisabled();

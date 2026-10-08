@@ -39,6 +39,7 @@ for (const size of [
     await dlg.getByTestId('plan-quest').click();
 
     const review = dlg.getByTestId('plan-review');
+    await review.getByTestId('plan-tab-cast').click();
     await expect(review).toContainText('New empty interior');
     await review.getByTestId('place-layoutLike').fill('DemoTavern');
     await review.getByTestId('place-layoutLike').press('Enter');
