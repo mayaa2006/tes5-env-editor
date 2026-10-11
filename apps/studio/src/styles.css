@@ -86,19 +86,25 @@ textarea {
 .topbar > * {
   -webkit-app-region: no-drag;
 }
-.brand {
+.logo {
+  flex: none;
+  width: 20px;
+  height: 20px;
+}
+/* The logo is the app menu button: keep it and the name on one line. */
+.topbar .menu {
+  flex: none;
+  margin-right: 6px;
+}
+.topbar .menu > .btn {
+  gap: 6px;
+  padding: 3px 6px;
   font-weight: 600;
   letter-spacing: 0.3px;
-  margin-right: 10px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  white-space: nowrap;
 }
-.brand .logo {
-  width: 18px;
-  height: 18px;
-  border-radius: 4px;
-  background: linear-gradient(135deg, var(--accent), #8a5cf6);
+.brand-name {
+  white-space: nowrap;
 }
 
 .workspace-tabs {
@@ -1116,7 +1122,7 @@ table.grid tr.diff td {
     display: none;
   }
   .topbar .chip {
-    max-width: 150px;
+    max-width: 124px;
     overflow: hidden;
     text-overflow: ellipsis;
   }
@@ -1136,7 +1142,9 @@ table.grid tr.diff td {
   top: calc(100% + 4px);
   left: 0;
   z-index: 60;
-  min-width: 220px;
+  min-width: 240px;
+  max-height: calc(100vh - 60px);
+  overflow-y: auto;
   background: var(--panel);
   border: 1px solid var(--border-strong);
   border-radius: 8px;

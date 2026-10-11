@@ -2,6 +2,12 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.18.0
+
+- **A menu in the top-left corner.** Click the logo to open it. **Save** and **Settings** are at the top, then **New plugin**, **Close game folder** (asks first if you have unsaved changes), **Undo** and **Redo** (named after what they undo), **New character**, **New quest**, **New script**, the **Properties panel** switch, **Test in game**, **Keyboard shortcuts** and **About**. Items that can't be used yet are greyed out and the tooltip says why.
+- **Settings** opens from the menu and holds the "every time you save" options, with shortcuts to the script compiler and plugin setup.
+- **A new logo,** and the app name no longer squashes the logo or wraps onto three lines. On small windows the Test button shows just its icon so the top bar fits.
+
 ## 0.17.1
 
 - **Fix:** the demo no longer talks about a "browser version" or "the desktop app". The app has no browser version. In the demo (where files live only in memory), compiling and starting the game now say they aren't available in the demo, and tell you to open your Skyrim folder.
