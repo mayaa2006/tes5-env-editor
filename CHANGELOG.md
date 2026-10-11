@@ -2,6 +2,10 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.17.1
+
+- **Fix:** the demo no longer talks about a "browser version" or "the desktop app". The app has no browser version. In the demo (where files live only in memory), compiling and starting the game now say they aren't available in the demo, and tell you to open your Skyrim folder.
+
 ## 0.17.0
 
 - **Compiling scripts is automatic.** The app comes with Caprica, a free, open-source Papyrus compiler, so the Creation Kit's compiler isn't needed.

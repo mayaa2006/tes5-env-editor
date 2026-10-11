@@ -51,7 +51,7 @@ export function CompilerSettings() {
     <div className="col" style={{ gap: 12 }} data-testid="compile-setup">
       {!st.desktop && (
         <p className="warn small" style={{ margin: 0 }} data-testid="compile-desktop-only">
-          Compiling runs a compiler program, so it needs the desktop app (Windows). Here in the browser, errors are still checked as you type.
+          The demo's files only exist in memory, so its scripts can't be compiled. Open your Skyrim folder from the start screen to compile. Errors are still checked as you type.
         </p>
       )}
 
@@ -60,7 +60,7 @@ export function CompilerSettings() {
           {c?.bundled && !c.chosen && 'Caprica, which comes with this app. It is free and open source, and needs no Creation Kit.'}
           {c && !c.bundled && !c.chosen && `The Creation Kit's PapyrusCompiler.exe, found in the game folder.`}
           {c?.chosen && `${KIND_LABEL[c.kind]}, chosen by you: ${c.executable}`}
-          {!c && (st.desktop ? 'None found. Pick Caprica.exe or the Creation Kit’s PapyrusCompiler.exe below.' : 'Caprica comes with the desktop app; nothing to install.')}
+          {!c && (st.desktop ? 'None found. Pick Caprica.exe or the Creation Kit’s PapyrusCompiler.exe below.' : 'Caprica comes with the app; nothing to install.')}
         </div>
         {!own ? (
           <button className="btn small ghost" style={{ alignSelf: 'flex-start' }} onClick={() => setOwn(true)} title="Use a compiler you installed yourself instead of the automatic one" data-testid="compiler-choose">

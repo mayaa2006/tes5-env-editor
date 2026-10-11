@@ -8,7 +8,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 test.use({ actionTimeout: 6000 });
 
-const EXPECTED_ERRORS = [/Compiling scripts needs the desktop app/];
+const EXPECTED_ERRORS = [/can't be compiled in the demo/];
 
 test('exploratory sweep of every workspace', async ({ page }) => {
   test.setTimeout(300_000);
@@ -329,7 +329,7 @@ test('exploratory sweep of every workspace', async ({ page }) => {
   });
 
   // ---------------------------------------------------------------- scripts
-  await run('scripts: new script, edit, save, compile (expected: desktop app only)', async () => {
+  await run('scripts: new script, edit, save, compile (expected: not in the demo)', async () => {
     await ws('Scripts');
     await page.getByTestId('new-script').click();
     await page.getByRole('dialog').getByRole('button', { name: 'Create' }).click();
@@ -340,12 +340,12 @@ test('exploratory sweep of every workspace', async ({ page }) => {
     await page.keyboard.press('Control+s');
     await expect(page.locator('.toast').filter({ hasText: 'Saved MyScript.psc' })).toBeVisible();
     await page.getByTestId('compile').click();
-    // The browser can't run a compiler: Compile shows what's needed instead of failing.
-    await expect(page.getByRole('dialog')).toContainText('needs the desktop app');
+    // The demo can't compile (its files are in memory): Compile shows what's needed instead of failing.
+    await expect(page.getByRole('dialog')).toContainText("can't be compiled");
     await page.getByRole('dialog').getByRole('button', { name: 'Done' }).click();
     // The Scripts tab's compile card leads to the same setup, where compiling on save is offered.
     await page.getByTestId('build-setup').click();
-    await expect(page.getByRole('dialog')).toContainText('needs the desktop app');
+    await expect(page.getByRole('dialog')).toContainText("can't be compiled");
     await expect(page.getByRole('dialog')).toContainText('Compile scripts that changed when saving');
     await page.getByRole('dialog').getByRole('button', { name: 'Done' }).click();
     await page.getByTestId('script-list').getByText('DemoChestScript').click();

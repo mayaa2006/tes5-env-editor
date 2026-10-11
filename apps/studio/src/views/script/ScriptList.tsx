@@ -82,9 +82,9 @@ function BuildCard({ build, compile, hasScripts, onSetup }: { build: ReturnType<
     return (
       <div className="small build-card" data-testid="build-card">
         <span className="grow" style={{ color: 'var(--warn, #e0a040)' }} data-testid="build-not-ready">
-          <Icon name="warn" size={12} /> {st.desktop ? "Compiling isn't set up yet" : 'Compiling needs the desktop app'}
+          <Icon name="warn" size={12} /> {st.desktop ? "Compiling isn't set up yet" : 'No compiling in the demo'}
         </span>
-        <button className="btn small" onClick={onSetup} title="See what compiling needs and set it up (usually one click)" data-testid="build-setup">
+        <button className="btn small" onClick={onSetup} title="See what compiling needs and set it up" data-testid="build-setup">
           Set up
         </button>
       </div>

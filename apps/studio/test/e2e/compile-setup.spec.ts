@@ -14,13 +14,13 @@ for (const size of [
     await page.getByTestId('load-plugins').click();
     await page.locator('.workspace-tab', { hasText: 'Scripts' }).click();
 
-    // The browser demo can't run a compiler: the card says so, and Set up explains what's needed.
+    // The demo's files are in memory, so it can't compile: the card says so, and Set up explains why.
     const card = page.getByTestId('build-card');
-    await expect(card.getByTestId('build-not-ready')).toContainText('needs the desktop app');
+    await expect(card.getByTestId('build-not-ready')).toContainText('No compiling in the demo');
     await card.getByTestId('build-setup').click();
     const dlg = page.getByRole('dialog');
     await expect(dlg.getByTestId('compile-desktop-only')).toBeVisible();
-    await expect(dlg.getByTestId('compile-step-compiler')).toContainText('Caprica comes with the desktop app');
+    await expect(dlg.getByTestId('compile-step-compiler')).toContainText('Caprica comes with the app');
     // The demo has the game's script sources already.
     await expect(dlg.getByTestId('compile-step-sources')).toHaveAttribute('data-ok', 'true');
     if (size.width === 1280) await page.screenshot({ path: 'test-results/compile-setup-1280.png' });

@@ -261,7 +261,7 @@ Requires Node 22+.
 
 ```bash
 npm install
-npm run dev:web     # browser demo on http://localhost:5173 (in-memory demo data, nothing touches your game)
+npm run dev:web     # the UI in a browser on http://localhost:5173, for development and tests only (in-memory demo data)
 npm run dev         # desktop app (Electron) with real file access
 npm run build       # production build (web bundle + Electron main/worker)
 npm run dist -w @tes5/studio   # Windows installer + portable exe in apps/studio/release

@@ -312,7 +312,7 @@ export class ScriptService {
    */
   async compile(names: string[]): Promise<CompileResult[]> {
     const compiler = await this.activeCompiler();
-    if (!this.runner) throw new WorkspaceError('Compiling scripts needs the desktop app (it runs the Papyrus compiler). The checks as you type work everywhere.');
+    if (!this.runner) throw new WorkspaceError("Scripts can't be compiled in the demo: its files only exist in memory. Open your Skyrim folder to compile. Errors are still checked as you type.");
     if (!compiler) throw new WorkspaceError('No Papyrus compiler found. Choose Caprica.exe or the Creation Kit\'s PapyrusCompiler.exe under Compiler in the Scripts tab.');
     if (!names.length) return [];
     const importDirs = await this.importDirs();

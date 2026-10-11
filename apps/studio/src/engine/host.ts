@@ -1178,7 +1178,7 @@ export class EngineHost {
     let launched = false;
     let how: string | undefined;
     if (opts.launch) {
-      if (!this.runner?.launch) throw new Error('Starting the game needs the desktop app (the test file was written)');
+      if (!this.runner?.launch) throw new Error("Starting the game isn't available in the demo (the test file was written)");
       const target = await findLauncher(ws, { gameDir: this.gameDir, mo2: this.mo2 && { ...this.mo2, executable: opts.mo2Executable, exe: opts.mo2Exe || undefined } });
       if (!target) throw new Error(`Couldn’t find Mod Organizer, SKSE or the game in ${this.gameDir} (the test file was written)`);
       await this.runner.launch(target.command, target.args, { cwd: target.cwd });
