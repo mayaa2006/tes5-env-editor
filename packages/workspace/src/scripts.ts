@@ -220,7 +220,10 @@ export class ScriptService {
       const cmd = compilerCommand({ kind: this.compiler.kind, executable: this.compiler.executable, flagsFile, importDirs, outputDir, optimize: this.compiler.optimize, release: this.compiler.release }, [file]);
       const res = await this.runner.run(cmd.command, cmd.args);
       const output = `${res.stdout}\n${res.stderr}`;
-      results.push({ script: name, ok: res.code === 0 && compileSucceeded(output), messages: parseCompilerOutput(output), output });
+      const ok = res.code === 0 && compileSucceeded(output);
+      // Make the new .pex visible right away (so "not compiled" clears without a rescan).
+      if (ok) this.ws.vfs.addLoose(this.ws.options.outputDir, `Scripts/${name}.pex`);
+      results.push({ script: name, ok, messages: parseCompilerOutput(output), output });
     }
     return results;
   }

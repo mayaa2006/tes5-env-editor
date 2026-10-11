@@ -1,5 +1,5 @@
 /** Which Papyrus compiler to use (shown from the Scripts tab). */
-import { Field, Select, TextInput } from '../../components/ui';
+import { Checkbox, Field, Select, TextInput } from '../../components/ui';
 import { useStore } from '../../state/store';
 
 export function CompilerSettings() {
@@ -36,6 +36,12 @@ export function CompilerSettings() {
           )}
         </div>
       </Field>
+      <Checkbox
+        checked={settings.autoCompileOnSave}
+        onChange={(autoCompileOnSave) => update({ autoCompileOnSave })}
+        label="Compile in the background when I save a script"
+        help="Like the Creation Kit: saving a script starts compiling it right away, so the .pex is ready when you test. You can keep working; you only hear about it if it fails."
+      />
       <div className="dim small">The language service (errors as you type, completion) works without a compiler. Compiling needs the CK's script sources (Scripts.zip) extracted into Data.</div>
     </div>
   );

@@ -343,6 +343,11 @@ test('exploratory sweep of every workspace', async ({ page }) => {
     // No compiler set yet: Compile asks for one instead of failing.
     await expect(page.getByRole('dialog')).toContainText('Choose a compiler');
     await page.getByRole('dialog').getByRole('button', { name: 'Done' }).click();
+    // Compile all behaves the same without a compiler, and the background-compile choice is offered.
+    await page.getByTestId('compile-all').click();
+    await expect(page.getByRole('dialog')).toContainText('Choose a compiler');
+    await expect(page.getByRole('dialog')).toContainText('Compile in the background when I save a script');
+    await page.getByRole('dialog').getByRole('button', { name: 'Done' }).click();
     await page.getByTestId('script-list').getByText('DemoChestScript').click();
     await page.locator('.panel', { hasText: 'Outline' }).locator('.list-item').first().click();
   });

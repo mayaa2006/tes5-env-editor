@@ -186,7 +186,7 @@ A new power starts as a greater power cast on yourself, a new ability as always-
 
 #### Scripts
 
-Monaco editor for Papyrus with live errors, completion, hover, signature help and an outline. Compiling uses PapyrusCompiler.exe or Caprica, with clickable errors.
+Monaco editor for Papyrus with live errors, completion, hover, signature help and an outline. Compiling uses PapyrusCompiler.exe or Caprica, with clickable errors. **Compile all** builds every script in your mod, and saving a script compiles it in the background (like the Creation Kit; can be turned off).
 
 ### Your mod: records, cleaning and release
 
