@@ -62,3 +62,45 @@ for (const size of [
     expect(errors).toEqual([]);
   });
 }
+
+test('plan with a free online service: key link, live model list (1280×800)', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'authorization, content-type', 'content-type': 'application/json' };
+  const chats: any[] = [];
+  await page.route('https://api.groq.com/openai/v1/**', async (route) => {
+    const req = route.request();
+    if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+    if (req.headers().authorization !== 'Bearer gsk_good') return route.fulfill({ status: 401, headers: cors, body: '{"error":"bad key"}' });
+    if (req.url().endsWith('/models')) return route.fulfill({ status: 200, headers: cors, body: JSON.stringify({ data: [{ id: 'openai/gpt-oss-120b' }, { id: 'llama-3.3-70b-versatile' }, { id: 'whisper-large-v3' }] }) });
+    chats.push(req.postDataJSON());
+    return route.fulfill({ status: 200, headers: cors, body: JSON.stringify({ choices: [{ message: { content: JSON.stringify(exampleQuestPlan()) }, finish_reason: 'stop' }] }) });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: /Explore the demo/ }).click();
+  await page.getByTestId('load-plugins').click();
+  await page.locator('.workspace-tab', { hasText: 'Quests' }).click();
+  await page.getByTestId('quest-from-writing').click();
+  const dlg = page.getByRole('dialog');
+  await dlg.getByTestId('plan-source').fill('Brynja the innkeeper lost her ring.');
+  await dlg.getByTestId('ai-kind-openai').click();
+  await dlg.getByTestId('openai-preset').selectOption('groq');
+  // The key page is a real link; the API address is explained as not a web page.
+  await expect(dlg.getByTestId('openai-key-link')).toHaveAttribute('href', 'https://console.groq.com/keys');
+  await expect(dlg.getByTestId('ai-settings')).toContainText('not a web page');
+  // A wrong key is caught before planning.
+  await dlg.getByTestId('openai-key').fill('gsk_bad');
+  await dlg.getByTestId('openai-key').blur();
+  await expect(dlg.getByTestId('openai-error')).toContainText('rejected the API key');
+  // The right key lists the service's current models (speech models left out).
+  await dlg.getByTestId('openai-key').fill('gsk_good');
+  await dlg.getByTestId('openai-key').blur();
+  await expect(dlg.getByTestId('openai-found')).toContainText('Key works: 2 model(s)');
+  await expect(dlg.getByTestId('openai-model')).toHaveValue('llama-3.3-70b-versatile');
+  if (process.env.SCREENSHOT_DIR) await dlg.screenshot({ path: `${process.env.SCREENSHOT_DIR}/free-online-1280.png` });
+  await dlg.getByTestId('plan-quest').click();
+  await expect(dlg.getByTestId('plan-review')).toBeVisible();
+  expect(chats[0].model).toBe('llama-3.3-70b-versatile');
+  expect(errors).toEqual([]);
+});

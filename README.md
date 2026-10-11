@@ -103,7 +103,7 @@ The quest list on the left shows only quests that have a name by default (the hi
 
 - **Claude** gives the best plans, using your own Anthropic API key (paid).
 - **Free on this PC** uses [Ollama](https://ollama.com) to run an open model on your own computer. It's free, private and works offline. Install Ollama, run `ollama pull qwen3:14b` (or `qwen3:8b` on smaller PCs), and pick it from the list. Bigger models make better plans; small ones may need a second try.
-- **Free online** uses a service with the OpenAI-style API. Google Gemini's free tier, Groq, OpenRouter's free models and LM Studio are preset; paste the service's free key.
+- **Free online** uses a service with the OpenAI-style API. Google Gemini's free tier, Groq, OpenRouter's free models and LM Studio are preset. Click **Get a free key**, paste the key, and the app asks the service which models it offers right now and picks one, so the list never goes stale. The API address is for the app, not a web page to open.
 
 The plan covers:
 
