@@ -399,7 +399,7 @@ export class ReleaseService {
         const names = [...vm.scripts.map((s) => s.name), (vm as { fragments?: { fileName?: string } }).fragments?.fileName].filter((n): n is string => !!n);
         for (const n of names) {
           want(`scripts\\${n}.pex`, `script on ${who}`);
-          if (opts.scriptSources !== false) want(`${this.scripts.sourceFolder}\\${n}.psc`, `source of ${n}`);
+          if (opts.scriptSources) want(`${this.scripts.sourceFolder}\\${n}.psc`, `source of ${n}`);
         }
       }
       if (record.sig === 'NPC_') {
