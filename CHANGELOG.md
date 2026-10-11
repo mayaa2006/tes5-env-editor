@@ -2,6 +2,10 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.19.0
+
+- **Flag a plugin as a light plugin (ESL).** The Light plugin card on the Release tab now has a **Flag as ESL** button, enabled when the plugin qualifies. If it doesn't qualify yet, the tooltip says to use **Compact FormIDs** first. Once flagged, the card shows **flagged ESL** and a **Remove ESL flag** button. Both can be undone; save to keep the change.
+
 ## 0.18.2
 
 - **Packing no longer includes script sources (.psc) by default.** The BSA and ZIP hold only the compiled scripts; tick **Include script sources** on the Release tab if you want to ship them.

@@ -11,6 +11,8 @@ import {
   Workspace,
   createDemoData,
   eslReport,
+  compactFormIds,
+  setLightFlag,
   generateCellNavmesh,
   parseModlist,
   readMo2Instance,
@@ -327,6 +329,25 @@ describe('saving and cleaning', () => {
     const r = eslReport(ws);
     expect(r.newRecords).toBe(1);
     expect(r.eligible).toBe(true);
+    expect(r.flagged).toBe(false);
+  });
+
+  it('flags and unflags a plugin as ESL, with undo', async () => {
+    const { ws } = await openDemo();
+    ws.duplicateRecord(key(ws, 'DemoCrate'), 'MyCrate');
+    // The new record's ID may be outside 0x800-0xFFF; compact first if so.
+    if (!eslReport(ws).eligible) compactFormIds(ws);
+    setLightFlag(ws, true);
+    expect(ws.active!.plugin!.isESL).toBe(true);
+    expect(ws.active!.isLight).toBe(true);
+    expect(eslReport(ws).flagged).toBe(true);
+    expect(ws.undo()).toBe(true);
+    expect(ws.active!.plugin!.isESL).toBe(false);
+    expect(ws.active!.isLight).toBe(false);
+    ws.redo();
+    expect(ws.active!.plugin!.isESL).toBe(true);
+    setLightFlag(ws, false);
+    expect(ws.active!.plugin!.isESL).toBe(false);
   });
 });
 
