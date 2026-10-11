@@ -582,6 +582,26 @@ describe('quest planner', () => {
     expect(p.messages[0].content).toContain('<source>\nBrynja lost her ring.\n</source>');
   });
 
+  it('puts what the text mentions first in the load-order list, with details, so a short list still has it', async () => {
+    const { ws } = await setup();
+    const catalog = planCatalog(ws, { text: 'Halvar the smith asks the player to find his hammer.', limit: 1 });
+    const chars = catalog.split('\n\n')[0]!.split('\n');
+    // One entry fits: the character the text names, with race, sex, voice and so on.
+    expect(chars[1]).toMatch(/^DemoBlacksmith "Halvar the Smith" \(.*male/);
+    expect(chars[2]).toMatch(/^…and \d+ more$/);
+    // Without a text: the old order, and no details.
+    expect(planCatalog(ws, { limit: 1 }).split('\n')[1]).not.toContain('(');
+  });
+
+  it('gives a free AI a worked example to copy; Claude does without', async () => {
+    const sent: any[] = [];
+    const ok = async (p: any) => (sent.push(p), reply(JSON.stringify(exampleQuestPlan())));
+    await new QuestPlanner({ ai: { kind: 'ollama', model: 'qwen3' }, send: ok }).plan('x', 'document', 'catalog');
+    await new QuestPlanner({ ai: { kind: 'claude', apiKey: 'k' }, send: ok }).plan('x', 'document', 'catalog');
+    expect(sent[0].system.map((b: any) => b.text).join('\n')).toContain('An example of a complete plan');
+    expect(sent[1].system.map((b: any) => b.text).join('\n')).not.toContain('An example of a complete plan');
+  });
+
   it('revises a plan with the author’s feedback', async () => {
     const sent: any[] = [];
     const changed = { ...exampleQuestPlan(), title: 'The Stolen Ring' };

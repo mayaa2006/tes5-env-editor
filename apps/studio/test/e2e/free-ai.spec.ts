@@ -17,6 +17,8 @@ for (const size of [
       if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
       if (!running) return route.abort('connectionrefused');
       if (route.request().url().endsWith('/api/tags')) return route.fulfill({ status: 200, headers: cors, body: JSON.stringify({ models: [{ name: 'qwen3:14b' }, { name: 'llama3.1:8b' }] }) });
+      // How much the model can read (the app sizes the window to the prompt).
+      if (route.request().url().endsWith('/api/show')) return route.fulfill({ status: 200, headers: cors, body: JSON.stringify({ model_info: { 'qwen3.context_length': 40960 } }) });
       chats.push(route.request().postDataJSON());
       const plan = exampleQuestPlan();
       return route.fulfill({ status: 200, headers: cors, body: JSON.stringify({ message: { content: '```json\n' + JSON.stringify(plan) + '\n```' }, done_reason: 'stop' }) });
@@ -49,6 +51,7 @@ for (const size of [
     await expect(review).toBeVisible();
     expect(chats[0].model).toBe('qwen3:14b');
     expect(chats[0].format.type).toBe('object');
+    expect(chats[0].options.num_ctx).toBeLessThanOrEqual(40960);
     expect(chats[0].messages[1].content).toContain('Brynja the innkeeper lost her ring.');
     await expect(review.getByTestId('plan-feedback')).toHaveAttribute('placeholder', /Ask qwen3:14b \(Ollama\) to change the plan/);
 

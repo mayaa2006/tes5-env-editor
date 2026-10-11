@@ -103,6 +103,7 @@ The quest list on the left shows only quests that have a name by default (the hi
 
 - **Claude** gives the best plans, using your own Anthropic API key (paid).
 - **Free on this PC** uses [Ollama](https://ollama.com) to run an open model on your own computer. It's free, private and works offline. Install Ollama, run `ollama pull qwen3:14b` (or `qwen3:8b` on smaller PCs), and pick it from the list. Bigger models make better plans; small ones may need a second try.
+- **What the AI is given:** your text, the rules, and a list of what's in your load order. Characters, places and other entries your text mentions come first, and the characters it names come with their race, sex, voice, class and factions, so the AI reuses the right ones. A free AI also gets a short guide to the plan's fields and a worked example to copy. With Ollama, the app checks how much the model can read and sizes the window to fit; if the text is too long for the model, it says so instead of letting Ollama cut it.
 - **Free online** uses a service with the OpenAI-style API. Google Gemini's free tier, Groq, OpenRouter's free models and LM Studio are preset. Click **Get a free key**, paste the key, and the app asks the service which models it offers right now and picks one, so the list never goes stale. The API address is for the app, not a web page to open.
 
 The plan covers:

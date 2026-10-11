@@ -1139,13 +1139,16 @@ export class EngineHost {
 
   /** Claude plans a quest from a design document or a conversation. */
   async planQuest(source: string, mode: PlannerMode, ai: AiProvider | string) {
-    const plan = await new QuestPlanner({ ai: asAi(ai) }).plan(source, mode, planCatalog(this.requireWs()));
+    const a = asAi(ai);
+    const plan = await new QuestPlanner({ ai: a }).plan(source, mode, planCatalog(this.requireWs(), { text: source, limit: catalogLimit(a) }));
     return { plan, ...this.reviewQuestPlan(plan) };
   }
 
   /** Claude changes a plan as described. */
   async reviseQuestPlan(plan: QuestPlan, feedback: string, ai: AiProvider | string, source?: string) {
-    const next = await new QuestPlanner({ ai: asAi(ai) }).revise(plan, feedback, planCatalog(this.requireWs()), source);
+    const a = asAi(ai);
+    const text = `${source ?? ''}\n${feedback}\n${plan.characters.map((c) => `${c.name} ${c.existing ?? ''}`).join('\n')}\n${plan.locations.map((l) => `${l.name} ${l.existing ?? ''}`).join('\n')}`;
+    const next = await new QuestPlanner({ ai: a }).revise(plan, feedback, planCatalog(this.requireWs(), { text, limit: catalogLimit(a) }), source);
     return { plan: next, ...this.reviewQuestPlan(next) };
   }
 
@@ -1556,6 +1559,11 @@ export type EngineMethod = {
 }[keyof EngineHost];
 
 /** An AI choice, or (as before) just a Claude API key. */
+/** Free AIs have less room to read: a shorter load-order list (the entries your text mentions still come first). */
+function catalogLimit(ai: AiProvider): number {
+  return ai.kind === 'claude' ? 300 : 120;
+}
+
 function asAi(ai: AiProvider | string): AiProvider {
   return typeof ai === 'string' ? { kind: 'claude', apiKey: ai } : ai;
 }
