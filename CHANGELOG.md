@@ -6,6 +6,10 @@ Each version here is published as a Windows installer and portable exe on the [r
 
 - **Flag a plugin as a light plugin (ESL).** The Light plugin card on the Release tab now has a **Flag as ESL** button, enabled when the plugin qualifies. If it doesn't qualify yet, the tooltip says to use **Compact FormIDs** first. Once flagged, the card shows **flagged ESL** and a **Remove ESL flag** button. Both can be undone; save to keep the change.
 
+## 0.18.2
+
+- **Packing no longer includes script sources (.psc) by default.** The BSA and ZIP hold only the compiled scripts; tick **Include script sources** on the Release tab if you want to ship them.
+
 ## 0.18.1
 
 - **Edit dialogue in a bigger box.** Player lines and responses have an expand button beside them. It opens the text in a large box, and what you typed is saved when you click off it (or press Done, Escape or Ctrl+Enter). Each save is one undo step.
