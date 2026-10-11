@@ -44,6 +44,14 @@ export interface DialogueInfoNode {
   goodbye: boolean;
   /** Stage this response requires (GetStage == N), if any. */
   needsStage: number | null;
+  /** Said only once this stage is reached (GetStageDone, or GetStage >= N). */
+  fromStage: number | null;
+  /** Said only until this stage is reached (GetStage < N, or stage not done). */
+  beforeStage: number | null;
+  /** Said only after the quest is completed. */
+  afterQuestDone: boolean;
+  /** Stage this response moves the quest to when said (its end script), if any. */
+  setsStage: number | null;
   conditionCount: number;
   choices: FormKey[];
 }
@@ -237,6 +245,8 @@ export class DialogueService {
   graph(quest: FormKey): DialogueGraph {
     const getStage = conditionFunctionByName('GetStage')!.index;
     const getIsId = conditionFunctionByName('GetIsID')!.index;
+    const getStageDone = conditionFunctionByName('GetStageDone')!.index;
+    const getQuestCompleted = conditionFunctionByName('GetQuestCompleted')!.index;
     const topics: DialogueTopicNode[] = [];
     const infos: DialogueInfoNode[] = [];
     for (const t of this.quests.topics(quest)) {
@@ -244,6 +254,8 @@ export class DialogueService {
       topics.push({ formKey: t.formKey, editorId: t.editorId, text: t.text ?? '', kind, topLevel: this.isTopLevel(t.formKey, t.branch ?? null), branch: t.branch ?? null });
       for (const i of t.infos) {
         const need = i.conditions.find((c) => c.function === getStage && c.param1 === quest && c.op === '==');
+        const from = i.conditions.find((c) => (c.function === getStageDone && c.param1 === quest && c.op === '==' && Number(c.value) === 1) || (c.function === getStage && c.param1 === quest && c.op === '>='));
+        const before = i.conditions.find((c) => (c.function === getStageDone && c.param1 === quest && c.op === '==' && Number(c.value) === 0) || (c.function === getStage && c.param1 === quest && c.op === '<'));
         infos.push({
           formKey: i.formKey,
           topic: t.formKey,
@@ -251,6 +263,10 @@ export class DialogueService {
           lines: i.responses.map((r) => r.text),
           goodbye: (i.flags & 1) !== 0,
           needsStage: need ? Number(need.value) : null,
+          fromStage: from ? (from.function === getStageDone ? Number(from.param2) : Number(from.value)) : null,
+          beforeStage: before ? (before.function === getStageDone ? Number(before.param2) : Number(before.value)) : null,
+          afterQuestDone: i.conditions.some((c) => c.function === getQuestCompleted && c.param1 === quest && c.op === '==' && Number(c.value) === 1),
+          setsStage: null,
           conditionCount: i.conditions.length,
           choices: [...i.linkTo],
         });

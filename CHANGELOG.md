@@ -2,6 +2,12 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.20.0
+
+- **Set when a line is said, in plain words.** Every response in the Dialogue tab (graph and list) has **When can this be said?**: at any time, only while the quest is at a stage, once the quest has reached a stage, only before a stage, after this quest is completed, or after another quest is completed. Stages are listed with their journal text ("20 – Find the ring"). It writes ordinary conditions, so the full list is still under **Advanced**, and conditions you already had are read back correctly.
+- **Move the quest from a line.** **After this line** has a stage dropdown ("Don't change the quest" by default): the quest moves to that stage when the line is said. No script needed, and it shows as an arrow on the quest map. Ending the conversation moved here too.
+- **Stage chips on dialogue.** Responses show what they need and what they do ("only at 10 – …", "from 20 – …", "until 30 – …", "→ 30 – …"). Click a chip to open that stage on the map.
+
 ## 0.19.0
 
 - **Flag a plugin as a light plugin (ESL).** The Light plugin card on the Release tab now has a **Flag as ESL** button, enabled when the plugin qualifies. If it doesn't qualify yet, the tooltip says to use **Compact FormIDs** first. Once flagged, the card shows **flagged ESL** and a **Remove ESL flag** button. Both can be undone; save to keep the change.

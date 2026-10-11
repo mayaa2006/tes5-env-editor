@@ -139,21 +139,25 @@ function autoLayout(g: QuestGraph): Record<string, { x: number; y: number }> {
   return out;
 }
 
-export default function QuestMap({ quest, onOpenDialogue, onOpenStages }: { quest: FormKey; onOpenDialogue: (topic: FormKey) => void; onOpenStages: () => void }) {
+export default function QuestMap({ quest, onOpenDialogue, onOpenStages, focusStage }: { quest: FormKey; onOpenDialogue: (topic: FormKey) => void; onOpenStages: () => void; focusStage?: { stage: number; n: number } | null }) {
   return (
     <ReactFlowProvider>
-      <QuestMapInner quest={quest} onOpenDialogue={onOpenDialogue} onOpenStages={onOpenStages} />
+      <QuestMapInner quest={quest} onOpenDialogue={onOpenDialogue} onOpenStages={onOpenStages} focusStage={focusStage} />
     </ReactFlowProvider>
   );
 }
 
-function QuestMapInner({ quest, onOpenDialogue, onOpenStages }: { quest: FormKey; onOpenDialogue: (topic: FormKey) => void; onOpenStages: () => void }) {
+function QuestMapInner({ quest, onOpenDialogue, onOpenStages, focusStage }: { quest: FormKey; onOpenDialogue: (topic: FormKey) => void; onOpenStages: () => void; focusStage?: { stage: number; n: number } | null }) {
   const client = useStore((s) => s.client);
   const { data: g } = useQuery(() => client?.call('questGraph', quest), [quest]);
   const flow = useReactFlow();
   const [pending, setPending] = useState<{ from: number | null; to: number } | null>(null);
   const [selected, setSelected] = useState<{ kind: 'stage'; stage: number } | { kind: 'edge'; edge: QuestEdge } | null>(null);
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
+  // Jumping here from a stage chip in the dialogue: select that stage so its panel opens.
+  useEffect(() => {
+    if (focusStage) setSelected({ kind: 'stage', stage: focusStage.stage });
+  }, [focusStage]);
   const [showProblems, setShowProblems] = useState(false);
   const [writing, setWriting] = useState(false);
   const { onChanges, withSize } = useMeasured();

@@ -307,7 +307,7 @@ test('exploratory sweep of every workspace', async ({ page }) => {
     await expect.poll(() => page.getByTestId('dialogue').locator('input').evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value))).toEqual(expect.arrayContaining(['Any rumors?', 'Not today.', 'Come back later.']));
   });
   await run('quests: conditions and begin script on a response', async () => {
-    await page.getByTestId('dialogue').getByText(/conditions?$/).last().click();
+    await page.getByTestId('dialogue').getByText(/all conditions \(\d+\)/).last().click();
     await page.getByRole('button', { name: /Add condition/ }).click();
     await page.waitForTimeout(200);
     await page.getByTestId('dialogue').getByText('Begin script').last().click();
