@@ -394,7 +394,7 @@ const kb = (n?: number) => (n === undefined ? '' : n === 0 ? '0 KB' : n > 1024 *
 function Package() {
   const client = useStore((s) => s.client);
   const session = useStore((s) => s.session);
-  const [sources, setSources] = useState(true);
+  const [sources, setSources] = useState(false);
   const [zipBsa, setZipBsa] = useState(true);
   const [result, setResult] = useState<string | null>(null);
   const { data: files } = useQuery(() => client?.call('packageFiles', { scriptSources: sources }), [client, sources]);
@@ -432,7 +432,7 @@ function Package() {
     <div className="card" style={{ marginTop: 12 }} data-testid="package">
       <div className="card-title">
         Pack your mod
-        <Help text="Collects every file your plugin needs that you made yourself: meshes and their textures, compiled scripts (and their sources if you like), FaceGen for your characters, voice files, the SEQ file and translations. Files from the base game or other mods' archives are left out." />
+        <Help text="Collects every file your plugin needs that you made yourself: meshes and their textures, compiled scripts (their sources only if you tick the box), FaceGen for your characters, voice files, the SEQ file and translations. Files from the base game or other mods' archives are left out." />
       </div>
       <div className="row wrap" style={{ gap: 8 }}>
         <button className="btn primary" onClick={packBsa} disabled={!included.length} data-testid="pack-bsa" title="Write your plugin's loose files into a .bsa archive next to it">
@@ -445,8 +445,8 @@ function Package() {
         <Help text="A ZIP with your plugin and all its files in the right folders, ready to upload to Nexus or share. Your plugin is saved first." />
       </div>
       <div className="col" style={{ gap: 4, marginTop: 8 }}>
-        <Checkbox checked={zipBsa} onChange={setZipBsa} label="In the ZIP, put the files in a BSA" help="Recommended: the ZIP then holds just your plugin and its BSA (plus script sources, which stay loose so others can read them)." />
-        <Checkbox checked={sources} onChange={setSources} label="Include script sources (.psc)" help="Lets other modders read and patch your scripts. The game only needs the compiled .pex files." />
+        <Checkbox checked={zipBsa} onChange={setZipBsa} label="In the ZIP, put the files in a BSA" help="Recommended: the ZIP then holds just your plugin and its BSA (plus script sources, only if you tick the box below)." />
+        <Checkbox checked={sources} onChange={setSources} label="Include script sources (.psc)" help="Off by default: the game only needs the compiled .pex files. Tick it to ship the .psc files too, so other modders can read and patch your scripts." />
       </div>
       {result && (
         <div className="ok small" style={{ marginTop: 8 }} data-testid="pack-result">
