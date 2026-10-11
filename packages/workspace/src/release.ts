@@ -25,7 +25,7 @@ import type { ScriptService } from './scripts';
 export type FindingSeverity = 'error' | 'warning' | 'info';
 export type FindingCategory = 'assets' | 'scripts' | 'quests' | 'dialogue' | 'world' | 'navmesh' | 'characters' | 'plugin';
 /** One-click fixes the UI can offer next to a finding. */
-export type FindingFix = { kind: 'autofill'; form: FormKey } | { kind: 'generateFaces'; npcs: FormKey[] } | { kind: 'updateBounds' } | { kind: 'generateNavmesh'; cell: FormKey } | { kind: 'dropToSurface'; refs: FormKey[] };
+export type FindingFix = { kind: 'autofill'; form: FormKey } | { kind: 'generateFaces'; npcs: FormKey[] } | { kind: 'updateBounds' } | { kind: 'generateNavmesh'; cell: FormKey } | { kind: 'dropToSurface'; refs: FormKey[] } | { kind: 'compileScripts'; scripts: string[] };
 
 export interface Finding {
   severity: FindingSeverity;
@@ -171,11 +171,25 @@ export class ReleaseService {
       const vm = this.scripts.scriptsOf(key);
       for (const s of vm.scripts) {
         if (!this.ws.vfs.has(`scripts\\${s.name.toLowerCase()}.pex`))
-          add({ severity: 'warning', category: 'scripts', message: `${s.name} (on ${label(key)}) isn't compiled`, detail: 'The game only runs compiled scripts (.pex). Compile it in the Scripts tab.', form: key });
+          add({
+            severity: 'warning',
+            category: 'scripts',
+            message: `${s.name} (on ${label(key)}) isn't compiled`,
+            detail: 'The game only runs compiled scripts (.pex). Compile it in the Scripts tab.',
+            form: key,
+            fix: this.scripts.isOwn(s.name) ? { kind: 'compileScripts', scripts: [s.name] } : undefined,
+          });
       }
       const frag = (vm as { fragments?: { fileName?: string } }).fragments?.fileName;
       if (frag && !this.ws.vfs.has(`scripts\\${frag.toLowerCase()}.pex`))
-        add({ severity: 'warning', category: 'scripts', message: `Fragment script ${frag} (on ${label(key)}) isn't compiled`, detail: 'Stage, dialogue or trigger scripts in it won\'t run until it is.', form: key });
+        add({
+          severity: 'warning',
+          category: 'scripts',
+          message: `Fragment script ${frag} (on ${label(key)}) isn't compiled`,
+          detail: "Stage, dialogue or trigger scripts in it won't run until it is.",
+          form: key,
+          fix: this.scripts.isOwn(frag) ? { kind: 'compileScripts', scripts: [frag] } : undefined,
+        });
       try {
         const empty = await this.scripts.emptyProperties(key);
         if (empty.length)

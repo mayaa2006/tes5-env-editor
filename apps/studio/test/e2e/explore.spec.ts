@@ -8,7 +8,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 test.use({ actionTimeout: 6000 });
 
-const EXPECTED_ERRORS = [/No Papyrus compiler configured/];
+const EXPECTED_ERRORS = [/Compiling scripts needs the desktop app/];
 
 test('exploratory sweep of every workspace', async ({ page }) => {
   test.setTimeout(300_000);
@@ -329,7 +329,7 @@ test('exploratory sweep of every workspace', async ({ page }) => {
   });
 
   // ---------------------------------------------------------------- scripts
-  await run('scripts: new script, edit, save, compile (expected: no compiler)', async () => {
+  await run('scripts: new script, edit, save, compile (expected: desktop app only)', async () => {
     await ws('Scripts');
     await page.getByTestId('new-script').click();
     await page.getByRole('dialog').getByRole('button', { name: 'Create' }).click();
@@ -340,13 +340,13 @@ test('exploratory sweep of every workspace', async ({ page }) => {
     await page.keyboard.press('Control+s');
     await expect(page.locator('.toast').filter({ hasText: 'Saved MyScript.psc' })).toBeVisible();
     await page.getByTestId('compile').click();
-    // No compiler set yet: Compile asks for one instead of failing.
-    await expect(page.getByRole('dialog')).toContainText('Choose a compiler');
+    // The browser can't run a compiler: Compile shows what's needed instead of failing.
+    await expect(page.getByRole('dialog')).toContainText('needs the desktop app');
     await page.getByRole('dialog').getByRole('button', { name: 'Done' }).click();
-    // Compile all behaves the same without a compiler, and the background-compile choice is offered.
-    await page.getByTestId('compile-all').click();
-    await expect(page.getByRole('dialog')).toContainText('Choose a compiler');
-    await expect(page.getByRole('dialog')).toContainText('Compile in the background when I save a script');
+    // The Scripts tab's compile card leads to the same setup, where compiling on save is offered.
+    await page.getByTestId('build-setup').click();
+    await expect(page.getByRole('dialog')).toContainText('needs the desktop app');
+    await expect(page.getByRole('dialog')).toContainText('Compile scripts that changed when saving');
     await page.getByRole('dialog').getByRole('button', { name: 'Done' }).click();
     await page.getByTestId('script-list').getByText('DemoChestScript').click();
     await page.locator('.panel', { hasText: 'Outline' }).locator('.list-item').first().click();

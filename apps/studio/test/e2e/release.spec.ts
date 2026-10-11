@@ -57,7 +57,7 @@ test('check a plugin, fix a problem, and pack it', async ({ page }) => {
   await page.locator('.workspace-tab', { hasText: 'Scripts' }).click();
   await page.getByTestId('script-list').getByText('DemoChestScript').click();
   await page.getByTestId('compiler-settings').click();
-  await expect(page.getByRole('dialog')).toContainText('PapyrusCompiler.exe');
+  await expect(page.getByRole('dialog')).toContainText('Caprica');
   await page.getByRole('dialog').getByRole('button', { name: 'Done' }).click();
   expect(errors).toEqual([]);
 });

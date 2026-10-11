@@ -3,7 +3,7 @@
  * real file system access. "Explore the demo" uses an in-memory data set so
  * nothing on disk is touched.
  */
-import { parentPort } from 'node:worker_threads';
+import { parentPort, workerData } from 'node:worker_threads';
 import { MemoryFileSystem, createDemoData } from '@tes5/workspace';
 import { NodeFileSystem, NodeProcessRunner } from '@tes5/workspace/node';
 import { DEMO_GAME_DIR } from '../src/engine/constants';
@@ -12,7 +12,7 @@ import { EngineHost } from '../src/engine/host';
 if (!parentPort) throw new Error('engine-worker must run as a worker thread');
 const port = parentPort;
 
-const real = new EngineHost(new NodeFileSystem(), new NodeProcessRunner());
+const real = new EngineHost(new NodeFileSystem(), new NodeProcessRunner(), (workerData as { caprica?: string } | null)?.caprica);
 let demo: EngineHost | undefined;
 let active = real;
 

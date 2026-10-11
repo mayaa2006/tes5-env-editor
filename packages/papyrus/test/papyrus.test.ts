@@ -280,4 +280,18 @@ describe('compiler integration', () => {
     expect(msgs[0]).toEqual({ file: 'C:\\Data\\Source\\Scripts\\Foo.psc', line: 12, col: 5, severity: 'error', message: 'variable x is undefined' });
     expect(msgs[1]!.severity).toBe('error');
   });
+
+  it("runs Caprica on many files at once and reads its errors", () => {
+    const cmd = compilerCommand({ kind: 'caprica', executable: 'Caprica.exe', flagsFile: 'D/Source/Scripts/TESV_Papyrus_Flags.flg', importDirs: ['M/Source/Scripts', 'D/Source/Scripts'], outputDir: 'M/Scripts', optimize: true }, ['A.psc', 'B.psc']);
+    expect(cmd.args).toEqual(['--game', 'skyrim', '--ignorecwd', '--import', 'M/Source/Scripts;D/Source/Scripts', '--output', 'M/Scripts', '--flags', 'D/Source/Scripts/TESV_Papyrus_Flags.flg', 'A.psc', 'B.psc']);
+    // Caprica's own formats (CapricaReportingContext.cpp): "file (line, col:endCol): Error: …".
+    const msgs = parseCompilerOutput(
+      "Adding import directory: M/Source/Scripts\nC:\\Mod\\Source\\Scripts\\B.psc (3, 5:9): Error: Unable to find a type named 'Actorr'.\nC:\\Mod\\Source\\Scripts\\A.psc (8, 1:4): Warning W4001: Unused variable.\nCompilation of 'C:\\Mod\\Source\\Scripts\\B.psc' failed; 0 warnings and 1 errors were encountered.\n",
+    );
+    expect(msgs[0]).toEqual({ file: 'C:\\Mod\\Source\\Scripts\\B.psc', line: 3, col: 5, severity: 'error', message: "Unable to find a type named 'Actorr'." });
+    expect(msgs[1]).toMatchObject({ line: 8, severity: 'warning' });
+    expect(msgs[2]).toMatchObject({ file: 'C:\\Mod\\Source\\Scripts\\B.psc', severity: 'error' });
+    expect(msgs).toHaveLength(3);
+    expect(parseCompilerOutput("Unable to locate flags file 'x.flg'.")[0]!.severity).toBe('error');
+  });
 });

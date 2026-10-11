@@ -77,8 +77,9 @@ export function detectScriptLayout(probe: PathProbe, dataDir: string, game: 'Sky
 export function compilerCommand(config: CompilerConfig, files: readonly string[]): { command: string; args: string[] } {
   const imports = config.importDirs.join(';');
   if (config.kind === 'caprica') {
-    const args = ['--game', 'skyrim', '--import', imports, '--output', config.outputDir, '--flags', config.flagsFile];
-    if (config.optimize) args.push('--optimize');
+    // Caprica takes many files in one run. --ignorecwd: don't also import the
+    // folder the app happens to run from. (--optimize is Fallout 4 only.)
+    const args = ['--game', 'skyrim', '--ignorecwd', '--import', imports, '--output', config.outputDir, '--flags', config.flagsFile];
     if (config.release) args.push('--release');
     args.push(...(config.extraArgs ?? []), ...files);
     return { command: config.executable, args };
@@ -103,8 +104,9 @@ export interface CompilerMessage {
 }
 
 /**
- * Parse compiler output. Both compilers print `path(line,col): message`;
- * Caprica uses `path (line:col): Error: message`.
+ * Parse compiler output. PapyrusCompiler.exe prints `path(line,col): message`;
+ * Caprica prints `path (line, col:endCol): Error: message` (or `Warning W1000:`)
+ * and `Compilation of 'path' failed; …`.
  */
 export function parseCompilerOutput(output: string): CompilerMessage[] {
   const out: CompilerMessage[] = [];
@@ -117,13 +119,22 @@ export function parseCompilerOutput(output: string): CompilerMessage[] {
       out.push({ file: m[1], line: Number(m[2]), col: Number(m[3]), severity: /warning/i.test(msg) ? 'warning' : 'error', message: msg.replace(/^(error|warning):\s*/i, '') });
       continue;
     }
-    m = /^(.*?\.psc)\s*\((\d+):(\d+)\):\s*(Error|Warning|Info)[^:]*:\s*(.*)$/i.exec(line);
+    m = /^(.*?\.psc)\s*\((\d+)[,:]\s*(\d+)(?::\d+)?\):\s*(Fatal Error|Error|Warning|Info)[^:]*:\s*(.*)$/i.exec(line);
     if (m) {
       const sev = m[4]!.toLowerCase();
       out.push({ file: m[1], line: Number(m[2]), col: Number(m[3]), severity: sev === 'warning' ? 'warning' : sev === 'info' ? 'info' : 'error', message: m[5]! });
       continue;
     }
-    if (/No output generated|compilation failed|Compilation failed/i.test(line)) out.push({ severity: 'error', message: line });
+    m = /^Compilation of '(.*?)' failed/i.exec(line);
+    if (m) {
+      out.push({ file: m[1], severity: 'error', message: line });
+      continue;
+    }
+    if (/^(Fatal Error|Error):/i.test(line) || /^Unable to (locate|find)|^Import failed/i.test(line)) {
+      out.push({ severity: 'error', message: line.replace(/^(Fatal Error|Error):\s*/i, '') });
+      continue;
+    }
+    if (/No output generated|compilation failed/i.test(line)) out.push({ severity: 'error', message: line });
   }
   return out;
 }

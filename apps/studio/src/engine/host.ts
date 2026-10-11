@@ -185,9 +185,14 @@ export class EngineHost {
   private listeners = new Set<Listener>();
   private meshCache = new Map<string, MeshPayload>();
 
+  /** The compiler chosen in the settings (kept across reopening); unset: Caprica that comes with the app, or the CK's. */
+  private compilerChoice?: { kind: 'papyrus-compiler' | 'caprica'; executable: string; optimize?: boolean };
+
   constructor(
     readonly fs: FileSystem,
     readonly runner?: ProcessRunner,
+    /** Caprica.exe shipped with the desktop app. */
+    readonly bundledCaprica?: string,
   ) {}
 
   onEvent(fn: Listener): () => void {
@@ -254,6 +259,8 @@ export class EngineHost {
     this.bodies = new BodySlideService(ws);
     this.scripts = new ScriptService(ws);
     this.scripts.runner = this.runner;
+    this.scripts.bundledCaprica = this.bundledCaprica;
+    this.scripts.compiler = this.compilerChoice;
     this.quests = new QuestService(ws, this.scripts);
     this.triggers = new TriggerService(ws, this.scripts);
     this.graphs = new QuestGraphService(ws, this.quests, this.scripts, this.triggers);
@@ -321,13 +328,14 @@ export class EngineHost {
     return this.session();
   }
 
-  async save(opts: SaveOptions & { updateBounds?: boolean; generateFaces?: boolean } = {}) {
+  async save(opts: SaveOptions & { updateBounds?: boolean; generateFaces?: boolean; compileScripts?: boolean } = {}) {
     const ws = this.requireWs();
     const boundsChanged = opts.updateBounds === false ? [] : await updateBounds(ws);
     // Faces first, so the save that follows is the one that matches them.
     const faces = opts.generateFaces ? await this.faces!.generate() : [];
     const res = await ws.save(opts);
-    return { ...res, warnings: [...res.warnings, ...faces.flatMap((f) => f.warnings)], boundsChanged, facesGenerated: faces.length, session: this.session() };
+    const scripts = opts.compileScripts ? await this.compileChanged() : { compiled: 0, warnings: [] };
+    return { ...res, warnings: [...res.warnings, ...faces.flatMap((f) => f.warnings), ...scripts.warnings], boundsChanged, facesGenerated: faces.length, scriptsCompiled: scripts.compiled, session: this.session() };
   }
 
   undo(): SessionInfo {
@@ -1199,6 +1207,12 @@ export class EngineHost {
         return (await this.env!.dropToSurface(fix.refs)).moved.length;
       case 'generateFaces':
         return (await this.faces!.generate(fix.npcs)).length;
+      case 'compileScripts': {
+        const res = await this.scripts!.compile(fix.scripts);
+        const bad = res.find((r) => !r.ok);
+        if (bad) throw new Error(`${bad.script} didn't compile${bad.messages[0] ? `: ${bad.messages[0].line ? `line ${bad.messages[0].line}: ` : ''}${bad.messages[0].message}` : ''}. Open it in the Scripts tab to fix it.`);
+        return res.length;
+      }
     }
   }
 
@@ -1368,7 +1382,58 @@ export class EngineHost {
   }
 
   setCompiler(settings: { kind: 'papyrus-compiler' | 'caprica'; executable: string; optimize?: boolean } | null) {
-    this.scripts!.compiler = settings ?? undefined;
+    this.compilerChoice = settings ?? undefined;
+    if (this.scripts) this.scripts.compiler = this.compilerChoice;
+  }
+
+  /**
+   * Everything the Scripts tab needs to say whether compiling is ready: which
+   * compiler will be used, whether the game's script sources are there (and
+   * the Scripts.zip to unpack if not), and which of your scripts need compiling.
+   */
+  async scriptBuildStatus() {
+    const s = this.scripts!;
+    const compiler = await s.activeCompiler();
+    return {
+      desktop: !!this.runner,
+      compiler: compiler ? { ...compiler, bundled: !!this.bundledCaprica && compiler.executable === this.bundledCaprica, chosen: !!this.compilerChoice } : null,
+      bundled: !!this.bundledCaprica,
+      sources: await s.sourcesState(),
+      outOfDate: await s.outOfDate(),
+    };
+  }
+
+  /** Unpack the Creation Kit's Scripts.zip (the game's script sources) into Data. */
+  async scriptUnpackSources() {
+    return this.scripts!.unpackSources();
+  }
+
+  /** Compile every one of your scripts whose .pex is missing or older than the source. */
+  async scriptCompileOutOfDate() {
+    return this.scripts!.compileOutOfDate();
+  }
+
+  /** Compile changed scripts if compiling is set up; never fails the caller. */
+  private async compileChanged(): Promise<{ compiled: number; warnings: string[] }> {
+    const s = this.scripts;
+    if (!s || !this.runner) return { compiled: 0, warnings: [] };
+    const names = await s.outOfDate();
+    if (!names.length) return { compiled: 0, warnings: [] };
+    if (!(await s.activeCompiler()) || !(await s.sourcesState()).ready)
+      return { compiled: 0, warnings: [`${names.length} script(s) aren't compiled, so the game won't run them. Set up compiling in the Scripts tab.`] };
+    try {
+      const res = await s.compile(names);
+      const failed = res.filter((r) => !r.ok);
+      return {
+        compiled: res.length - failed.length,
+        warnings: failed.map((r) => {
+          const m = r.messages.find((x) => x.severity === 'error');
+          return `${r.script} didn't compile${m ? `: ${m.line ? `line ${m.line}: ` : ''}${m.message}` : ''}. Open it in the Scripts tab to fix it.`;
+        }),
+      };
+    } catch (e) {
+      return { compiled: 0, warnings: [`Scripts weren't compiled: ${(e as Error).message}`] };
+    }
   }
 
   async attachScript(key: FormKey, script: string) {

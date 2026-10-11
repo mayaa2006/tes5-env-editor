@@ -2,6 +2,18 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.17.0
+
+- **Compiling scripts is automatic.** The app comes with Caprica, a free, open-source Papyrus compiler, so the Creation Kit's compiler isn't needed.
+  - Saving a script compiles it in the background, as before. Now saving the plugin also compiles your scripts that changed. Both are on by default; switch them off in Automations or Scripts → Compiling.
+  - Problems are listed after saving, and the save always goes through.
+- **The Scripts tab shows if your scripts are compiled.** It says how many need compiling, with a button to compile just those. **Compile all** and compiling in the background hand Caprica every waiting script at once.
+- **Scripts → Compiling** shows what's ready, in two steps:
+  1. The compiler: Caprica by default. You can pick PapyrusCompiler.exe or your own Caprica.exe, and go back to the automatic one.
+  2. The game's script sources: **Unpack Scripts.zip** unpacks the Creation Kit's sources into Data. If the zip is missing, it says where to get it.
+- **The release check compiles for you.** "isn't compiled" now has a **Compile** button for your own scripts.
+- **Fix:** Caprica's error lines are read properly (the line number and message show up and are clickable).
+
 ## 0.16.0
 
 - **Compile all scripts with one button.** Scripts → **Compile all** compiles every script in your mod in the background, shows progress on the button, and tells you how many failed. Open a failed script to see its errors; clicking an error jumps to the line.

@@ -1,6 +1,6 @@
 {
   "name": "@tes5/studio",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "private": true,
   "description": "TES5 Env Editor Studio: the desktop editor (Electron + React + three.js)",
   "author": "mayaa2006",
@@ -17,7 +17,7 @@
     "build": "vite build && node scripts/build-electron.mjs",
     "dev": "node scripts/build-electron.mjs && concurrently -k \"vite\" \"wait-on http://localhost:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
     "start": "electron .",
-    "dist": "npm run build && electron-builder --win nsis portable --x64 --publish never",
+    "dist": "npm run build && node scripts/fetch-caprica.mjs && electron-builder --win nsis portable --x64 --publish never",
     "test:e2e": "playwright test",
     "test:stress": "tsx test/stress/engine-stress.ts && tsx test/stress/papyrus-fuzz.ts && node --max-old-space-size=1024 --import tsx test/stress/file-fuzz.ts"
   },
@@ -34,6 +34,7 @@
     "@types/three": "^0.186.0",
     "@vitejs/plugin-react": "^6.1.2",
     "@xyflow/react": "^12.12.0",
+    "7z-wasm": "^1.2.0",
     "concurrently": "^10.0.5",
     "cross-env": "^10.1.0",
     "electron": "44.5.1",
@@ -85,6 +86,15 @@
     "icon": "build/icon.png",
     "portable": {
       "artifactName": "TES5-Env-Editor-${version}-Portable.${ext}"
-    }
+    },
+    "extraResources": [
+      {
+        "from": "resources/caprica",
+        "to": "caprica",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
   }
 }

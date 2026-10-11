@@ -6,15 +6,14 @@
  */
 import { useEffect, useState } from 'react';
 import { EmptyState, Help, Icon, Modal, useQuery } from '../../components/ui';
-import { CompilerSettings } from './CompilerSettings';
+import { CompilerSettings, useBuildStatus } from './CompilerSettings';
 import { engine, useStore } from '../../state/store';
-import { compileScripts, hasCompiler } from '../../state/compile';
+import { compileScripts } from '../../state/compile';
 import { CodeEditor } from './CodeEditor';
 
 export default function ScriptEditor() {
   const client = useStore((s) => s.client);
   const name = useStore((s) => s.script);
-  const settings = useStore((s) => s.settings);
   const { data: list } = useQuery(() => client?.call('scriptList'), [client]);
   const info = list?.find((s) => s.name.toLowerCase() === name?.toLowerCase());
   const { data: compiled } = useQuery(() => (name ? client?.call('scriptCompiled', name) : undefined), [name]);
@@ -26,6 +25,7 @@ export default function ScriptEditor() {
   const [reveal, setReveal] = useState<number | undefined>();
   const [outline, setOutline] = useState(true);
   const [compilerOpen, setCompilerOpen] = useState(false);
+  const build = useBuildStatus();
   const { data: symbols } = useQuery(() => (draft ?? source ? client?.call('scriptOutline', draft ?? source ?? '') : undefined), [draft ?? source], { revision: false });
 
   useEffect(() => {
@@ -58,13 +58,13 @@ export default function ScriptEditor() {
       setDraft(null);
       useStore.getState().bump();
       // Like the Creation Kit: compile in the background on save, so you keep typing.
-      if (autoCompile && useStore.getState().settings.autoCompileOnSave && hasCompiler()) void compileScripts([name], { quiet: true });
+      if (autoCompile && useStore.getState().settings.autoCompileOnSave && build.ready) void compileScripts([name], { quiet: true });
     }
     return !!ok;
   };
   const runCompile = async () => {
-    if (!hasCompiler()) {
-      // Nothing to compile with yet: ask for it right here.
+    if (!build.ready) {
+      // Not set up yet: show what's missing right here instead of failing.
       setCompilerOpen(true);
       return;
     }
@@ -75,8 +75,8 @@ export default function ScriptEditor() {
   return (
     <div className="col" style={{ flex: 1, minHeight: 0 }}>
       {compilerOpen && (
-        <Modal title="Papyrus compiler" onClose={() => setCompilerOpen(false)} width={520} footer={<button className="btn primary" onClick={() => setCompilerOpen(false)}>Done</button>}>
-          {!settings.compilerPath && <p className="warn small" style={{ marginTop: 0 }}>Choose a compiler to turn scripts into the .pex files the game runs.</p>}
+        <Modal title="Compiling scripts" onClose={() => setCompilerOpen(false)} width={560} footer={<button className="btn primary" onClick={() => setCompilerOpen(false)}>Done</button>}>
+          {!build.ready && <p className="small" style={{ marginTop: 0 }}>Compiling turns your scripts into the .pex files the game runs. Here's what's still needed:</p>}
           <CompilerSettings />
         </Modal>
       )}
@@ -86,7 +86,7 @@ export default function ScriptEditor() {
         {info?.origin !== 'mod' && <span className="chip warn" title="Saving writes a copy into your output folder">from the game / another mod</span>}
         <span className={`chip ${diag.errors ? 'err' : diag.warnings ? 'warn' : 'ok'}`}>{diag.errors ? `${diag.errors} error(s)` : diag.warnings ? `${diag.warnings} warning(s)` : 'No problems'}</span>
         {compiled === false && (
-          <span className="chip warn" title="There's no compiled .pex for this script, so the game won't run it yet. Compile it (needs a compiler, see Compiler)." data-testid="not-compiled">
+          <span className="chip warn" title="There's no compiled .pex for this script, so the game won't run it yet. Press Compile." data-testid="not-compiled">
             not compiled
           </span>
         )}
@@ -99,12 +99,17 @@ export default function ScriptEditor() {
             Compiling… {compile.done}/{compile.total}
           </span>
         )}
-        <button className="btn small primary" onClick={() => void runCompile()} title={settings.compilerPath ? 'Compile to .pex (what the game runs)' : 'Choose a compiler first (opens the compiler settings)'} data-testid="compile">
+        <button
+          className="btn small primary"
+          onClick={() => void runCompile()}
+          title={build.ready ? 'Save and compile to .pex (what the game runs) in the background, with Caprica unless you chose another compiler' : "Compiling isn't set up yet: shows what's missing"}
+          data-testid="compile"
+        >
           <Icon name="play" size={12} /> Compile
         </button>
-        <Help text="Errors are shown as you type without a compiler. The game, though, runs compiled .pex files, which need the Creation Kit's PapyrusCompiler.exe or Caprica." />
-        <button className="btn small ghost" onClick={() => setCompilerOpen(true)} title="Choose the Papyrus compiler" data-testid="compiler-settings">
-          <Icon name="sliders" size={12} /> Compiler
+        <Help text="Errors are shown as you type. The game, though, runs compiled .pex files. Caprica, a free compiler that comes with the app, makes them; with “Compile scripts that changed when saving” on, saving compiles too." />
+        <button className="btn small ghost" onClick={() => setCompilerOpen(true)} title="Which compiler is used, the game's script sources it needs, and compiling on save" data-testid="compiler-settings">
+          <Icon name="sliders" size={12} /> Compiling
         </button>
         <button className={`btn small ${outline ? 'active' : 'ghost'}`} onClick={() => setOutline(!outline)} title="Outline">
           <Icon name="records" size={12} />

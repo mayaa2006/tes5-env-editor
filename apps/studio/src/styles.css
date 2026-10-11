@@ -1458,3 +1458,16 @@ table.grid tr.diff td {
 .link-button.err {
   color: var(--err);
 }
+
+/* Scripts tab: compile status under the search box. */
+.build-card {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.build-card .build-status {
+  flex: 1 1 100%;
+}
