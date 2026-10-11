@@ -253,7 +253,7 @@ function StatusBar() {
         {session.source}
       </span>
       <span>{loaded} plugins loaded</span>
-      {mode === 'demo' && <span className="chip warn">Browser demo — changes stay in memory</span>}
+      {mode === 'demo' && <span className="chip warn">Demo — changes stay in memory</span>}
       <span className="spacer" />
       {last && <span className={`ellipsis ${last.kind === 'error' ? 'err' : last.kind === 'warning' ? 'warn' : ''}`}>{last.text}</span>}
     </footer>

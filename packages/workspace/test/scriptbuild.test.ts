@@ -133,7 +133,7 @@ describe('compiling scripts with less work', () => {
   it('says what to do when there is nothing to compile with', async () => {
     const { fs, demo, scripts } = await setup();
     await scripts.write('MyDoor', 'Scriptname MyDoor\n');
-    await expect(scripts.compile(['MyDoor'])).rejects.toThrow(/desktop app/);
+    await expect(scripts.compile(['MyDoor'])).rejects.toThrow(/can't be compiled in the demo/);
     scripts.runner = fakeCaprica(fs);
     await expect(scripts.compile(['MyDoor'])).rejects.toThrow(/No Papyrus compiler found/);
     scripts.compiler = { kind: 'caprica', executable: 'Caprica.exe' };

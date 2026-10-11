@@ -127,14 +127,14 @@ export function Welcome() {
             <Icon name="folder" /> Open Mod Organizer 2
           </h3>
           <p>Reads your MO2 instance and profile directly — no need to launch through MO2. Saves go to Overwrite, or to a folder you choose below.</p>
-          {client?.mode === 'demo' && <p className="warn small">Needs the desktop app.</p>}
+          {client?.mode === 'demo' && <p className="warn small">Not available in the demo.</p>}
         </button>
         <button className="welcome-card" onClick={openFolder} disabled={client?.mode === 'demo' && !gamePath}>
           <h3>
             <Icon name="folder" /> Open Skyrim folder
           </h3>
           <p>Use a vanilla Data folder (Steam/GOG install) or any folder containing SkyrimSE.exe / TESV.exe.</p>
-          {client?.mode === 'demo' && <p className="warn small">Needs the desktop app.</p>}
+          {client?.mode === 'demo' && <p className="warn small">Not available in the demo.</p>}
         </button>
         <button className="welcome-card" onClick={openDemo}>
           <h3>
