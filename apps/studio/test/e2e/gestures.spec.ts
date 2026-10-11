@@ -34,7 +34,7 @@ test('characters gesture in dialogue and at quest stages', async ({ page }) => {
 
   // Dialogue: Brynja applauds when she gets the ring back; change it to a bow.
   await page.getByRole('tab', { name: /Dialogue/ }).click();
-  await page.getByTestId('dlg-info').filter({ hasText: 'thank the gods' }).click();
+  await page.getByTestId('dlg-info').filter({ hasText: 'thank the gods' }).getByText(/thank the gods/).click(); // the line itself (the chips above it jump to the map)
   const gesture = page.getByTestId('dlg-gesture');
   await expect(gesture).toHaveValue('applaud');
   await gesture.selectOption('bow');

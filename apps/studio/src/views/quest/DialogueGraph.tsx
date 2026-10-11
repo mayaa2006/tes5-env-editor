@@ -24,13 +24,15 @@ import '@xyflow/react/dist/style.css';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormKey } from '@tes5/esp';
 import { parseScreenplay, type DialogueGraph as Graph, type DialogueInfoNode, type DialogueTopicNode } from '@tes5/workspace';
-import { Checkbox, ExpandableText, Field, FormLink, FormPicker, Icon, Modal, TextInput, useDebounced, useQuery, useSummaries } from '../../components/ui';
+import { ExpandableText, Field, FormLink, FormPicker, Icon, Modal, TextInput, useDebounced, useQuery, useSummaries } from '../../components/ui';
 import { GesturePicker } from './GesturePicker';
 import { engine, useStore } from '../../state/store';
-import { InfoConditions, InfoFragmentEditor, NewResponse, patchRecord } from './QuestDesigner';
+import { InfoFragmentEditor, NewResponse, patchRecord } from './QuestDesigner';
+import { InfoAfter, InfoWhen, useStages, type StageOption } from './StageLinks';
+import { stageLabel } from './stageLinks';
 
 type TopicData = { t: DialogueTopicNode };
-type InfoData = { i: DialogueInfoNode; speaker?: string };
+type InfoData = { i: DialogueInfoNode; speaker?: string; stageText?: (n: number) => string; onStage?: (n: number) => void };
 
 const KIND_LABEL = { player: 'Player', greeting: 'Greeting', idle: 'Chatter', scene: 'Scene line' } as const;
 const KIND_HINT = { player: '', greeting: 'Said when the player comes up to them', idle: 'Said to nobody in particular', scene: 'Part of a scene between characters' } as const;
@@ -55,6 +57,32 @@ function TopicNodeView({ data, selected }: NodeProps<Node<TopicData>>) {
   );
 }
 
+/** A stage rule on a response; click to show that stage on the map. */
+function StageChip({ data, n, prefix, accent }: { data: InfoData; n: number; prefix: string; accent?: boolean }) {
+  const what = prefix === '→' ? `Moves the quest to stage ${n} when said` : prefix === 'only at' ? `Said only while the quest is at stage ${n}` : prefix === 'from' ? `Said once stage ${n} has been reached` : `Said only until stage ${n} is reached`;
+  return (
+    <span
+      className={`chip ${accent ? 'accent' : ''}`}
+      style={{ cursor: 'pointer' }}
+      title={`${what}. Click to show it on the map.`}
+      data-testid="stage-chip"
+      onClick={(e) => {
+        e.stopPropagation();
+        data.onStage?.(n);
+      }}
+    >
+      {prefix} {data.stageText?.(n) ?? n}
+    </span>
+  );
+}
+
+function shortStage(stages: StageOption[], n: number): string {
+  const s = stages.find((x) => x.index === n);
+  if (!s) return `${n} (no such stage)`;
+  const text = s.label.replace(/^\d+ – /, '');
+  return text === s.label ? `${n}` : stageLabel(n, text, 22);
+}
+
 function InfoNodeView({ data, selected }: NodeProps<Node<InfoData>>) {
   const i = data.i;
   return (
@@ -63,7 +91,13 @@ function InfoNodeView({ data, selected }: NodeProps<Node<InfoData>>) {
       <div className="who">
         {data.speaker ?? 'Anyone'}
         {i.goodbye && <span className="chip">goodbye</span>}
-        {i.needsStage !== null && <span className="chip">stage {i.needsStage}</span>}
+      </div>
+      <div className="row wrap nodrag" style={{ gap: 4, margin: '2px 0' }}>
+        {i.needsStage !== null && <StageChip data={data} n={i.needsStage} prefix="only at" />}
+        {i.fromStage !== null && i.needsStage === null && <StageChip data={data} n={i.fromStage} prefix="from" />}
+        {i.beforeStage !== null && <StageChip data={data} n={i.beforeStage} prefix="until" />}
+        {i.afterQuestDone && <span className="chip" title="Said only after the quest is completed">after quest done</span>}
+        {i.setsStage !== null && <StageChip data={data} n={i.setsStage} prefix="→" accent />}
       </div>
       {i.lines.map((l, n) => (
         <div key={n}>{l}</div>
@@ -103,16 +137,17 @@ function layout(g: Graph): Record<string, { x: number; y: number }> {
   return pos;
 }
 
-export default function DialogueGraphView({ quest, questEditorId, focus, onListView }: { quest: FormKey; questEditorId?: string; focus?: FormKey | null; onListView: () => void }) {
+export default function DialogueGraphView({ quest, questEditorId, focus, onListView, onOpenStage }: { quest: FormKey; questEditorId?: string; focus?: FormKey | null; onListView: () => void; onOpenStage?: (stage: number) => void }) {
   return (
     <ReactFlowProvider>
-      <Inner quest={quest} questEditorId={questEditorId} focus={focus} onListView={onListView} />
+      <Inner quest={quest} questEditorId={questEditorId} focus={focus} onListView={onListView} onOpenStage={onOpenStage} />
     </ReactFlowProvider>
   );
 }
 
-function Inner({ quest, questEditorId, focus, onListView }: { quest: FormKey; questEditorId?: string; focus?: FormKey | null; onListView: () => void }) {
+function Inner({ quest, questEditorId, focus, onListView, onOpenStage }: { quest: FormKey; questEditorId?: string; focus?: FormKey | null; onListView: () => void; onOpenStage?: (stage: number) => void }) {
   const client = useStore((s) => s.client);
+  const stages = useStages(quest);
   const { data: g } = useQuery(() => client?.call('dialogueGraph', quest), [quest]);
   const speakers = useSummaries((g?.infos ?? []).map((i) => i.speaker));
   const [selected, setSelected] = useState<string | null>(focus ?? null);
@@ -137,16 +172,18 @@ function Inner({ quest, questEditorId, focus, onListView }: { quest: FormKey; qu
   }, [size, focus, flow]);
 
   const pos = useMemo(() => (g ? layout(g) : {}), [g]);
+  /** "20 – Find the ring", short enough for a chip. */
+  const stageText = useMemo(() => (n: number) => shortStage(stages, n), [stages]);
   const nodes = useMemo<Node[]>(() => {
     if (!g) return [];
     return [
       ...g.topics.map((t) => ({ id: t.formKey, type: 'topic', position: pos[t.formKey] ?? { x: 0, y: 0 }, data: { t }, selected: selected === t.formKey })),
       ...g.infos.map((i) => {
         const s = i.speaker ? speakers[i.speaker] : null;
-        return { id: i.formKey, type: 'info', position: pos[i.formKey] ?? { x: 0, y: 0 }, data: { i, speaker: i.speaker ? (s?.name ?? s?.editorId ?? i.speaker) : undefined }, selected: selected === i.formKey };
+        return { id: i.formKey, type: 'info', position: pos[i.formKey] ?? { x: 0, y: 0 }, data: { i, speaker: i.speaker ? (s?.name ?? s?.editorId ?? i.speaker) : undefined, stageText, onStage: onOpenStage }, selected: selected === i.formKey };
       }),
     ].map(withSize);
-  }, [g, pos, selected, speakers, withSize]);
+  }, [g, pos, selected, speakers, withSize, stageText, onOpenStage]);
   const edges = useMemo<Edge[]>(() => {
     if (!g) return [];
     const out: Edge[] = [];
@@ -248,7 +285,7 @@ function Inner({ quest, questEditorId, focus, onListView }: { quest: FormKey; qu
           {selTopic ? (
             <TopicPanel t={selTopic} onAddResponse={() => setNewResponseFor(selTopic.formKey)} />
           ) : selInfo ? (
-            <InfoPanel i={selInfo} questEditorId={questEditorId} g={g} onAddChoice={() => setNewChoiceFor(selInfo.formKey)} />
+            <InfoPanel i={selInfo} quest={quest} questEditorId={questEditorId} g={g} onAddChoice={() => setNewChoiceFor(selInfo.formKey)} />
           ) : (
             <div className="pad dim small">
               Click a line to edit it. Blue boxes are what the player says; grey boxes are the answers. A response can offer more player lines as choices (dashed arrows).
@@ -289,9 +326,8 @@ function TopicPanel({ t, onAddResponse }: { t: DialogueTopicNode; onAddResponse:
   );
 }
 
-function InfoPanel({ i, g, questEditorId, onAddChoice }: { i: DialogueInfoNode; g: Graph; questEditorId?: string; onAddChoice: () => void }) {
+function InfoPanel({ i, g, quest, questEditorId, onAddChoice }: { i: DialogueInfoNode; g: Graph; quest: FormKey; questEditorId?: string; onAddChoice: () => void }) {
   const [frag, setFrag] = useState<'begin' | 'end' | null>(null);
-  const [cond, setCond] = useState(false);
   return (
     <>
       <div className="panel-header">
@@ -307,7 +343,8 @@ function InfoPanel({ i, g, questEditorId, onAddChoice }: { i: DialogueInfoNode; 
         {i.lines.map((l, n) => (
           <ExpandableText key={n} title="Response" value={l} onCommit={(text) => patchRecord(i.formKey, 'Edit response', (d) => (d.responses[n].text = text))} />
         ))}
-        <Checkbox checked={i.goodbye} onChange={(on) => patchRecord(i.formKey, 'Goodbye flag', (d) => (d.data.flags = on ? d.data.flags | 1 : d.data.flags & ~1))} label="Ends the conversation" />
+        <InfoWhen info={i} quest={quest} />
+        <InfoAfter info={i} quest={quest} goodbye={i.goodbye} />
         <ResponseGesture info={i.formKey} />
         <div>
           <h3 style={{ margin: '6px 0' }}>Player choices after this</h3>
@@ -327,9 +364,6 @@ function InfoPanel({ i, g, questEditorId, onAddChoice }: { i: DialogueInfoNode; 
           </button>
         </div>
         <div className="row wrap small" style={{ gap: 8 }}>
-          <a href="#" onClick={(e) => (e.preventDefault(), setCond(!cond))}>
-            {i.conditionCount} condition{i.conditionCount === 1 ? '' : 's'}
-          </a>
           <a href="#" onClick={(e) => (e.preventDefault(), setFrag(frag === 'begin' ? null : 'begin'))}>
             Begin script
           </a>
@@ -337,7 +371,6 @@ function InfoPanel({ i, g, questEditorId, onAddChoice }: { i: DialogueInfoNode; 
             End script
           </a>
         </div>
-        {cond && <InfoConditions info={i} />}
         {frag && <InfoFragmentEditor q={{ editorId: questEditorId }} info={i} which={frag} onClose={() => setFrag(null)} />}
       </div>
     </>

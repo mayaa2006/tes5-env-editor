@@ -7,6 +7,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { EMOTIONS, QUEST_TYPES, QuestFlag, type FormKey } from '@tes5/esp';
 import type { InfoModel, QuestModel, TopicModel } from '@tes5/workspace';
+import { InfoAfter, InfoWhen } from './StageLinks';
 import { Checkbox, clearDraft, DragNumber, EmptyState, ExpandableText, Field, FormLink, FormPicker, Icon, Modal, Select, Tabs, TextInput, useDebounced, useDraft, useQuery, useSummaries, useUniqueEditorId } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 import { ConditionList } from '../record/ConditionEditor';
@@ -206,6 +207,7 @@ function QuestEditor({ quest }: { quest: FormKey }) {
   const [tab, setTab] = useState<Tab>('map');
   const [dialogueView, setDialogueView] = useState<'graph' | 'list'>('graph');
   const [focusTopic, setFocusTopic] = useState<FormKey | null>(null);
+  const [focusStage, setFocusStage] = useState<{ stage: number; n: number } | null>(null);
   const [changing, setChanging] = useState(false);
   if (!q) return <div className="empty grow">Loading…</div>;
   return (
@@ -254,12 +256,22 @@ function QuestEditor({ quest }: { quest: FormKey }) {
               setTab('dialogue');
             }}
             onOpenStages={() => setTab('stages')}
+            focusStage={focusStage}
           />
         </Suspense>
       )}
       {tab === 'dialogue' && dialogueView === 'graph' && (
         <Suspense fallback={<div className="empty">Loading…</div>}>
-          <DialogueGraphView quest={quest} questEditorId={q.editorId} focus={focusTopic} onListView={() => setDialogueView('list')} />
+          <DialogueGraphView
+            quest={quest}
+            questEditorId={q.editorId}
+            focus={focusTopic}
+            onListView={() => setDialogueView('list')}
+            onOpenStage={(stage) => {
+              setFocusStage({ stage, n: (focusStage?.n ?? 0) + 1 });
+              setTab('map');
+            }}
+          />
         </Suspense>
       )}
       <div className="scroll pad" style={{ flex: 1, display: tab === 'map' || (tab === 'dialogue' && dialogueView === 'graph') ? 'none' : undefined }}>
@@ -685,7 +697,6 @@ function Topic({ q, t }: { q: QuestModel; t: TopicModel }) {
 }
 
 function Info({ q, info }: { q: QuestModel; info: InfoModel }) {
-  const [showCond, setShowCond] = useState(false);
   const [frag, setFrag] = useState<'begin' | 'end' | null>(null);
   const goodbye = (info.flags & 1) !== 0;
   return (
@@ -713,10 +724,6 @@ function Info({ q, info }: { q: QuestModel; info: InfoModel }) {
         ))}
       </div>
       <div className="row wrap small" style={{ gap: 8, margin: '4px 0 0 4px' }}>
-        <a href="#" onClick={(e) => (e.preventDefault(), setShowCond(!showCond))}>
-          {info.conditions.length} condition{info.conditions.length === 1 ? '' : 's'}
-        </a>
-        <Checkbox checked={goodbye} label="Ends conversation" onChange={(on) => patchRecord(info.formKey, 'Goodbye flag', (d) => (d.data.flags = on ? d.data.flags | 1 : d.data.flags & ~1))} />
         <a href="#" onClick={(e) => (e.preventDefault(), setFrag(frag === 'begin' ? null : 'begin'))}>
           Begin script
         </a>
@@ -724,7 +731,10 @@ function Info({ q, info }: { q: QuestModel; info: InfoModel }) {
           End script
         </a>
       </div>
-      {showCond && <InfoConditions info={info} />}
+      <div className="col" style={{ gap: 10, margin: '6px 0 0 4px', maxWidth: 420 }}>
+        <InfoWhen info={info} quest={q.formKey} />
+        <InfoAfter info={info} quest={q.formKey} goodbye={goodbye} />
+      </div>
       {frag && <InfoFragmentEditor q={q} info={info} which={frag} onClose={() => setFrag(null)} />}
     </div>
   );

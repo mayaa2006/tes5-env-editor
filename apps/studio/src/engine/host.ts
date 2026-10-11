@@ -964,8 +964,14 @@ export class EngineHost {
 
   // ---------------------------------------------------------------- dialogue graph
 
-  dialogueGraph(quest: FormKey) {
-    return this.dialogue!.graph(quest);
+  /** The conversation map, with the stage each response moves the quest to (read from its end script). */
+  async dialogueGraph(quest: FormKey) {
+    const g = this.dialogue!.graph(quest);
+    for (const i of g.infos) {
+      const m = /^\s*GetOwningQuest\(\)\.SetStage\(\s*(\d+)\s*\)\s*$/im.exec(await this.infoFragment(i.formKey, 'end'));
+      if (m) i.setsStage = Number(m[1]);
+    }
+    return g;
   }
 
   addDialogueChoice(info: FormKey, text: string) {
