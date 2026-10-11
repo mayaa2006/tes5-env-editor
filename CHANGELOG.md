@@ -2,6 +2,12 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.16.0
+
+- **Compile all scripts with one button.** Scripts → **Compile all** compiles every script in your mod in the background, shows progress on the button, and tells you how many failed. Open a failed script to see its errors; clicking an error jumps to the line.
+- **Scripts compile in the background when you save**, like the Creation Kit. You keep typing; you only hear about it if it fails. Turn it off under Scripts → Compiler → *Compile in the background when I save a script*.
+- A script's **not compiled** tag clears as soon as its .pex is built.
+
 ## 0.15.1
 
 - **Free online AI works with current models.** Model names are no longer guessed:

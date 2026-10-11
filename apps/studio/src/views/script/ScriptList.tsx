@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { clearDraft, Field, Icon, Modal, Select, TextInput, useDraft, useQuery } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
+import { compileAll, hasCompiler } from '../../state/compile';
+import { CompilerSettings } from './CompilerSettings';
 
 const BASES = ['ObjectReference', 'Actor', 'Quest', 'ReferenceAlias', 'ActiveMagicEffect', 'Form', 'TopicInfo'];
 
@@ -11,6 +13,10 @@ export default function ScriptList() {
   const [q, setQ] = useState('');
   const [showBase, setShowBase] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [compilerOpen, setCompilerOpen] = useState(false);
+  const compile = useStore((s) => s.compile);
+  const compilerPath = useStore((s) => s.settings.compilerPath);
+  const failed = compile.report.filter((r) => !r.ok).length;
   const newRequest = useStore((s) => s.newRequest);
   useEffect(() => {
     if (newRequest && useStore.getState().takeNew('script')) setCreating(true);
@@ -31,6 +37,15 @@ export default function ScriptList() {
     <div className="panel">
       <div className="panel-header">
         <span className="grow">Scripts</span>
+        <button
+          className="btn small"
+          disabled={compile.running}
+          onClick={() => (hasCompiler() ? void compileAll() : setCompilerOpen(true))}
+          title={compilerPath ? 'Compile every script in your mod to .pex files, in the background' : 'Choose a compiler first (opens the compiler settings)'}
+          data-testid="compile-all"
+        >
+          <Icon name="play" size={12} /> {compile.running ? `${compile.done}/${compile.total}` : 'Compile all'}
+        </button>
         <button className="btn small primary" onClick={() => setCreating(true)} data-testid="new-script">
           <Icon name="plus" size={12} /> New
         </button>
@@ -49,6 +64,17 @@ export default function ScriptList() {
         </button>
         {(showBase || q) && <ul className="list">{base.slice(0, 2000).map(item)}</ul>}
       </div>
+      {failed > 0 && !compile.running && (
+        <div className="small err" style={{ padding: '4px 8px' }} data-testid="compile-failed">
+          {failed} script{failed === 1 ? '' : 's'} failed to compile. Open one to see why.
+        </div>
+      )}
+      {compilerOpen && (
+        <Modal title="Papyrus compiler" onClose={() => setCompilerOpen(false)} width={520} footer={<button className="btn primary" onClick={() => setCompilerOpen(false)}>Done</button>}>
+          {!compilerPath && <p className="warn small" style={{ marginTop: 0 }}>Choose a compiler to turn scripts into the .pex files the game runs.</p>}
+          <CompilerSettings />
+        </Modal>
+      )}
       {creating && <NewScriptDialog onClose={() => setCreating(false)} />}
     </div>
   );

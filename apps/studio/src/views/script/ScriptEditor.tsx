@@ -8,14 +8,8 @@ import { useEffect, useState } from 'react';
 import { EmptyState, Help, Icon, Modal, useQuery } from '../../components/ui';
 import { CompilerSettings } from './CompilerSettings';
 import { engine, useStore } from '../../state/store';
+import { compileScripts, hasCompiler } from '../../state/compile';
 import { CodeEditor } from './CodeEditor';
-
-interface CompileOutput {
-  script: string;
-  ok: boolean;
-  messages: { file?: string; line?: number; col?: number; severity: string; message: string }[];
-  output: string;
-}
 
 export default function ScriptEditor() {
   const client = useStore((s) => s.client);
@@ -27,7 +21,8 @@ export default function ScriptEditor() {
   const { data: source } = useQuery(() => (name && info ? client?.call('scriptRead', name) : undefined), [name, !!info], { revision: false });
   const [draft, setDraft] = useState<string | null>(null);
   const [diag, setDiag] = useState({ errors: 0, warnings: 0 });
-  const [compile, setCompile] = useState<CompileOutput[] | null>(null);
+  const compile = useStore((s) => s.compile);
+  const setCompile = (report: null) => useStore.setState((s) => ({ compile: { ...s.compile, report: report ?? [] } }));
   const [reveal, setReveal] = useState<number | undefined>();
   const [outline, setOutline] = useState(true);
   const [compilerOpen, setCompilerOpen] = useState(false);
@@ -35,7 +30,6 @@ export default function ScriptEditor() {
 
   useEffect(() => {
     setDraft(null);
-    setCompile(null);
   }, [name]);
 
   if (!name)
@@ -57,27 +51,25 @@ export default function ScriptEditor() {
   if (source === undefined) return <div className="empty" style={{ flex: 1 }}>Loading…</div>;
 
   const dirty = draft !== null && draft !== source;
-  const save = async (text = draft ?? source) => {
+  const save = async (text = draft ?? source, autoCompile = true) => {
     const ok = await engine((c) => c.call('scriptWrite', name, text), { refreshSession: false });
     if (ok) {
       useStore.getState().toast('success', `Saved ${name}.psc`);
       setDraft(null);
       useStore.getState().bump();
+      // Like the Creation Kit: compile in the background on save, so you keep typing.
+      if (autoCompile && useStore.getState().settings.autoCompileOnSave && hasCompiler()) void compileScripts([name], { quiet: true });
     }
     return !!ok;
   };
   const runCompile = async () => {
-    if (!useStore.getState().settings.compilerPath) {
+    if (!hasCompiler()) {
       // Nothing to compile with yet: ask for it right here.
       setCompilerOpen(true);
       return;
     }
-    if (dirty && !(await save())) return;
-    const res = await engine((c) => c.call('scriptCompile', [name]), { busy: `Compiling ${name}…`, refreshSession: false });
-    if (res) {
-      setCompile(res);
-      useStore.getState().toast(res.every((r) => r.ok) ? 'success' : 'error', res.every((r) => r.ok) ? `Compiled ${name}.pex` : `${name} has compile errors`);
-    }
+    if (dirty && !(await save(undefined, false))) return;
+    await compileScripts([name]);
   };
 
   return (
@@ -102,6 +94,11 @@ export default function ScriptEditor() {
         <button className="btn small" onClick={() => void save()} disabled={!dirty} title="Save (Ctrl+S)">
           <Icon name="save" size={12} /> Save
         </button>
+        {compile.running && (
+          <span className="chip" data-testid="compiling" title="Compiling in the background. You can keep working.">
+            Compiling… {compile.done}/{compile.total}
+          </span>
+        )}
         <button className="btn small primary" onClick={() => void runCompile()} title={settings.compilerPath ? 'Compile to .pex (what the game runs)' : 'Choose a compiler first (opens the compiler settings)'} data-testid="compile">
           <Icon name="play" size={12} /> Compile
         </button>
@@ -131,7 +128,7 @@ export default function ScriptEditor() {
           </div>
         )}
       </div>
-      {compile && (
+      {compile.report.length > 0 && (
         <div className="scroll mono small" style={{ maxHeight: 180, borderTop: '1px solid var(--border)', background: 'var(--panel)', padding: 8 }}>
           <div className="row">
             <strong className="grow">Compiler output</strong>
@@ -139,13 +136,17 @@ export default function ScriptEditor() {
               <Icon name="close" size={12} />
             </button>
           </div>
-          {compile.map((r) => (
+          {compile.report.map((r) => (
             <div key={r.script}>
               <div className={r.ok ? 'ok' : 'err'}>
                 {r.script}: {r.ok ? 'compiled' : 'failed'}
               </div>
               {r.messages.map((m, i) => (
-                <div key={i} className={m.severity === 'error' ? 'err' : 'warn'} style={{ cursor: m.line ? 'pointer' : undefined }} onClick={() => m.line && setReveal(m.line)}>
+                <div key={i} className={m.severity === 'error' ? 'err' : 'warn'} style={{ cursor: m.line ? 'pointer' : undefined }} onClick={() => {
+                    if (!m.line) return;
+                    if (r.script.toLowerCase() !== name.toLowerCase()) useStore.getState().setScript(r.script);
+                    setReveal(m.line);
+                  }}>
                   {m.line ? `(${m.line},${m.col ?? 0}) ` : ''}
                   {m.message}
                 </div>

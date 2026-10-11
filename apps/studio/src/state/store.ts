@@ -17,6 +17,21 @@ export interface Toast {
   text: string;
 }
 
+export interface CompileOutput {
+  script: string;
+  ok: boolean;
+  messages: { file?: string; line?: number; col?: number; severity: string; message: string }[];
+  output: string;
+}
+
+/** Background script compiling: progress plus the latest result for each script. */
+export interface CompileState {
+  running: boolean;
+  done: number;
+  total: number;
+  report: CompileOutput[];
+}
+
 export interface LogEntry {
   time: number;
   kind: 'info' | 'success' | 'warning' | 'error';
@@ -26,6 +41,8 @@ export interface LogEntry {
 export interface Settings {
   compilerKind: 'papyrus-compiler' | 'caprica';
   compilerPath: string;
+  /** Compile a script in the background each time it is saved (needs a compiler), like the Creation Kit. */
+  autoCompileOnSave: boolean;
   autoCleanOnSave: boolean;
   updateBoundsOnSave: boolean;
   generateSeqOnSave: boolean;
@@ -67,6 +84,7 @@ export interface Settings {
 const DEFAULT_SETTINGS: Settings = {
   compilerKind: 'papyrus-compiler',
   compilerPath: '',
+  autoCompileOnSave: true,
   autoCleanOnSave: true,
   updateBoundsOnSave: true,
   generateSeqOnSave: true,
@@ -126,6 +144,7 @@ interface Store {
   log: LogEntry[];
   settings: Settings;
   busy?: string;
+  compile: CompileState;
   /** Set when an edit needs a plugin to go into; the edit is retried once one exists. */
   pluginPrompt?: { retry?: () => Promise<unknown> };
 
@@ -209,6 +228,7 @@ export const useStore = create<Store>((set, get) => ({
     }
     set({ settings });
   },
+  compile: { running: false, done: 0, total: 0, report: [] },
   setBusy: (busy) => set({ busy }),
   setPluginPrompt: (pluginPrompt) => set({ pluginPrompt }),
 }));
