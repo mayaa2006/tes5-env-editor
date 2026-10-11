@@ -2,6 +2,10 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.18.1
+
+- **Edit dialogue in a bigger box.** Player lines and responses have an expand button beside them. It opens the text in a large box, and what you typed is saved when you click off it (or press Done, Escape or Ctrl+Enter). Each save is one undo step.
+
 ## 0.18.0
 
 - **A menu in the top-left corner.** Click the logo to open it. **Save** and **Settings** are at the top, then **New plugin**, **Close game folder** (asks first if you have unsaved changes), **Undo** and **Redo** (named after what they undo), **New character**, **New quest**, **New script**, the **Properties panel** switch, **Test in game**, **Keyboard shortcuts** and **About**. Items that can't be used yet are greyed out and the tooltip says why.

@@ -7,7 +7,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { EMOTIONS, QUEST_TYPES, QuestFlag, type FormKey } from '@tes5/esp';
 import type { InfoModel, QuestModel, TopicModel } from '@tes5/workspace';
-import { Checkbox, clearDraft, DragNumber, EmptyState, Field, FormLink, FormPicker, Icon, Modal, Select, Tabs, TextInput, useDebounced, useDraft, useQuery, useSummaries, useUniqueEditorId } from '../../components/ui';
+import { Checkbox, clearDraft, DragNumber, EmptyState, ExpandableText, Field, FormLink, FormPicker, Icon, Modal, Select, Tabs, TextInput, useDebounced, useDraft, useQuery, useSummaries, useUniqueEditorId } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 import { ConditionList } from '../record/ConditionEditor';
 import { TriggersSection } from '../record/TriggersEditor';
@@ -707,7 +707,7 @@ function Info({ q, info }: { q: QuestModel; info: InfoModel }) {
               {EMOTIONS[r.emotion] ?? ''}
             </span>
             <div className="grow" onClick={(e) => e.stopPropagation()}>
-              <TextInput value={r.text} onCommit={(text) => patchRecord(info.formKey, 'Edit response', (d) => (d.responses[ri].text = text))} />
+              <ExpandableText title="Response" value={r.text} onCommit={(text) => patchRecord(info.formKey, 'Edit response', (d) => (d.responses[ri].text = text))} />
             </div>
           </div>
         ))}

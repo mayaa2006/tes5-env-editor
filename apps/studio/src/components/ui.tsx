@@ -211,6 +211,67 @@ export function TextInput({ value, onCommit, placeholder, multiline, mono, disab
 }
 
 /** Blender-style number field: drag horizontally to scrub, click to type. */
+/**
+ * A text box with an expand button beside it. The button opens the text in a big editing box;
+ * whatever you typed is saved when you click off it (outside the box, Done, Escape or Ctrl+Enter).
+ */
+export function ExpandableText({ value, onCommit, multiline, placeholder, title = 'Edit text' }: { value: string; onCommit: (v: string) => void; multiline?: boolean; placeholder?: string; title?: string }) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const finish = () => {
+    setOpen(false);
+    if (draft !== value) onCommit(draft);
+  };
+  return (
+    <div className="row" style={{ gap: 4, alignItems: 'flex-start' }}>
+      <div className="grow">
+        <TextInput multiline={multiline} value={value} onCommit={onCommit} placeholder={placeholder} />
+      </div>
+      <button
+        className="btn icon ghost"
+        title="Open in a bigger box to write and edit more comfortably. It saves when you click off it."
+        aria-label={`${title} in a bigger box`}
+        data-testid="expand-text"
+        onClick={() => {
+          setDraft(value);
+          setOpen(true);
+        }}
+      >
+        <Icon name="frame" size={13} />
+      </button>
+      {open && (
+        <Modal
+          title={title}
+          width={640}
+          onClose={finish}
+          footer={
+            <button className="btn primary" onClick={finish} title="Save and close (clicking outside the box does the same)">
+              Done
+            </button>
+          }
+        >
+          <textarea
+            className="input"
+            style={{ height: 'min(50vh, 360px)', resize: 'vertical' }}
+            value={draft}
+            autoFocus
+            placeholder={placeholder}
+            data-testid="expanded-text"
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) finish();
+              e.stopPropagation();
+            }}
+          />
+          <div className="dim small" style={{ marginTop: 6 }}>
+            Saved when you click outside this box. Ctrl+Enter also saves and closes.
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 export function DragNumber({ value, onCommit, step = 1, precision = 2, min, max, disabled, suffix }: { value: number; onCommit: (v: number) => void; step?: number; precision?: number; min?: number; max?: number; disabled?: boolean; suffix?: string }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(String(value));

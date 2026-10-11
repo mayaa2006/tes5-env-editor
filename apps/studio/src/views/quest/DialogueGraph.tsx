@@ -24,7 +24,7 @@ import '@xyflow/react/dist/style.css';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormKey } from '@tes5/esp';
 import { parseScreenplay, type DialogueGraph as Graph, type DialogueInfoNode, type DialogueTopicNode } from '@tes5/workspace';
-import { Checkbox, Field, FormLink, FormPicker, Icon, Modal, TextInput, useDebounced, useQuery, useSummaries } from '../../components/ui';
+import { Checkbox, ExpandableText, Field, FormLink, FormPicker, Icon, Modal, TextInput, useDebounced, useQuery, useSummaries } from '../../components/ui';
 import { GesturePicker } from './GesturePicker';
 import { engine, useStore } from '../../state/store';
 import { InfoConditions, InfoFragmentEditor, NewResponse, patchRecord } from './QuestDesigner';
@@ -278,7 +278,7 @@ function TopicPanel({ t, onAddResponse }: { t: DialogueTopicNode; onAddResponse:
         </button>
       </div>
       <div className="scroll pad col" style={{ flex: 1, gap: 8 }}>
-        <TextInput multiline value={t.text} onCommit={(name) => patchRecord(t.formKey, 'Edit player line', (d) => (d.name = name))} />
+        <ExpandableText multiline title="Player line" value={t.text} onCommit={(name) => patchRecord(t.formKey, 'Edit player line', (d) => (d.name = name))} />
         <div className="dim small mono">{t.editorId}</div>
         <div className="dim small">{t.topLevel ? 'Shown when the conversation opens.' : 'Shown only as a choice after a response.'}</div>
         <button className="btn small" onClick={onAddResponse} data-testid="dlg-add-response">
@@ -305,7 +305,7 @@ function InfoPanel({ i, g, questEditorId, onAddChoice }: { i: DialogueInfoNode; 
           Said by {i.speaker ? <FormLink value={i.speaker} /> : <span className="faint">anyone matching the conditions</span>}
         </div>
         {i.lines.map((l, n) => (
-          <TextInput key={n} value={l} onCommit={(text) => patchRecord(i.formKey, 'Edit response', (d) => (d.responses[n].text = text))} />
+          <ExpandableText key={n} title="Response" value={l} onCommit={(text) => patchRecord(i.formKey, 'Edit response', (d) => (d.responses[n].text = text))} />
         ))}
         <Checkbox checked={i.goodbye} onChange={(on) => patchRecord(i.formKey, 'Goodbye flag', (d) => (d.data.flags = on ? d.data.flags | 1 : d.data.flags & ~1))} label="Ends the conversation" />
         <ResponseGesture info={i.formKey} />
