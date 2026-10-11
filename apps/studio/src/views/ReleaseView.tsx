@@ -194,7 +194,7 @@ function Esl() {
       <div className="card-title">
         Light plugin (ESL)
         <Help text="Light plugins (ESL) don't use up one of the 254 regular plugin slots, so players can run more mods. A plugin can be light if it adds at most 2048 new records with FormIDs in the range 0x800–0xFFF." />
-        {r.eligible ? <span className="chip ok">can be flagged ESL</span> : r.eligibleAfterCompaction ? <span className="chip warn">needs compaction</span> : <span className="chip err">too many records</span>}
+        {r.flagged ? <span className="chip ok">flagged ESL</span> : r.eligible ? <span className="chip ok">can be flagged ESL</span> : r.eligibleAfterCompaction ? <span className="chip warn">needs compaction</span> : <span className="chip err">too many records</span>}
       </div>
       <div className="dim small">
         {r.newRecords} new record(s) · highest ID {r.maxObjectId.toString(16).toUpperCase()} · {r.outOfRange} outside the ESL range
@@ -205,6 +205,24 @@ function Esl() {
         </div>
       ))}
       <div className="row" style={{ gap: 6, marginTop: 8 }}>
+        {r.flagged ? (
+          <button
+            className="btn small"
+            title="Remove the light plugin flag, so this plugin uses a regular plugin slot again. You can undo this."
+            onClick={() => void engine((c) => c.call('setLightFlag', false), { success: 'ESL flag removed' })}
+          >
+            Remove ESL flag
+          </button>
+        ) : (
+          <button
+            className="btn small primary"
+            disabled={!r.eligible}
+            title={r.eligible ? 'Mark this plugin as a light plugin (ESL) so it no longer uses one of the 254 plugin slots. It stays a .esp file. Save to keep it. You can undo this.' : 'This plugin can only be flagged once its new records fit the ESL range: use Compact FormIDs first.'}
+            onClick={() => void engine((c) => c.call('setLightFlag', true), { success: 'Flagged as ESL. Save to keep it.' })}
+          >
+            Flag as ESL
+          </button>
+        )}
         <button
           className="btn small"
           disabled={!r.eligibleAfterCompaction || r.eligible}

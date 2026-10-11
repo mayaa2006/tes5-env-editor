@@ -883,6 +883,8 @@ export class Workspace {
     a.plugin = parsePlugin(bytes, a.name);
     a.masters = a.plugin.masters;
     a.mapper = new FormIdMapper(a.name, a.masters);
+    a.isLight = a.plugin.isESL;
+    a.isMaster = a.plugin.loadsAsMaster;
   }
 
   // ---------------------------------------------------------------- editing

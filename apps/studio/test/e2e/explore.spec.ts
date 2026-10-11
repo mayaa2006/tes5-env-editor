@@ -385,6 +385,13 @@ test('exploratory sweep of every workspace', async ({ page }) => {
     for (const fix of await page.getByTestId('fix').all()) if (await fix.isVisible()) await fix.click().catch(() => undefined);
     const compact = page.getByRole('button', { name: 'Compact FormIDs' });
     if (await compact.isEnabled()) await compact.click();
+    const flag = page.getByRole('button', { name: 'Flag as ESL' });
+    if (await flag.isEnabled()) {
+      await flag.click();
+      await expect(page.getByRole('button', { name: 'Remove ESL flag' })).toBeVisible();
+      await page.getByRole('button', { name: 'Remove ESL flag' }).click();
+      await expect(page.getByRole('button', { name: 'Flag as ESL' })).toBeVisible();
+    }
   });
   await run('plugins: switch active plugin and back, new plugin', async () => {
     await ws('Plugins');

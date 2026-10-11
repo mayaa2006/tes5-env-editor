@@ -77,6 +77,7 @@ import {
   isCreatable,
   allUiSchemas,
   compactFormIds,
+  setLightFlag,
   computeBounds,
   detectInstall,
   findInstalls,
@@ -1477,6 +1478,10 @@ export class EngineHost {
 
   eslReport() {
     return eslReport(this.requireWs());
+  }
+
+  setLightFlag(on: boolean) {
+    setLightFlag(this.requireWs(), on);
   }
 
   compactFormIds() {

@@ -27,6 +27,8 @@ import { WorldService, type PlacedRef } from './world';
 
 export interface EslReport {
   plugin: string;
+  /** The plugin already has the light (ESL) flag. */
+  flagged: boolean;
   newRecords: number;
   /** Highest object ID in use. */
   maxObjectId: number;
@@ -53,6 +55,7 @@ export function eslReport(ws: Workspace): EslReport {
   if (outOfRange) notes.push(`${outOfRange} FormID(s) outside 0x800-0xFFF; compaction renumbers them (breaks saves, FaceGen and voice files that use the old IDs).`);
   return {
     plugin: a.name,
+    flagged: a.plugin.isESL,
     newRecords: own.length,
     maxObjectId: ids.length ? Math.max(...ids) : 0,
     outOfRange,
@@ -60,6 +63,22 @@ export function eslReport(ws: Workspace): EslReport {
     eligibleAfterCompaction: own.length <= 2048,
     notes,
   };
+}
+
+/**
+ * Turn the light (ESL) flag on or off for the active plugin. Turning it on is
+ * refused unless every new record fits (see eslReport); one undo step.
+ */
+export function setLightFlag(ws: Workspace, on: boolean): void {
+  const a = ws.active;
+  if (!a?.plugin) throw new WorkspaceError('No active plugin');
+  if (a.plugin.isESL === on) return;
+  if (on && !eslReport(ws).eligible) throw new WorkspaceError('This plugin has too many new records, or FormIDs outside 0x800-0xFFF, to be a light plugin. Compact FormIDs first.');
+  ws.transaction(on ? 'Flag as light plugin (ESL)' : 'Remove light plugin (ESL) flag', () => {
+    a.plugin!.isESL = on;
+    a.isLight = on;
+    a.isMaster = a.plugin!.loadsAsMaster;
+  });
 }
 
 /**

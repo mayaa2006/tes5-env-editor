@@ -223,7 +223,7 @@ A final tab before sharing your mod:
 
 - **Pre-release check:** finds missing meshes and textures, uncompiled scripts, empty script properties, aliases that can't fill, unvoiced lines, characters without a voice, characters whose face files are missing or out of date (fixed with one click), floating or sunk items, one-way doors, missing or out-of-date navmeshes, wrong bounds and dirty edits. Each result links to the problem, and many have a one-click fix.
 - **Character faces (FaceGen export):** every character in your plugin with the state of its face files (up to date, out of date, missing, uses its template). **Generate faces** makes all the changed ones; tick any others and **Export ticked** to write them again, like the CK's Ctrl+F4. Tints are written like the CK's (BC3 with mipmaps). Characters that take their looks from a template are recognised and need no files.
-- **Light plugin (ESL)** check.
+- **Light plugin (ESL)** check, FormID compaction, and a **Flag as ESL** button (undoable).
 - The check updates by itself after each change.
 - **Conflicts:** which of your records other mods also change, and whose version the game uses.
 - **Pack into a BSA** (your plugin's own files, named so the game loads it) or **Pack as a ZIP** (plugin plus files, optionally in a BSA, ready to upload).
