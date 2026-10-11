@@ -243,6 +243,7 @@ On the start screen, **Where my files are saved → Save into a new folder** sen
 - One-row toolbars, with camera and display options under **View** and navmesh actions under **Navmesh**.
 - The Outliner and World tools share a panel beside the 3D view.
 - Press **?** for every keyboard and mouse shortcut.
+- **App menu:** click the logo in the top-left. **Save** and **Settings** come first (Settings has the "every time you save" options and links to the compiler and plugin setup), then New plugin, Close game folder (it asks first if you have unsaved changes), Undo and Redo (named after what they undo), New character / quest / script, the properties panel switch, Test in game, a list of keyboard shortcuts and About. Anything that can't be used yet is greyed out, and its tooltip says why.
 - A **(?)** next to settings and options explains what each one does.
 - Settings live where they're used: compiling under Scripts → Compiling, snapping under View → Snapping settings.
 - The properties panel (every field of the selected form) can be hidden from the top bar. It starts hidden in the Characters and Quests designers, so they get the full width.

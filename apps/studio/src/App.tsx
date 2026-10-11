@@ -6,6 +6,7 @@ import { PluginsView } from './views/PluginsView';
 import { Inspector } from './views/record/Inspector';
 import { ObjectBrowser } from './views/ObjectBrowser';
 import { BottomLog } from './views/BottomLog';
+import { AppMenu } from './views/AppMenu';
 import { TestLaunchDialog } from './views/TestLaunch';
 
 const SceneView = lazy(() => import('./views/scene/SceneView'));
@@ -99,7 +100,7 @@ export function App() {
   if (!loaded) {
     return (
       <div className="app" style={{ gridTemplateRows: '38px 1fr' }}>
-        <TopBar onSave={save} />
+        <TopBar onSave={save} onNewPlugin={() => setSavePrompt(true)} />
         <div className="scroll">
           <Welcome />
         </div>
@@ -113,7 +114,7 @@ export function App() {
   const right = hasInspector(tab) && inspectorOpen;
   return (
     <div className="app">
-      <TopBar onSave={save} />
+      <TopBar onSave={save} onNewPlugin={() => setSavePrompt(true)} />
       <div className="main" style={{ gridTemplateColumns: `${left} 1fr ${right ? 'var(--right)' : '0px'}` }}>
         <aside className="sidebar" style={left ? undefined : { overflow: 'hidden', borderRight: 'none' }}>
           {tab === 'script' ? <ScriptSidebar /> : tab === 'scene' ? <ObjectBrowser /> : null}
@@ -174,17 +175,15 @@ function ScriptSidebar() {
   );
 }
 
-function TopBar({ onSave }: { onSave: () => void }) {
+function TopBar({ onSave, onNewPlugin }: { onSave: () => void; onNewPlugin: () => void }) {
   const session = useStore((s) => s.session);
   const tab = useStore((s) => s.tab);
   const setTab = useStore((s) => s.setTab);
   const loaded = session.open && session.loadOrder.some((p) => p.loaded);
+  const inspectorOpen = useStore((s) => s.settings.inspector[s.tab] ?? !CLOSED_BY_DEFAULT.has(s.tab));
   return (
     <header className="topbar">
-      <div className="brand" title="TES5 Env Editor">
-        <div className="logo" />
-        <span className="brand-name">TES5 Env Editor</span>
-      </div>
+      <AppMenu loaded={loaded} tabs={TABS} onSave={onSave} onNewPlugin={onNewPlugin} inspector={{ available: hasInspector(tab), open: inspectorOpen }} />
       {loaded && (
         <nav className="workspace-tabs" aria-label="Workspaces">
           {TABS.map((t) => (
@@ -233,7 +232,7 @@ function TestButton() {
   return (
     <>
       <button className="btn ghost" title="Test in game: save, then jump to a place and quest stage" onClick={() => setOpen(true)} data-testid="test-launch">
-        <Icon name="play" /> Test
+        <Icon name="play" /> <span className="hide-narrow">Test</span>
       </button>
       {open && <TestLaunchDialog onClose={() => setOpen(false)} />}
     </>
