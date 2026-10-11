@@ -39,9 +39,10 @@ export interface LogEntry {
 }
 
 export interface Settings {
+  /** The compiler chosen by hand; with no path the app picks one (Caprica, which comes with it). */
   compilerKind: 'papyrus-compiler' | 'caprica';
   compilerPath: string;
-  /** Compile a script in the background each time it is saved (needs a compiler), like the Creation Kit. */
+  /** Compile your changed scripts when saving (a script in the background, or the plugin), like the Creation Kit. */
   autoCompileOnSave: boolean;
   autoCleanOnSave: boolean;
   updateBoundsOnSave: boolean;
@@ -82,7 +83,7 @@ export interface Settings {
 }
 
 const DEFAULT_SETTINGS: Settings = {
-  compilerKind: 'papyrus-compiler',
+  compilerKind: 'caprica',
   compilerPath: '',
   autoCompileOnSave: true,
   autoCleanOnSave: true,

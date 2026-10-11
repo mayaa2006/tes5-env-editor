@@ -29,6 +29,7 @@ const FIX_LABEL: Record<NonNullable<Finding['fix']>['kind'], string> = {
   generateNavmesh: 'Generate navmesh',
   dropToSurface: 'Drop onto surface',
   generateFaces: 'Generate faces',
+  compileScripts: 'Compile',
 };
 
 /** Take the user to the thing a finding is about. */
@@ -417,7 +418,7 @@ function Package() {
       async (c) => {
         if (session.dirty) {
           const st = useStore.getState().settings;
-          await c.call('save', { removeItms: st.autoCleanOnSave, updateBounds: st.updateBoundsOnSave, generateSeq: st.generateSeqOnSave, generateFaces: st.generateFacesOnSave });
+          await c.call('save', { removeItms: st.autoCleanOnSave, updateBounds: st.updateBoundsOnSave, generateSeq: st.generateSeqOnSave, generateFaces: st.generateFacesOnSave, compileScripts: st.autoCompileOnSave });
         }
         return c.call('packZip', { bsa: zipBsa, scriptSources: sources, returnData: demo });
       },

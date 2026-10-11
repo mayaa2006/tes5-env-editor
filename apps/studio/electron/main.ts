@@ -5,6 +5,7 @@
  * open native file dialogs.
  */
 import { app, BrowserWindow, dialog, ipcMain, shell, type OpenDialogOptions } from 'electron';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 
@@ -13,8 +14,19 @@ let worker: Worker | null = null;
 let seq = 0;
 const pending = new Map<number, (r: { ok: boolean; value?: unknown; error?: string }) => void>();
 
+/**
+ * Caprica.exe, the free Papyrus compiler that comes with the Windows app
+ * (scripts/fetch-caprica.mjs puts it in resources/caprica), so scripts compile
+ * without the Creation Kit.
+ */
+function bundledCaprica(): string | undefined {
+  if (process.platform !== 'win32') return undefined;
+  const exe = app.isPackaged ? join(process.resourcesPath, 'caprica', 'Caprica.exe') : join(app.getAppPath(), 'resources', 'caprica', 'Caprica.exe');
+  return existsSync(exe) ? exe.replace(/\\/g, '/') : undefined;
+}
+
 function startWorker(): Worker {
-  const w = new Worker(join(__dirname, 'engine-worker.cjs'));
+  const w = new Worker(join(__dirname, 'engine-worker.cjs'), { workerData: { caprica: bundledCaprica() } });
   w.on('message', (m: { id?: number; type?: string; event?: unknown; ok?: boolean; value?: unknown; error?: string }) => {
     if (m.type === 'event') {
       win?.webContents.send('engine:event', m.event);

@@ -52,6 +52,12 @@ function OnSave() {
           label="Generate face files for characters whose look changed"
           help="Characters with a changed face need FaceGen files (a head mesh and a face tint) or they show the dark-face bug in game. They're baked from your sliders and paint and written next to your plugin, in place of the Creation Kit's Ctrl+F4. Only changed faces are rebuilt, and Undo removes them again."
         />
+        <Checkbox
+          checked={settings.autoCompileOnSave}
+          onChange={(autoCompileOnSave) => update({ autoCompileOnSave })}
+          label="Compile scripts that changed"
+          help="The game only runs compiled scripts (.pex). Your scripts whose source is newer than their .pex are compiled with Caprica (free, comes with the app) when you save the plugin or the script. Errors are listed after saving; the save itself always goes through. Set up compiling in the Scripts tab."
+        />
       </div>
     </div>
   );

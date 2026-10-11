@@ -24,7 +24,7 @@ export function TestLaunchDialog({ onClose }: { onClose: () => void }) {
     const st = useStore.getState().settings;
     const r = await engine(
       async (c) => {
-        if (session.activePlugin) await c.call('save', { removeItms: st.autoCleanOnSave, updateBounds: st.updateBoundsOnSave, generateSeq: st.generateSeqOnSave, generateFaces: st.generateFacesOnSave });
+        if (session.activePlugin) await c.call('save', { removeItms: st.autoCleanOnSave, updateBounds: st.updateBoundsOnSave, generateSeq: st.generateSeqOnSave, generateFaces: st.generateFacesOnSave, compileScripts: st.autoCompileOnSave });
         return c.call('testLaunch', { cell, quest, stage, replayStages: replay, items, godMode: god, launch, mo2Executable: st.mo2Executable, mo2Exe: st.mo2Exe });
       },
       { busy: launch ? 'Saving and starting the game…' : 'Saving…' },

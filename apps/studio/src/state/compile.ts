@@ -1,17 +1,12 @@
 /**
  * Script compiling that runs in the background, so you can keep working while
  * it goes (like the Creation Kit). Requests made while a run is in progress are
- * queued and picked up by the same run; each script is compiled once per run.
+ * queued and picked up by the next batch; Caprica compiles a batch in one go.
  */
 import { useStore, type CompileOutput } from './store';
 
 const pending = new Set<string>();
 let running = false;
-
-/** Does the Compile button have what it needs? (A compiler must be chosen first.) */
-export function hasCompiler(): boolean {
-  return !!useStore.getState().settings.compilerPath;
-}
 
 /**
  * Compile the named scripts in the background. `quiet` is for the automatic
@@ -31,19 +26,18 @@ export async function compileScripts(names: string[], opts: { quiet?: boolean; f
   let fatal: string | undefined;
   try {
     while (pending.size && !fatal) {
-      const name = [...pending][0];
-      pending.delete(name);
+      // Everything waiting goes in one batch (Caprica compiles many scripts per run).
+      const batch = [...pending];
+      pending.clear();
       try {
-        const [res] = (await useStore.getState().client!.call('scriptCompile', [name])) as CompileOutput[];
-        if (res) {
-          if (res.ok) okCount++;
-          else failed++;
-          useStore.setState((s) => ({ compile: { ...s.compile, report: [...s.compile.report.filter((r) => r.script.toLowerCase() !== name.toLowerCase()), res] } }));
-        }
+        const res = (await useStore.getState().client!.call('scriptCompile', batch)) as CompileOutput[];
+        const names = new Set(batch.map((n) => n.toLowerCase()));
+        for (const r of res) r.ok ? okCount++ : failed++;
+        useStore.setState((s) => ({ compile: { ...s.compile, report: [...s.compile.report.filter((r) => !names.has(r.script.toLowerCase())), ...res] } }));
       } catch (e) {
         fatal = (e as Error).message;
       }
-      useStore.setState((s) => ({ compile: { ...s.compile, done: s.compile.done + 1 } }));
+      useStore.setState((s) => ({ compile: { ...s.compile, done: s.compile.done + batch.length } }));
     }
   } finally {
     running = false;
@@ -57,14 +51,15 @@ export async function compileScripts(names: string[], opts: { quiet?: boolean; f
   else if (!opts.quiet) toast('success', okCount === 1 ? 'Compiled 1 script' : `Compiled ${okCount} scripts`);
 }
 
-/** Compile every script in the mod (the ones you own, not the game's). */
-export async function compileAll(): Promise<void> {
+/** Compile every script in the mod (the ones you own, not the game's), or only those that changed since their last compile. */
+export async function compileAll(opts: { changedOnly?: boolean } = {}): Promise<void> {
   const st = useStore.getState();
   const list = await st.client?.call('scriptList');
   const mine = (list ?? []).filter((s) => s.origin === 'mod').map((s) => s.name);
-  if (!mine.length) {
-    st.toast('info', 'No scripts to compile yet. Create one with New.');
+  const names = opts.changedOnly ? ((await st.client?.call('scriptBuildStatus'))?.outOfDate ?? []) : mine;
+  if (!names.length) {
+    st.toast('info', mine.length ? 'All your scripts are compiled already.' : 'No scripts to compile yet. Create one with New.');
     return;
   }
-  await compileScripts(mine, { fresh: true });
+  await compileScripts(names, { fresh: true });
 }

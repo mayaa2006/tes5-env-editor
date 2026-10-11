@@ -186,7 +186,13 @@ A new power starts as a greater power cast on yourself, a new ability as always-
 
 #### Scripts
 
-Monaco editor for Papyrus with live errors, completion, hover, signature help and an outline. Compiling uses PapyrusCompiler.exe or Caprica, with clickable errors. **Compile all** builds every script in your mod, and saving a script compiles it in the background (like the Creation Kit; can be turned off).
+Monaco editor for Papyrus with live errors, completion, hover, signature help and an outline.
+
+**Compiling needs no setup.** The Windows app comes with [Caprica](https://github.com/Orvid/Caprica), a free, open-source Papyrus compiler, so you don't need the Creation Kit's compiler.
+- Saving a script compiles it in the background, like the Creation Kit. Saving the plugin compiles every one of your scripts that changed since its last compile.
+- The Scripts tab shows how many scripts need compiling, with a button for just those, and **Compile all** for every script. Errors are clickable and take you to the line.
+- **Compiling** shows what's ready. If the game's own script sources aren't unpacked yet, one click unpacks the Creation Kit's Scripts.zip.
+- You can still pick PapyrusCompiler.exe or your own Caprica.exe there instead.
 
 ### Your mod: records, cleaning and release
 
@@ -206,7 +212,7 @@ Analyze shows what would change before you clean. Also available from the CLI.
 
 #### Automations
 
-- **On every save (your choice):** remove identical-to-master records, recalculate object bounds, write SEQ files, generate face files for characters whose look changed.
+- **On every save (your choice):** remove identical-to-master records, recalculate object bounds, write SEQ files, generate face files for characters whose look changed, compile scripts that changed.
 - **Always:** masters added and sorted, parent records copied, counts and dialogue order kept right, alias IDs, fragment scripts and their properties, safe deletes, backups, strings files, undo for everything.
 
 The tab also points to the automation tools in the other tabs.
@@ -238,7 +244,7 @@ On the start screen, **Where my files are saved → Save into a new folder** sen
 - The Outliner and World tools share a panel beside the 3D view.
 - Press **?** for every keyboard and mouse shortcut.
 - A **(?)** next to settings and options explains what each one does.
-- Settings live where they're used: compiler under Scripts → Compiler, snapping under View → Snapping settings.
+- Settings live where they're used: compiling under Scripts → Compiling, snapping under View → Snapping settings.
 - The properties panel (every field of the selected form) can be hidden from the top bar. It starts hidden in the Characters and Quests designers, so they get the full width.
 - Side panels shrink on smaller windows, and the World toolbar drops its words (keeping icons and tooltips) when the 3D view gets narrow.
 - **Start screen:** finds Skyrim in your Steam libraries and GOG folders, so you usually just click **Open**. The plugin list has search and **All / Only masters / None**, and unticking a master unticks the plugins that need it.
@@ -266,7 +272,7 @@ When you start the desktop app you can open either:
 - your Skyrim folder, or
 - a Mod Organizer 2 instance folder.
 
-Then choose the plugins to load and the plugin your changes go into. To compile scripts, set the path to `PapyrusCompiler.exe` in **Automations → Papyrus compiler**.
+Then choose the plugins to load and the plugin your changes go into. Scripts compile with the Caprica that comes with the app. The Creation Kit is only needed once, for the game's script sources (Scripts.zip); **Scripts → Compiling** unpacks them for you.
 
 ### Command line
 
@@ -306,4 +312,4 @@ npm run bench       # performance at Skyrim.esm scale (synthetic ~900k-record ma
 
 ## Disclaimer
 
-This is an independent community tool, not affiliated with or endorsed by Bethesda. Keep backups of your plugins; the editor writes a backup before overwriting any file, but it is young software.
+This is an independent community tool, not affiliated with or endorsed by Bethesda. The Windows app includes Caprica v0.3.0 (MIT license, by Orvid King and contributors), unchanged, with its license. Keep backups of your plugins; the editor writes a backup before overwriting any file, but it is young software.

@@ -22,7 +22,8 @@ import {
 } from '@tes5/papyrus';
 import { normalizePath } from '@tes5/assets';
 import { WorkspaceError, type Workspace } from './engine';
-import { joinPath } from './fs';
+import { unzipSync } from 'fflate';
+import { dirname, joinPath } from './fs';
 
 export interface ProcessRunner {
   run(command: string, args: string[], opts?: { cwd?: string }): Promise<{ code: number; stdout: string; stderr: string }>;
@@ -57,7 +58,10 @@ export class ScriptService {
   private sources = new Map<string, ScriptInfo>();
   private loaded = new Map<string, string>();
   runner?: ProcessRunner;
+  /** The compiler chosen in the settings; when unset, findCompiler() picks one. */
   compiler?: CompilerSettings;
+  /** Caprica.exe shipped with the app (the desktop app sets this). */
+  bundledCaprica?: string;
 
   constructor(readonly ws: Workspace) {
     // Undo/redo of edits that generated scripts restores their sources.
@@ -191,41 +195,172 @@ export class ScriptService {
     return this.write(model.scriptName, generateFragmentSource(model), { undoable: true });
   }
 
-  /** Compile scripts with the configured compiler. */
-  async compile(names: string[]): Promise<CompileResult[]> {
-    if (!this.runner || !this.compiler) throw new WorkspaceError('No Papyrus compiler configured. Set the path to PapyrusCompiler.exe (Creation Kit) or Caprica in Settings.');
-    const dataDirs = this.ws.options.roots;
-    const importDirs: string[] = [joinPath(this.ws.options.outputDir, this.sourceFolder)];
-    for (const root of [...dataDirs].reverse()) {
+  /** Folders the compiler imports from: your sources first, then each Data folder's. */
+  private async importDirs(): Promise<string[]> {
+    const dirs: string[] = [joinPath(this.ws.options.outputDir, this.sourceFolder)];
+    for (const root of [...this.ws.options.roots].reverse()) {
       for (const sub of this.ws.game === 'SkyrimSE' ? ['Source/Scripts', 'Scripts/Source'] : ['Scripts/Source', 'Source/Scripts']) {
         const dir = joinPath(root, sub);
-        if ((await this.ws.fs.exists(dir)) && !importDirs.includes(dir)) importDirs.push(dir);
+        if ((await this.ws.fs.exists(dir)) && !dirs.includes(dir)) dirs.push(dir);
       }
     }
-    let flagsFile = '';
-    for (const d of importDirs) {
+    return dirs;
+  }
+
+  /** The game's flags file (TESV_Papyrus_Flags.flg), found once the game's script sources are unpacked. */
+  private async flagsFile(dirs?: string[]): Promise<string> {
+    for (const d of dirs ?? (await this.importDirs())) {
       const f = joinPath(d, 'TESV_Papyrus_Flags.flg');
-      if (await this.ws.fs.exists(f)) {
-        flagsFile = f;
-        break;
+      if (await this.ws.fs.exists(f)) return f;
+    }
+    return '';
+  }
+
+  /**
+   * A compiler to use when none is chosen: Caprica (free, open source) that
+   * comes with the app, else the Creation Kit's PapyrusCompiler.exe where the
+   * CK installs it ("Papyrus Compiler" in the game folder, next to Data).
+   */
+  async findCompiler(): Promise<CompilerSettings | null> {
+    if (this.bundledCaprica && (await this.ws.fs.exists(this.bundledCaprica))) return { kind: 'caprica', executable: this.bundledCaprica };
+    for (const root of this.ws.options.roots) {
+      for (const dir of [dirname(root), root]) {
+        const exe = joinPath(dir, 'Papyrus Compiler', 'PapyrusCompiler.exe');
+        if (await this.ws.fs.exists(exe)) return { kind: 'papyrus-compiler', executable: exe };
       }
     }
-    if (!flagsFile) throw new WorkspaceError('TESV_Papyrus_Flags.flg not found. Extract the Creation Kit script sources (Scripts.zip) into Data.');
-    const results: CompileResult[] = [];
+    return null;
+  }
+
+  /** The compiler compile() will use: the one chosen in the settings, else the one found. */
+  async activeCompiler(): Promise<CompilerSettings | null> {
+    return this.compiler ?? (await this.findCompiler());
+  }
+
+  /**
+   * Whether the game's own script sources (needed to compile anything) are
+   * there, and if not, the Scripts.zip the Creation Kit put in Data.
+   */
+  async sourcesState(): Promise<{ ready: boolean; zip: string | null }> {
+    if (await this.flagsFile()) return { ready: true, zip: null };
+    for (const root of this.ws.options.roots) {
+      const zip = joinPath(root, 'Scripts.zip');
+      if (await this.ws.fs.exists(zip)) return { ready: false, zip };
+    }
+    return { ready: false, zip: null };
+  }
+
+  /**
+   * Unpack the Creation Kit's Scripts.zip next to it (what "extract here"
+   * does), so scripts can be compiled. Files already there are kept.
+   * Returns how many files were written.
+   */
+  async unpackSources(): Promise<number> {
+    const { zip } = await this.sourcesState();
+    if (!zip) throw new WorkspaceError("Scripts.zip wasn't found in Data. Install the Creation Kit (it puts Scripts.zip there), or unpack the script sources yourself.");
+    const root = dirname(zip);
+    const files = unzipSync(await this.ws.fs.readFile(zip));
+    let written = 0;
+    for (const [name, data] of Object.entries(files)) {
+      if (name.endsWith('/') || !/\.(psc|flg)$/i.test(name)) continue;
+      // Entries are "Source/Scripts/…"; loose ones go into the source folder.
+      const rel = /^(source|scripts)[\\/]/i.test(name) ? name.replace(/\\/g, '/') : `${this.sourceFolder}/${name.replace(/^.*[\\/]/, '')}`;
+      const full = joinPath(root, rel);
+      if (await this.ws.fs.exists(full)) continue;
+      await this.ws.fs.mkdir(dirname(full));
+      await this.ws.fs.writeFile(full, data);
+      this.ws.vfs.addLoose(root, rel);
+      written++;
+    }
+    this.refresh();
+    return written;
+  }
+
+  /** Is this one of your mod's scripts (its source is in your mod), rather than the game's or another mod's? */
+  isOwn(name: string): boolean {
+    return this.sources.get(name.toLowerCase())?.origin === 'mod';
+  }
+
+  /** Where one of your scripts' source is on disk, by its real name (the index keeps paths in lower case). */
+  private async ownSourcePath(info: ScriptInfo): Promise<string> {
+    const named = joinPath(this.ws.options.outputDir, this.sourceFolder, `${info.name}.psc`);
+    return (await this.ws.fs.exists(named)) ? named : joinPath(this.ws.options.outputDir, info.path.replace(/\\/g, '/'));
+  }
+
+  /** Your scripts whose compiled .pex is missing or older than the source. */
+  async outOfDate(): Promise<string[]> {
+    const out: string[] = [];
+    for (const info of this.sources.values()) {
+      if (info.origin !== 'mod') continue;
+      const src = await this.ws.fs.stat(await this.ownSourcePath(info));
+      const pex = await this.ws.fs.stat(joinPath(this.ws.options.outputDir, 'Scripts', `${info.name}.pex`));
+      if (!pex || (src && src.mtimeMs > pex.mtimeMs)) out.push(info.name);
+    }
+    return out.sort((a, b) => a.localeCompare(b));
+  }
+
+  /** Compile every one of your scripts that needs it (see outOfDate). */
+  async compileOutOfDate(): Promise<CompileResult[]> {
+    const names = await this.outOfDate();
+    return names.length ? this.compile(names) : [];
+  }
+
+  /**
+   * Compile scripts. Caprica does them all in one run (falling back to one at
+   * a time if a failure stopped the others); PapyrusCompiler.exe one by one.
+   * Each new .pex counts as part of the mod.
+   */
+  async compile(names: string[]): Promise<CompileResult[]> {
+    const compiler = await this.activeCompiler();
+    if (!this.runner) throw new WorkspaceError('Compiling scripts needs the desktop app (it runs the Papyrus compiler). The checks as you type work everywhere.');
+    if (!compiler) throw new WorkspaceError('No Papyrus compiler found. Choose Caprica.exe or the Creation Kit\'s PapyrusCompiler.exe under Compiler in the Scripts tab.');
+    if (!names.length) return [];
+    const importDirs = await this.importDirs();
+    const flagsFile = await this.flagsFile(importDirs);
+    if (!flagsFile) throw new WorkspaceError("The game's script sources aren't unpacked yet (TESV_Papyrus_Flags.flg is missing). Use \"Unpack the game's script sources\" in the Scripts tab, or extract the Creation Kit's Scripts.zip into Data.");
     const outputDir = joinPath(this.ws.options.outputDir, 'Scripts');
     await this.ws.fs.mkdir(outputDir);
+    const config = { kind: compiler.kind, executable: compiler.executable, flagsFile, importDirs, outputDir, optimize: compiler.optimize, release: compiler.release };
+    const files = new Map<string, string>();
     for (const name of names) {
       const info = this.sources.get(name.toLowerCase());
-      const file = info ? (info.origin === 'mod' ? joinPath(this.ws.options.outputDir, info.path.replace(/\\/g, '/')) : `${name}.psc`) : `${name}.psc`;
-      const cmd = compilerCommand({ kind: this.compiler.kind, executable: this.compiler.executable, flagsFile, importDirs, outputDir, optimize: this.compiler.optimize, release: this.compiler.release }, [file]);
-      const res = await this.runner.run(cmd.command, cmd.args);
-      const output = `${res.stdout}\n${res.stderr}`;
-      const ok = res.code === 0 && compileSucceeded(output);
-      // Make the new .pex visible right away (so "not compiled" clears without a rescan).
-      if (ok) this.ws.vfs.addLoose(this.ws.options.outputDir, `Scripts/${name}.pex`);
-      results.push({ script: name, ok, messages: parseCompilerOutput(output), output });
+      // Your own sources by path; the compiler finds the game's by name in the import folders.
+      files.set(name, info?.origin === 'mod' ? await this.ownSourcePath(info) : `${name}.psc`);
     }
-    return results;
+    const fileOf = (name: string) => files.get(name)!;
+    const pexTime = async (name: string) => (await this.ws.fs.stat(joinPath(outputDir, `${name}.pex`)))?.mtimeMs ?? null;
+    const run = async (batch: string[]): Promise<Map<string, CompileResult>> => {
+      const before = new Map<string, number | null>();
+      for (const n of batch) before.set(n, await pexTime(n));
+      const cmd = compilerCommand(config, batch.map(fileOf));
+      const res = await this.runner!.run(cmd.command, cmd.args);
+      const output = `${res.stdout}\n${res.stderr}`.trim();
+      const messages = parseCompilerOutput(output);
+      const out = new Map<string, CompileResult>();
+      for (const name of batch) {
+        const own = batch.length === 1 ? messages : messages.filter((m) => !m.file || m.file.replace(/^.*[\\/]/, '').toLowerCase() === `${name.toLowerCase()}.psc`);
+        const after = await pexTime(name);
+        const fresh = after !== null && after !== before.get(name);
+        const ok = fresh && !own.some((m) => m.severity === 'error') && (batch.length > 1 || (res.code === 0 && compileSucceeded(output)));
+        out.set(name, { script: name, ok, messages: own, output });
+      }
+      return out;
+    };
+    let results: Map<string, CompileResult>;
+    if (compiler.kind === 'caprica') {
+      results = await run(names);
+      // A script with no error of its own that still got no .pex was stopped by another's failure: try it alone.
+      if (names.length > 1)
+        for (const name of names) {
+          const r = results.get(name)!;
+          if (!r.ok && !r.messages.some((m) => m.file && m.severity === 'error')) results.set(name, (await run([name])).get(name)!);
+        }
+    } else {
+      results = new Map();
+      for (const name of names) results.set(name, (await run([name])).get(name)!);
+    }
+    for (const r of results.values()) if (r.ok) this.ws.vfs.addLoose(this.ws.options.outputDir, `Scripts/${r.script}.pex`);
+    return names.map((n) => results.get(n)!);
   }
 
   // ---------------------------------------------------------------- record bindings (VMAD)
