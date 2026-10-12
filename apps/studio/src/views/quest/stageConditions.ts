@@ -107,3 +107,83 @@ export function stageLabel(index: number, text: string | undefined, max = 48): s
   const t = (text ?? '').replace(/\s+/g, ' ').trim();
   return t ? `${index} – ${t.length > max ? `${t.slice(0, max - 1)}…` : t}` : `${index}`;
 }
+
+// ------------------------------------------------------------------ quest-wide availability
+
+/**
+ * The quest's own dialogue conditions (the Creation Kit's "Dialogue Conditions"): they apply to
+ * every line of the quest, on top of each line's own rules. Two plain-words settings are managed
+ * here; any other condition on the quest is left as it is.
+ */
+export interface Availability {
+  /** Dialogue is only available once this stage has been reached (null: from the moment the quest runs). */
+  from: number | null;
+  /** Dialogue stops being offered once the quest is completed. */
+  stopAtDone: boolean;
+}
+
+function availabilityOf(c: Condition, quest: FormKey): Partial<Availability> | null {
+  const value = Number(c.value);
+  if (c.function === fnIndex('GetStageDone') && c.param1 === quest && c.op === '==' && value === 1) return { from: Number(c.param2) };
+  if (c.function === fnIndex('GetQuestCompleted') && c.param1 === quest && c.op === '==' && value === 0) return { stopAtDone: true };
+  return null;
+}
+
+/** The availability settings in the quest's dialogue conditions, and how many other conditions it has. */
+export function readAvailability(items: Item[], quest: FormKey): { availability: Availability; others: number } {
+  const availability: Availability = { from: null, stopAtDone: false };
+  let others = 0;
+  for (const it of items) {
+    const a = availabilityOf(it.data, quest);
+    if (!a) others++;
+    else if (a.from !== undefined && availability.from === null) availability.from = a.from;
+    else if (a.stopAtDone) availability.stopAtDone = true;
+    else others++; // a second "from" rule: left alone, listed as an other condition
+  }
+  return { availability, others };
+}
+
+/** The quest's dialogue conditions after changing the settings: other conditions stay. */
+export function writeAvailability(items: Item[], quest: FormKey, a: Availability): Item[] {
+  let seenFrom = false;
+  const kept = items.filter((it) => {
+    const m = availabilityOf(it.data, quest);
+    if (!m) return true;
+    if (m.from !== undefined && seenFrom) return true; // not managed here (a second "from")
+    if (m.from !== undefined) seenFrom = true;
+    return false;
+  });
+  if (a.from !== null) kept.push(make('GetStageDone', { param1: quest, param2: a.from, op: '==', value: 1 }));
+  if (a.stopAtDone) kept.push(make('GetQuestCompleted', { param1: quest, op: '==', value: 0 }));
+  return kept;
+}
+
+/** Where a line sits next to a stage: for the stage cards. */
+export interface StageLine {
+  info: FormKey;
+  relation: 'only' | 'from' | 'until' | 'sets';
+}
+
+export interface LineLinks {
+  formKey: FormKey;
+  needsStage: number | null;
+  fromStage: number | null;
+  beforeStage: number | null;
+  setsStage: number | null;
+}
+
+/** For each stage, the responses tied to it (needing it, from it, until it, or moving the quest to it). */
+export function linesByStage(infos: LineLinks[]): Map<number, StageLine[]> {
+  const out = new Map<number, StageLine[]>();
+  const add = (stage: number | null, info: FormKey, relation: StageLine['relation']) => {
+    if (stage === null) return;
+    out.set(stage, [...(out.get(stage) ?? []), { info, relation }]);
+  };
+  for (const i of infos) {
+    add(i.needsStage, i.formKey, 'only');
+    if (i.needsStage === null) add(i.fromStage, i.formKey, 'from');
+    add(i.beforeStage, i.formKey, 'until');
+    add(i.setsStage, i.formKey, 'sets');
+  }
+  return out;
+}

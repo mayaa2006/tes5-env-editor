@@ -7,7 +7,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { EMOTIONS, QUEST_TYPES, QuestFlag, type FormKey } from '@tes5/esp';
 import type { InfoModel, QuestModel, TopicModel } from '@tes5/workspace';
-import { InfoAfter, InfoWhen } from './StageLinks';
+import { DialogueAvailability, InfoAfter, InfoWhen, StageDialogue, useStageDialogue } from './StageLinks';
 import { Checkbox, clearDraft, DragNumber, EmptyState, ExpandableText, Field, FormLink, FormPicker, Icon, Modal, Select, Tabs, TextInput, useDebounced, useDraft, useQuery, useSummaries, useUniqueEditorId } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 import { ConditionList } from '../record/ConditionEditor';
@@ -276,7 +276,16 @@ function QuestEditor({ quest }: { quest: FormKey }) {
       )}
       <div className="scroll pad" style={{ flex: 1, display: tab === 'map' || (tab === 'dialogue' && dialogueView === 'graph') ? 'none' : undefined }}>
         {tab === 'overview' && <Overview q={q} />}
-        {tab === 'stages' && <Stages q={q} />}
+        {tab === 'stages' && (
+          <Stages
+            q={q}
+            onOpenLine={(info) => {
+              setFocusTopic(info);
+              setDialogueView('graph');
+              setTab('dialogue');
+            }}
+          />
+        )}
         {tab === 'objectives' && <Objectives q={q} />}
         {tab === 'aliases' && <Aliases q={q} />}
         {tab === 'dialogue' && dialogueView === 'list' && (
@@ -284,6 +293,10 @@ function QuestEditor({ quest }: { quest: FormKey }) {
             <button className="btn small ghost" style={{ marginBottom: 10 }} onClick={() => setDialogueView('graph')}>
               ← Graph view
             </button>
+            <div className="card" style={{ marginBottom: 12, maxWidth: 460 }}>
+              <div className="card-title">Dialogue available</div>
+              <DialogueAvailability quest={q.formKey} />
+            </div>
             <Dialogue q={q} />
           </>
         )}
@@ -316,6 +329,9 @@ function Overview({ q }: { q: QuestModel }) {
           <Checkbox checked={(q.flags & QuestFlag.WarnOnAliasFillFailure) !== 0} onChange={(v) => flag(QuestFlag.WarnOnAliasFillFailure, v)} label="Warn on alias fill failure" help="Writes a warning to the Papyrus log when an alias can't be filled, which helps when a quest silently fails to start." />
         </div>
       </Field>
+      <Field label="Dialogue available" title="When this quest's dialogue can be said at all. Each line can narrow it further." stack>
+        <DialogueAvailability quest={q.formKey} />
+      </Field>
       <Field label="Scripts">
         <div className="col" style={{ gap: 2 }}>
           {q.scripts.map((s) => (
@@ -347,8 +363,9 @@ const STAGE_FLAGS: [number, string, string][] = [
   [0x08, 'Keep instance data', 'Keeps text replacement data (like <Alias=...> names) from the previous run when the quest restarts.'],
 ];
 
-function Stages({ q }: { q: QuestModel }) {
+function Stages({ q, onOpenLine }: { q: QuestModel; onOpenLine: (info: FormKey) => void }) {
   const [adding, setAdding] = useState<{ index: number; text: string } | null>(null);
+  const dialogue = useStageDialogue(q.formKey);
   const next = (q.stages.reduce((m, s) => Math.max(m, s.index), -10) + 10) || 0;
   return (
     <div className="timeline" data-testid="stages">
@@ -369,6 +386,7 @@ function Stages({ q }: { q: QuestModel }) {
             {(s.logEntries.length ? s.logEntries : [{ flags: 0, text: '', fragment: undefined }]).map((le, li) => (
               <LogEntry key={li} q={q} stage={s.index} stageIdx={si} logIndex={li} entry={le} exists={li < s.logEntries.length} />
             ))}
+            <StageDialogue stage={s.index} dialogue={dialogue} onOpenLine={onOpenLine} />
           </div>
         </div>
       ))}

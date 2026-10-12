@@ -28,7 +28,7 @@ import { ExpandableText, Field, FormLink, FormPicker, Icon, Modal, TextInput, us
 import { GesturePicker } from './GesturePicker';
 import { engine, useStore } from '../../state/store';
 import { InfoFragmentEditor, NewResponse, patchRecord } from './QuestDesigner';
-import { InfoAfter, InfoWhen, useStages, type StageOption } from './StageLinks';
+import { DialogueAvailability, InfoAfter, InfoWhen, useStages, type StageOption } from './StageLinks';
 import { stageLabel } from './stageConditions';
 
 type TopicData = { t: DialogueTopicNode };
@@ -156,6 +156,7 @@ function Inner({ quest, questEditorId, focus, onListView, onOpenStage }: { quest
   const [scriptOpen, setScriptOpen] = useState(false);
   const [starting, setStarting] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [availability, setAvailability] = useState(false);
   const { data: lint } = useQuery(() => client?.call('lintDialogue', quest), [quest]);
   useEffect(() => setSelected(focus ?? null), [focus]);
   const flow = useReactFlow();
@@ -222,6 +223,9 @@ function Inner({ quest, questEditorId, focus, onListView, onOpenStage }: { quest
         </button>
         <span className="spacer" />
         <span className="dim small">Drag from a response to a player line to offer it as a choice, or into empty space to write a new choice.</span>
+        <button className="btn small ghost" onClick={() => setAvailability(true)} data-testid="dlg-availability" title="Choose when this quest's dialogue can be said at all, for example only once a stage is reached, and not after the quest is completed">
+          Availability
+        </button>
         <button className="btn small ghost" onClick={onListView}>
           List view
         </button>
@@ -297,6 +301,20 @@ function Inner({ quest, questEditorId, focus, onListView, onOpenStage }: { quest
       {newResponseFor && (
         <Modal title="Add a response" onClose={() => setNewResponseFor(null)} width={560}>
           <NewResponse topic={{ formKey: newResponseFor }} onDone={() => setNewResponseFor(null)} />
+        </Modal>
+      )}
+      {availability && (
+        <Modal
+          title="When is this quest's dialogue available?"
+          onClose={() => setAvailability(false)}
+          width={460}
+          footer={
+            <button className="btn primary" onClick={() => setAvailability(false)}>
+              Done
+            </button>
+          }
+        >
+          <DialogueAvailability quest={quest} />
         </Modal>
       )}
       {starting && <StartConversationDialog quest={quest} onClose={() => setStarting(false)} />}
