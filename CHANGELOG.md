@@ -2,6 +2,14 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.21.0
+
+- **Free AIs get more context and plan better.**
+  - **The right load-order entries.** Characters, places and other entries your text mentions come first, so they're never cut off the list. The characters it names come with their race, sex, voice, class and factions, so the AI picks the right existing people.
+  - **More room for your text.** The plan's format is now sent as a short field guide instead of the raw format file: about half the size, and easier for small models to follow.
+  - **A worked example.** Free AIs get one complete example plan to copy the shape of. Small models follow examples much better than long rules.
+  - **No silent cut-offs with Ollama.** The app asks the model how much it can read and sizes the window to fit. If your text is too long for the model, it says so, instead of Ollama quietly cutting the start (where the rules are).
+
 ## 0.20.0
 
 - **Set when a line is said, in plain words.** Every response in the Dialogue tab (graph and list) has **When can this be said?**: at any time, only while the quest is at a stage, once the quest has reached a stage, only before a stage, after this quest is completed, or after another quest is completed. Stages are listed with their journal text ("20 – Find the ring"). It writes ordinary conditions, so the full list is still under **Advanced**, and conditions you already had are read back correctly.

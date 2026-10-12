@@ -69,7 +69,7 @@ export function chatSend(p: Exclude<AiProvider, { kind: 'claude' }>, fetchImpl: 
     const schema = (params.output_config?.format as { schema?: unknown } | undefined)?.schema;
     const system = [
       ...(Array.isArray(params.system) ? params.system.map((b) => b.text) : params.system ? [params.system] : []),
-      schema ? `Answer with only one JSON object (no other text, no code fences) that matches this JSON schema. Fill in every field; use null or [] where nothing applies.\n\n${JSON.stringify(schema)}` : '',
+      schema ? `Answer with only one JSON object (no other text, no code fences) with these fields. Fill in every field; use null or [] where nothing applies.\n\n${schemaGuide(schema)}` : '',
     ]
       .filter(Boolean)
       .join('\n\n');
@@ -97,13 +97,21 @@ export function chatSend(p: Exclude<AiProvider, { kind: 'claude' }>, fetchImpl: 
       return res.json();
     };
     if (p.kind === 'ollama') {
-      // Ollama's own API: the JSON schema constrains the answer, and the context is made big enough for the load order list.
-      const r = await call(`${(p.url || OLLAMA_URL).replace(/\/+$/, '')}/api/chat`, {
+      // Ollama's own API: the JSON schema constrains the answer. Ollama cuts a prompt that doesn't fit its
+      // window without saying so, so the window is sized to the prompt, within what the model can read.
+      const base = (p.url || OLLAMA_URL).replace(/\/+$/, '');
+      const promptTokens = estimateTokens(messages.map((m) => m.content).join('\n'));
+      const max = await ollamaContextLength(base, p.model, fetchImpl);
+      if (max && promptTokens + MIN_ANSWER_TOKENS > max)
+        throw new WorkspaceError(
+          `This is too long for ${p.model}: it reads about ${max.toLocaleString('en')} tokens and this needs about ${(promptTokens + MIN_ANSWER_TOKENS).toLocaleString('en')} (your text, the rules and the load-order list). Pick a model that reads more (the model's page on ollama.com lists its context), or shorten the text.`,
+        );
+      const r = await call(`${base}/api/chat`, {
         model: p.model,
         messages,
         stream: false,
         format: schema ?? 'json',
-        options: { num_ctx: 32768, temperature: 0.3 },
+        options: { num_ctx: contextWindow(promptTokens, max), temperature: 0.3 },
       });
       return { content: [{ type: 'text', text: cleanJson(String(r?.message?.content ?? '')) }], stop_reason: r?.done_reason === 'length' ? 'max_tokens' : 'end_turn' };
     }
@@ -121,6 +129,76 @@ export function chatSend(p: Exclude<AiProvider, { kind: 'claude' }>, fetchImpl: 
     const choice = r?.choices?.[0];
     return { content: [{ type: 'text', text: cleanJson(String(choice?.message?.content ?? '')) }], stop_reason: choice?.finish_reason === 'length' ? 'max_tokens' : 'end_turn' };
   };
+}
+
+/** Room left for the answer: a whole quest plan is a few thousand tokens. */
+const MIN_ANSWER_TOKENS = 6000;
+const ANSWER_TOKENS = 12000;
+
+/** A safe guess at a text's length in tokens (English and JSON run at about 3.5–4 characters a token). */
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 3);
+}
+
+/** The context window to ask Ollama for: the prompt plus room for the answer, within what the model reads. */
+export function contextWindow(promptTokens: number, max: number | null): number {
+  const want = Math.max(8192, Math.ceil((promptTokens + ANSWER_TOKENS) / 2048) * 2048);
+  return max ? Math.min(max, want) : want;
+}
+
+const contextLengths = new Map<string, number | null>();
+
+/** How many tokens an Ollama model can read (its context length), or null if Ollama doesn't say. */
+export async function ollamaContextLength(url: string, model: string, fetchImpl: Fetch = globalThis.fetch as unknown as Fetch): Promise<number | null> {
+  const id = `${url}|${model}`;
+  if (contextLengths.has(id)) return contextLengths.get(id)!;
+  let n: number | null = null;
+  try {
+    const res = await fetchImpl(`${url.replace(/\/+$/, '')}/api/show`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model }) });
+    if (res.ok) {
+      const info = ((await res.json())?.model_info ?? {}) as Record<string, unknown>;
+      const key = Object.keys(info).find((k) => k.endsWith('.context_length'));
+      n = key && typeof info[key] === 'number' ? (info[key] as number) : null;
+    }
+  } catch {
+    // Unknown: the window is sized to the prompt.
+  }
+  if (n) contextLengths.set(id, n);
+  return n;
+}
+
+/**
+ * The answer's format as a short field guide (name: type — what it's for),
+ * for models that are told the format in words. About half the size of the
+ * JSON schema itself, and easier for small models to follow.
+ */
+export function schemaGuide(schema: unknown): string {
+  const root = schema as { $defs?: Record<string, unknown> };
+  const defs = (root.$defs ?? {}) as Record<string, any>;
+  const res = (s: any): any => (s?.$ref ? res(defs[String(s.$ref).split('/').pop()!]) : s);
+  const enumOf = (s: any): unknown[] | undefined => s.enum ?? (/\{enum: (\[[^\]]*\])\}/.exec(s.description ?? '') ? JSON.parse(/\{enum: (\[[^\]]*\])\}/.exec(s.description)![1]!) : undefined);
+  const clean = (d?: string) => (d ?? '').replace(/\{(enum|minimum|maximum)[^}]*\}/g, '').replace(/\s+/g, ' ').trim();
+  const type = (raw: any, ind: string): string => {
+    const s = res(raw) ?? {};
+    if (s.anyOf) {
+      const parts = (s.anyOf as any[]).map(res);
+      const real = parts.filter((x) => x?.type !== 'null');
+      return `${real.map((x) => type(x, ind)).join(' or ')}${real.length < parts.length ? ' or null' : ''}`;
+    }
+    const en = enumOf(s);
+    if (en) return en.map((x) => JSON.stringify(x)).join(' | ');
+    if (s.type === 'array') return `list of ${type(s.items, ind)}`;
+    if (s.type === 'object') return `{\n${fields(s, `${ind}  `)}${ind}}`;
+    return s.type === 'integer' ? 'whole number' : String(s.type ?? 'any');
+  };
+  const fields = (s: any, ind: string): string =>
+    Object.entries((s.properties ?? {}) as Record<string, any>)
+      .map(([k, v]) => {
+        const d = clean(v.description ?? res(v)?.description);
+        return `${ind}${k}: ${type(v, ind)}${d ? ` — ${d}` : ''}\n`;
+      })
+      .join('');
+  return fields(res(schema), '').trimEnd();
 }
 
 /** Models installed in Ollama, for the picker. */

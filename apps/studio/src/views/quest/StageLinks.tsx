@@ -8,7 +8,7 @@ import type { FormKey } from '@tes5/esp';
 import { Checkbox, FormPicker, Help, Select, useQuery } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 import { InfoConditions, patchRecord } from './QuestDesigner';
-import { readSetsStage, readWhen, stageLabel, writeSetsStage, writeWhen, type Item, type When, type WhenKind } from './stageLinks';
+import { readSetsStage, readWhen, stageLabel, writeSetsStage, writeWhen, type Item, type When, type WhenKind } from './stageConditions';
 
 export interface StageOption {
   index: number;

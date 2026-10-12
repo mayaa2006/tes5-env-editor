@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readSetsStage, readWhen, stageLabel, writeSetsStage, writeWhen, type Item } from '../../src/views/quest/stageLinks';
+import { readSetsStage, readWhen, stageLabel, writeSetsStage, writeWhen, type Item } from '../../src/views/quest/stageConditions';
 import { conditionFunctionByName, newCondition, type FormKey } from '@tes5/esp';
 
 const Q = '000800:Demo.esp' as FormKey;

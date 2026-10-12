@@ -16,12 +16,14 @@ import Anthropic from '@anthropic-ai/sdk';
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 import type { BetaMessageStreamParams } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import { WorkspaceError, type Workspace } from './engine';
+import type { FormKey } from '@tes5/esp';
 import { GESTURES } from './gestures';
 import { z } from 'zod';
 import type { JournalContext, JournalDraft } from './journal';
 import { PLAN_EVENT_KINDS, QuestPlanSchema, normalizePlan, type QuestPlan } from './questplan';
 import { aiName, chatSend, type AiProvider } from './aiproviders';
 import { WorldService } from './world';
+import { exampleQuestPlan } from './demo/example-plan';
 
 export const PLANNER_MODEL = 'claude-opus-5-5';
 
@@ -88,16 +90,52 @@ const MODES: Record<PlannerMode, string> = {
     "Here is a conversation the author wrote. There are no tags in it: work out the quest it implies (who is involved, what the player has to do, where, and what happens at the end), plan that whole quest, and use the conversation in it. Keep the author's lines word for word, split them into the player's choices and the answers, add the [stage]/[if stage]/[goodbye] tags where they belong, and write the extra lines the quest needs (for example what is said when the player comes back).",
 };
 
+const STOPWORDS = new Set('the and for with that this from they them their there then than what when where which who will would into onto your you she her his him has have had was were are not but all any can out its our over under about after before again also just like more most some such only very been being does did done each find give gives take takes make makes said says player quest'.split(' '));
+
+/** The words in a text, lower case, without short and common ones. */
+export function textWords(text: string): Set<string> {
+  return new Set((text.toLowerCase().match(/[a-z][a-z']{2,}/g) ?? []).map((w) => w.replace(/'s$/, '')).filter((w) => !STOPWORDS.has(w)));
+}
+
+/** "WhiterunBanneredMare" "The Bannered Mare" → whiterun, bannered, mare. */
+function entryWords(...names: (string | undefined)[]): string[] {
+  const out = new Set<string>();
+  for (const n of names) for (const w of (n ?? '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().match(/[a-z]{3,}/g) ?? []) if (!STOPWORDS.has(w)) out.add(w);
+  return [...out];
+}
+
+/** How strongly an entry matches the text: its full name in the text counts most, then shared words. */
+function relevance(text: string, words: Set<string>, name?: string, editorId?: string): number {
+  let score = 0;
+  for (const n of [name, editorId]) if (n && n.length > 2 && text.includes(n.toLowerCase())) score += 10;
+  for (const w of entryWords(name, editorId)) if (words.has(w)) score += 1;
+  return score;
+}
+
 /**
- * A summary of the load order for the planner: named characters, interiors,
- * voice types and races (your plugin's first), so it can reuse what exists.
+ * A summary of the load order for the planner: characters, interiors, voice
+ * types, races and more, so it can reuse what exists. With the author's text,
+ * entries it mentions come first (characters with their race, sex, voice,
+ * class and factions), so a short list still holds what the quest is about.
  */
-export function planCatalog(ws: Workspace, opts: { limit?: number } = {}): string {
+export function planCatalog(ws: Workspace, opts: { limit?: number; text?: string } = {}): string {
   const limit = opts.limit ?? 300;
-  const list = (sigs: string[], filter: (name?: string, edid?: string) => boolean = (n) => !!n) => {
-    const items = ws.search({ sigs, limit: 100_000 }).items.filter((s) => !s.deleted && filter(s.name, s.editorId));
-    items.sort((a, b) => Number(b.inActive) - Number(a.inActive));
-    const shown = items.slice(0, limit).map((s) => (s.name && s.name !== s.editorId ? `${s.editorId ?? s.formKey} "${s.name}"` : (s.editorId ?? s.formKey)));
+  const text = (opts.text ?? '').toLowerCase();
+  const words = textWords(text);
+  const label = (s: { editorId?: string; name?: string; formKey: string }) => (s.name && s.name !== s.editorId ? `${s.editorId ?? s.formKey} "${s.name}"` : (s.editorId ?? s.formKey));
+  const nameOf = (key: unknown) => (typeof key === 'string' && key ? (ws.summary(key as FormKey)?.editorId ?? ws.summary(key as FormKey)?.name) : undefined);
+  const details = (key: FormKey): string => {
+    const d = (ws.view(key)?.data ?? {}) as Record<string, any>;
+    const parts = [nameOf(d.race), ((d.config?.flags ?? 0) & 1) !== 0 ? 'female' : 'male', d.voice && `voice ${nameOf(d.voice)}`, d.class && `class ${nameOf(d.class)}`];
+    const factions = ((d.factions ?? []) as { faction?: string }[]).map((f) => nameOf(f.faction)).filter(Boolean).slice(0, 4);
+    if (factions.length) parts.push(`factions ${factions.join(', ')}`);
+    return parts.filter(Boolean).join(', ');
+  };
+  const rank = <T extends { name?: string; editorId?: string; inActive?: boolean }>(items: T[]): (T & { score: number })[] =>
+    items.map((s) => ({ ...s, score: text ? relevance(text, words, s.name, s.editorId) : 0 })).sort((a, b) => b.score - a.score || Number(b.inActive) - Number(a.inActive));
+  const list = (sigs: string[], filter: (name?: string, edid?: string) => boolean = (n) => !!n, detail = false) => {
+    const items = rank(ws.search({ sigs, limit: 100_000 }).items.filter((s) => !s.deleted && filter(s.name, s.editorId)));
+    const shown = items.slice(0, limit).map((s) => (detail && s.score > 0 ? `${label(s)} (${details(s.formKey)})` : label(s)));
     return `${shown.join('\n') || '(none)'}${items.length > limit ? `\n…and ${items.length - limit} more` : ''}`;
   };
   const yours = ws
@@ -106,14 +144,11 @@ export function planCatalog(ws: Workspace, opts: { limit?: number } = {}): strin
     .slice(0, limit)
     .map((s) => (s.name ? `${s.editorId} "${s.name}"` : s.editorId!));
   const world = new WorldService(ws);
-  const cells = world
-    .cells({ interiorOnly: true })
-    .filter((c) => c.name)
-    .sort((a, b) => Number(b.inActive) - Number(a.inActive))
+  const cells = rank(world.cells({ interiorOnly: true }).filter((c) => c.name))
     .slice(0, limit)
     .map((c) => `${c.editorId ?? c.formKey} "${c.name}"`);
   return [
-    `Characters (Editor ID "Name"):\n${list(['NPC_'])}`,
+    `Characters (Editor ID "Name"${text ? ', with details for the ones your text seems to mention' : ''}):\n${list(['NPC_'], undefined, true)}`,
     `Interior locations:\n${cells.join('\n') || '(none)'}`,
     `Voice types:\n${list(['VTYP'], (_, e) => !!e)}`,
     `Races:\n${list(['RACE'])}`,
@@ -153,9 +188,13 @@ export class QuestPlanner {
       };
     }
     this.model = opts.model ?? PLANNER_MODEL;
+    this.free = !!ai && ai.kind !== 'claude';
   }
 
   private readonly model: string;
+
+  /** A free AI (smaller models): they also get a worked example to copy. */
+  private readonly free: boolean;
 
   /** The request: the rules and the load order are cached; the author's text follows. */
   request(messages: BetaMessageStreamParams['messages'], catalog: string): BetaMessageStreamParams {
@@ -166,6 +205,8 @@ export class QuestPlanner {
       output_config: { effort: 'high', format: betaZodOutputFormat(QuestPlanSchema) },
       system: [
         { type: 'text', text: RULES },
+        // Smaller models copy an example far better than they follow long rules.
+        ...(this.free ? [{ type: 'text' as const, text: `An example of a complete plan, for a different quest. Follow its shape and level of detail, not its story:\n\n${JSON.stringify(exampleQuestPlan())}` }] : []),
         { type: 'text', text: `The load order (existing forms you can use):\n\n${catalog}`, cache_control: { type: 'ephemeral' } },
       ],
       messages,

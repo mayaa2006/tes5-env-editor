@@ -29,7 +29,7 @@ import { GesturePicker } from './GesturePicker';
 import { engine, useStore } from '../../state/store';
 import { InfoFragmentEditor, NewResponse, patchRecord } from './QuestDesigner';
 import { InfoAfter, InfoWhen, useStages, type StageOption } from './StageLinks';
-import { stageLabel } from './stageLinks';
+import { stageLabel } from './stageConditions';
 
 type TopicData = { t: DialogueTopicNode };
 type InfoData = { i: DialogueInfoNode; speaker?: string; stageText?: (n: number) => string; onStage?: (n: number) => void };
