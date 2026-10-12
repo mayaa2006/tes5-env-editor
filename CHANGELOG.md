@@ -2,6 +2,11 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.22.0
+
+- **Each stage shows its dialogue.** On the Stages tab every stage card has a **Dialogue** list: the lines only said at that stage, said from it on, said until it, and the lines that move the quest to it. Click one to open it in the Dialogue tab. A stage with none says how to add some.
+- **Set when all of a quest's dialogue is available.** **Dialogue available** on the Overview tab (also the **Availability** button in the Dialogue tab, and at the top of the list view): either whenever the quest is running, or once it has reached a stage, with a tick to **stop offering it once the quest is completed**. It uses the quest's own dialogue conditions, so it applies to every line; a line's own "When can this be said?" narrows it further (both must be true). Any other dialogue conditions on the quest are left as they are.
+
 ## 0.21.0
 
 - **Free AIs get more context and plan better.**

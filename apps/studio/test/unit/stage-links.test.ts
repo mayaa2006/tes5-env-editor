@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readSetsStage, readWhen, stageLabel, writeSetsStage, writeWhen, type Item } from '../../src/views/quest/stageConditions';
+import { linesByStage, readAvailability, readSetsStage, readWhen, stageLabel, writeAvailability, writeSetsStage, writeWhen, type Item } from '../../src/views/quest/stageConditions';
 import { conditionFunctionByName, newCondition, type FormKey } from '@tes5/esp';
 
 const Q = '000800:Demo.esp' as FormKey;
@@ -72,5 +72,48 @@ describe('stage labels', () => {
     expect(stageLabel(20, 'Find the ring')).toBe('20 – Find the ring');
     expect(stageLabel(0, '')).toBe('0');
     expect(stageLabel(5, 'x'.repeat(80))).toHaveLength(4 + 48);
+  });
+});
+
+describe('quest-wide dialogue availability', () => {
+  it('is open by default and other conditions are left alone', () => {
+    expect(readAvailability([], Q)).toEqual({ availability: { from: null, stopAtDone: false }, others: 0 });
+    expect(readAvailability([gold], Q)).toEqual({ availability: { from: null, stopAtDone: false }, others: 1 });
+  });
+
+  it('writes both settings and reads them back', () => {
+    const items = writeAvailability([gold], Q, { from: 10, stopAtDone: true });
+    expect(items).toHaveLength(3);
+    expect(items[0]).toBe(gold);
+    expect(readAvailability(items, Q)).toEqual({ availability: { from: 10, stopAtDone: true }, others: 1 });
+  });
+
+  it('changing one setting keeps the other, and clearing both removes the conditions', () => {
+    const both = writeAvailability([], Q, { from: 10, stopAtDone: true });
+    const later = writeAvailability(both, Q, { from: 20, stopAtDone: true });
+    expect(later).toHaveLength(2);
+    expect(readAvailability(later, Q).availability).toEqual({ from: 20, stopAtDone: true });
+    expect(writeAvailability(later, Q, { from: null, stopAtDone: false })).toEqual([]);
+  });
+
+  it('does not touch another quest’s conditions', () => {
+    const theirs = writeAvailability([], OTHER, { from: 5, stopAtDone: true });
+    expect(readAvailability(theirs, Q)).toEqual({ availability: { from: null, stopAtDone: false }, others: 2 });
+    expect(writeAvailability(theirs, Q, { from: null, stopAtDone: false })).toEqual(theirs);
+  });
+});
+
+describe('lines by stage', () => {
+  it('groups responses under the stages they need, start from, end before or set', () => {
+    const k = (n: number) => `00000${n}:Demo.esp` as FormKey;
+    const m = linesByStage([
+      { formKey: k(1), needsStage: 10, fromStage: null, beforeStage: null, setsStage: 20 },
+      { formKey: k(2), needsStage: null, fromStage: 10, beforeStage: 30, setsStage: null },
+      { formKey: k(3), needsStage: null, fromStage: null, beforeStage: null, setsStage: null },
+    ]);
+    expect(m.get(10)).toEqual([{ info: k(1), relation: 'only' }, { info: k(2), relation: 'from' }]);
+    expect(m.get(20)).toEqual([{ info: k(1), relation: 'sets' }]);
+    expect(m.get(30)).toEqual([{ info: k(2), relation: 'until' }]);
+    expect(m.size).toBe(3);
   });
 });

@@ -5,10 +5,10 @@
  */
 import { useEffect, useState } from 'react';
 import type { FormKey } from '@tes5/esp';
-import { Checkbox, FormPicker, Help, Select, useQuery } from '../../components/ui';
+import { Checkbox, FormPicker, Help, Select, useQuery, useSummaries } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 import { InfoConditions, patchRecord } from './QuestDesigner';
-import { readSetsStage, readWhen, stageLabel, writeSetsStage, writeWhen, type Item, type When, type WhenKind } from './stageConditions';
+import { linesByStage, readAvailability, readSetsStage, readWhen, stageLabel, writeAvailability, writeSetsStage, writeWhen, type Availability, type Item, type StageLine, type When, type WhenKind } from './stageConditions';
 
 export interface StageOption {
   index: number;
@@ -119,6 +119,101 @@ export function InfoAfter({ info, quest, goodbye }: { info: { formKey: FormKey }
       <StageSelect stages={stages} value={sets} onChange={choose} none="Don’t change the quest" />
       <div className="dim small">{sets === null ? 'Choose a stage to move the quest there when this line is said.' : 'The quest moves to this stage when this line is said. It shows as an arrow on the map.'}</div>
       <Checkbox checked={goodbye} label="Ends the conversation" onChange={(on) => patchRecord(info.formKey, 'Goodbye flag', (d) => (d.data.flags = on ? d.data.flags | 1 : d.data.flags & ~1))} />
+    </div>
+  );
+}
+
+/**
+ * Quest-wide dialogue availability: the quest's own dialogue conditions, which apply to every
+ * line of the quest. A line's own "When can this be said?" narrows it further; both must be true.
+ */
+export function DialogueAvailability({ quest }: { quest: FormKey }) {
+  const client = useStore((s) => s.client);
+  const stages = useStages(quest);
+  const { data: view } = useQuery(() => client?.call('view', quest), [quest]);
+  if (!view) return null;
+  const items = (((view.data as any).dialogueConditions ?? []) as Item[]).filter(Boolean);
+  const { availability, others } = readAvailability(items, quest);
+  const save = (a: Availability) => patchRecord(quest, 'Change dialogue availability', (d) => void (d.dialogueConditions = writeAvailability(d.dialogueConditions ?? [], quest, a)));
+  const firstStage = stages.find((s) => s.index > 0)?.index ?? stages[0]?.index ?? 10;
+  return (
+    <div className="col" style={{ gap: 6 }} data-testid="dialogue-availability">
+      <Select<string>
+        value={availability.from === null ? 'running' : 'from'}
+        options={[
+          { value: 'running', label: 'Whenever the quest is running' },
+          { value: 'from', label: 'Once the quest has reached stage…' },
+        ]}
+        onChange={(v) => void save({ ...availability, from: v === 'from' ? firstStage : null })}
+      />
+      {availability.from !== null && <StageSelect stages={stages} value={availability.from} onChange={(from) => from !== null && void save({ ...availability, from })} />}
+      <Checkbox
+        checked={availability.stopAtDone}
+        onChange={(stopAtDone) => void save({ ...availability, stopAtDone })}
+        label="Stop offering it once the quest is completed"
+        help="Adds a rule to the quest's dialogue so none of its lines are said after the quest has been completed."
+      />
+      <div className="dim small">
+        This applies to every line of the quest. A line’s own “When can this be said?” narrows it further (both must be true).
+        {others > 0 && ` The quest also has ${others} other dialogue condition${others === 1 ? '' : 's'}, in the properties panel.`}
+      </div>
+    </div>
+  );
+}
+
+const RELATION: Record<StageLine['relation'], { label: string; hint: string }> = {
+  only: { label: 'Only said at this stage', hint: 'These lines are said only while the quest is at this stage.' },
+  from: { label: 'Said from this stage on', hint: 'These lines can be said once the quest has reached this stage.' },
+  until: { label: 'Said until this stage', hint: 'These lines stop being said when the quest reaches this stage.' },
+  sets: { label: 'Moves the quest here', hint: 'Saying these lines moves the quest to this stage.' },
+};
+
+/** The dialogue tied to each stage, for the Stages tab: what is said at it and what moves the quest to it. */
+export function useStageDialogue(quest: FormKey) {
+  const client = useStore((s) => s.client);
+  const { data: g } = useQuery(() => client?.call('dialogueGraph', quest), [quest]);
+  const summaries = useSummaries((g?.infos ?? []).map((i) => i.speaker));
+  const byStage = linesByStage(g?.infos ?? []);
+  const info = (key: FormKey) => {
+    const i = g?.infos.find((x) => x.formKey === key);
+    const sp = i?.speaker ? summaries[i.speaker] : null;
+    return { text: i?.lines.find((l) => l.trim()) ?? '(no text)', speaker: sp?.name ?? sp?.editorId ?? (i?.speaker ? String(i.speaker) : 'Anyone') };
+  };
+  return { loaded: !!g, byStage, info };
+}
+
+/** One stage's linked dialogue; clicking a line opens it in the dialogue graph. */
+export function StageDialogue({ stage, dialogue, onOpenLine }: { stage: number; dialogue: ReturnType<typeof useStageDialogue>; onOpenLine: (info: FormKey) => void }) {
+  if (!dialogue.loaded) return null;
+  const lines = dialogue.byStage.get(stage) ?? [];
+  return (
+    <div className="col" style={{ gap: 4 }} data-testid={`stage-dialogue-${stage}`}>
+      <div className="small" style={{ fontWeight: 600 }}>
+        Dialogue
+        <Help text="The responses tied to this stage. Click one to open it in the Dialogue tab, where you change when it's said and what it does." />
+      </div>
+      {lines.length === 0 ? (
+        <div className="dim small">No dialogue is tied to this stage yet. In the Dialogue tab, pick a response and set when it is said, or have it move the quest here.</div>
+      ) : (
+        (Object.keys(RELATION) as StageLine['relation'][]).map((rel) => {
+          const mine = lines.filter((l) => l.relation === rel);
+          return mine.length ? (
+            <div key={rel} className="col" style={{ gap: 2 }}>
+              <div className="dim small" title={RELATION[rel].hint}>
+                {RELATION[rel].label}
+              </div>
+              {mine.map((l) => {
+                const i = dialogue.info(l.info);
+                return (
+                  <a key={l.info} href="#" className="small" data-testid="stage-dialogue-line" title="Open this response in the Dialogue tab" onClick={(e) => (e.preventDefault(), onOpenLine(l.info))}>
+                    {i.speaker}: “{i.text.length > 70 ? `${i.text.slice(0, 69)}…` : i.text}”
+                  </a>
+                );
+              })}
+            </div>
+          ) : null;
+        })
+      )}
     </div>
   );
 }
