@@ -142,7 +142,7 @@ function OllamaFields() {
         </div>
       )}
       <p className="dim small" style={{ margin: 0 }}>
-        Runs on your computer: nothing leaves it. Free models are smaller than Claude, so plans can need more fixing, and planning takes longer.
+        Runs on your computer: nothing leaves it. Free models are smaller than Claude, so the app plans in steps: the quest first, then each conversation and the journal are rewritten one at a time, and anything that would leave the quest stuck is sent back to be fixed. That takes a few minutes, and plans can still need some fixing.
       </p>
     </>
   );
@@ -240,7 +240,7 @@ function OpenAiFields() {
         <input className="input mono grow" value={s.openaiUrl} placeholder="https://…/v1" onChange={(e) => update({ openaiUrl: e.target.value.trim() })} data-testid="openai-url" />
       </Field>
       <p className="dim small" style={{ margin: 0 }}>
-        The API address is for the app, not a web page. Your text and a list of the characters, places, voices and races in your load order are sent to this service. Free tiers have daily limits, and plans can need more fixing than Claude's.
+        The API address is for the app, not a web page. Your text and a list of the characters, places, voices and races in your load order are sent to this service. Free tiers have daily limits. The app plans in steps (the quest, then each conversation and the journal), so one plan uses several requests; plans can need more fixing than Claude's.
       </p>
     </>
   );

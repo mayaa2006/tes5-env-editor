@@ -602,6 +602,60 @@ describe('quest planner', () => {
     expect(sent[1].system.map((b: any) => b.text).join('\n')).not.toContain('An example of a complete plan');
   });
 
+  it('sends back what would leave the quest stuck, once, and keeps the better plan', async () => {
+    const stuck = exampleQuestPlan();
+    stuck.steps = stuck.steps.filter((x) => x.to !== 20); // nothing reaches stage 20 any more
+    const sent: any[] = [];
+    const replies = [stuck, exampleQuestPlan()];
+    const planner = new QuestPlanner({ send: async (p) => (sent.push(p), reply(JSON.stringify(replies[sent.length - 1])) )});
+    const plan = await planner.plan('Brynja lost her ring.', 'document', 'catalog');
+    expect(sent).toHaveLength(2);
+    expect(sent[1].messages.at(-1).content).toContain('Nothing moves the quest to stage 20');
+    expect(plan.steps.some((x) => x.to === 20)).toBe(true);
+    // A "fix" that is no better is not taken.
+    const worse = { ...stuck, steps: [] };
+    const sent2: any[] = [];
+    const again = await new QuestPlanner({ send: async (p) => (sent2.push(p), reply(JSON.stringify(sent2.length === 1 ? stuck : worse))) }).plan('x', 'document', '');
+    expect(again.steps).toHaveLength(stuck.steps.length);
+  });
+
+  it('lets a free AI rewrite each conversation and the journal in small steps, keeping only sound rewrites', async () => {
+    const better = `PLAYER: Need a hand with anything?
+BRYNJA: My mother's ring is gone. It was on the counter this morning. [if stage 0] [emotion sad]
+  PLAYER: I'll find it. [stage 10]
+    BRYNJA: Bless you. Check the tables first. [goodbye]
+  PLAYER: Find it yourself.
+    BRYNJA: Fine. I'll manage. [goodbye]
+PLAYER: Any luck? [if stage 10]
+BRYNJA: Not yet. Keep looking, please.
+PLAYER: Here's your ring. [if stage 20]
+BRYNJA: You found it! Take this, with my thanks. [takes ring x1] [gives gold x100] [stage 100] [emotion happy] [goodbye]`;
+    // Eirik's rewrite drops nothing but invents a stage change: rejected.
+    const sloppy = `PLAYER: Seen a ring? [if stage 10]\nEIRIK: Under the bench. [stage 20] [goodbye]`;
+    const journal = {
+      stages: [{ index: 10, journal: 'Brynja has lost her mother’s ring somewhere in the tavern. I offered to look for it.' }],
+      objectives: [{ index: 10, text: 'Search the tavern for the ring', shownAtStage: 10, completedAtStage: 20 }],
+    };
+    const replies = [exampleQuestPlan(), { screenplay: better }, { screenplay: sloppy }, journal];
+    const sent: any[] = [];
+    const planner = new QuestPlanner({ ai: { kind: 'ollama', model: 'qwen3' }, send: async (p) => (sent.push(p), reply(JSON.stringify(replies[sent.length - 1]))) });
+    const plan = await planner.plan('Brynja lost her ring.', 'document', 'catalog');
+    expect(sent).toHaveLength(4);
+    expect(sent[1].messages[0].content).toContain('BRYNJA = Brynja');
+    expect(sent[1].messages[0].content).toContain('Keep every [stage N] tag');
+    expect(sent[1].system[0].text).toContain('How lines should sound');
+    expect(plan.conversations[0]!.screenplay).toBe(better);
+    expect(plan.conversations[1]!.screenplay).toBe(exampleQuestPlan().conversations[1]!.screenplay);
+    expect(plan.stages.find((x) => x.index === 10)!.journal).toMatch(/^Brynja has lost/);
+    expect(plan.stages.find((x) => x.index === 20)!.journal).toBe(exampleQuestPlan().stages[2]!.journal);
+    expect(plan.objectives[0]!.text).toBe('Search the tavern for the ring');
+    expect(plan.objectives[0]!.completedAtStage).toBe(20);
+    // Claude plans in one go.
+    const one: any[] = [];
+    await new QuestPlanner({ ai: { kind: 'claude', apiKey: 'k' }, send: async (p) => (one.push(p), reply(JSON.stringify(exampleQuestPlan()))) }).plan('x', 'document', '');
+    expect(one).toHaveLength(1);
+  });
+
   it('revises a plan with the author’s feedback', async () => {
     const sent: any[] = [];
     const changed = { ...exampleQuestPlan(), title: 'The Stolen Ring' };

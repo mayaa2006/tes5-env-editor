@@ -2,6 +2,12 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.23.0
+
+- **Free AIs write quests in steps, and better.** After the plan is made, each conversation is rewritten on its own, then the journal and objectives, with the whole plan in view and a short guide to how Skyrim's characters talk: short lines, fitting words, real choices for the player, and lines for when you come back early. A rewrite is only kept if it moves the quest the same way and adds no mistakes, so this can only improve the plan. It takes a little longer.
+- **Plans that would get stuck are fixed before you see them** (with any AI). A stage nothing reaches, a step pointing at something that isn't in the plan, or a quest that never starts or ends is sent back to the AI once with the problems listed, and the better of the two plans is kept.
+- **The review warns about unreachable stages:** "Nothing moves the quest to stage 20…".
+
 ## 0.22.0
 
 - **Each stage shows its dialogue.** On the Stages tab every stage card has a **Dialogue** list: the lines only said at that stage, said from it on, said until it, and the lines that move the quest to it. Click one to open it in the Dialogue tab. A stage with none says how to add some.
