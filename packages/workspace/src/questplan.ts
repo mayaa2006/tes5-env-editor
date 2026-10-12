@@ -357,6 +357,11 @@ export function validatePlan(input: QuestPlan): PlanIssue[] {
     if (!stages.has(r.atStage)) err(`A reward is given at stage ${r.atStage}, which doesn't exist`);
     if (r.itemKey && !isKind(r.itemKey, 'item')) err(`A reward gives "${r.itemKey}", which isn't an item in the plan`);
   }
+  // Every stage after the first must be reachable: a step, a line of dialogue or a failure sets it.
+  const reached = new Set<number>([...(plan.steps ?? []).map((st) => st.to), ...(plan.failures ?? []).map((f) => f.failStage)]);
+  for (const c of plan.conversations ?? []) for (const m of c.screenplay.matchAll(/\[stage\s+(-?\d+)\]/gi)) reached.add(Number(m[1]));
+  const ordered = [...(plan.stages ?? [])].sort((a, b) => a.index - b.index);
+  for (const st of ordered.slice(1)) if (!st.startsQuest && !reached.has(st.index)) warn(`Nothing moves the quest to stage ${st.index}: add a step, or a [stage ${st.index}] tag on a line of dialogue`);
   // The conversations, as they'll be imported.
   const speakers = (plan.characters ?? []).flatMap((c) => [c.key, c.name, ...(c.existing ? [c.existing] : [])]);
   for (const c of plan.conversations ?? [])

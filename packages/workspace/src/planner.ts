@@ -20,7 +20,8 @@ import type { FormKey } from '@tes5/esp';
 import { GESTURES } from './gestures';
 import { z } from 'zod';
 import type { JournalContext, JournalDraft } from './journal';
-import { PLAN_EVENT_KINDS, QuestPlanSchema, normalizePlan, type QuestPlan } from './questplan';
+import { PLAN_EVENT_KINDS, QuestPlanSchema, normalizePlan, validatePlan, type PlanIssue, type QuestPlan } from './questplan';
+import { lintScreenplay } from './dialoguelint';
 import { aiName, chatSend, type AiProvider } from './aiproviders';
 import { WorldService } from './world';
 import { exampleQuestPlan } from './demo/example-plan';
@@ -218,7 +219,101 @@ export class QuestPlanner {
   /** Plan a quest from a design document or a conversation. */
   async plan(source: string, mode: PlannerMode, catalog: string): Promise<QuestPlan> {
     if (!source.trim()) throw new WorkspaceError('Write or paste something to plan from');
-    return this.run(this.request([{ role: 'user', content: `${MODES[mode]}\n\n<source>\n${source.trim()}\n</source>` }], catalog));
+    const params = this.request([{ role: 'user', content: `${MODES[mode]}\n\n<source>\n${source.trim()}\n</source>` }], catalog);
+    const plan = await this.fixLogic(params, await this.run<QuestPlan>(params));
+    // Smaller models write better in small pieces: each conversation, then the journal, gets its own request.
+    return this.free ? this.polish(plan, source) : plan;
+  }
+
+  /**
+   * One round of fixing what would break the quest (a stage nothing reaches,
+   * a key that isn't in the plan…), with the problems listed. The better of
+   * the two plans is kept, so a worse answer never replaces a good one.
+   */
+  private async fixLogic(params: BetaMessageStreamParams, plan: QuestPlan): Promise<QuestPlan> {
+    const problems = blockingIssues(validatePlan(plan));
+    if (!problems.length) return plan;
+    try {
+      const fixed = await this.run<QuestPlan>({
+        ...params,
+        messages: [
+          ...params.messages,
+          { role: 'assistant', content: JSON.stringify(plan) },
+          { role: 'user', content: `The plan has these problems, which would stop the quest working:\n${problems.map((p) => `- ${p.message}`).join('\n')}\nFix them, keep everything else as it is, and return the whole corrected plan.` },
+        ],
+      });
+      return blockingIssues(validatePlan(fixed)).length < problems.length ? fixed : plan;
+    } catch {
+      return plan;
+    }
+  }
+
+  /**
+   * For free AIs: rewrite each conversation, then the journal and objectives,
+   * one small request at a time, with the plan as context. A rewrite is only
+   * kept when it's at least as sound as the first draft (same stage changes,
+   * no new mistakes), so this can only improve the plan.
+   */
+  async polish(input: QuestPlan, source = ''): Promise<QuestPlan> {
+    const plan = structuredClone(input);
+    const brief = planBrief(plan, source);
+    const stages = plan.stages.map((s) => s.index);
+    const speakers = plan.characters.flatMap((c) => [c.key, c.name, ...(c.existing ? [c.existing] : [])]);
+    const errors = (text: string) => lintScreenplay(text, { stages, speakers }).filter((l) => l.severity === 'error').length;
+    const stageTags = (text: string) => [...text.matchAll(/\[stage\s+(-?\d+)\]/gi)].map((m) => Number(m[1])).sort((a, b) => a - b).join(',');
+    for (const conv of plan.conversations) {
+      try {
+        const out = await this.run(
+          {
+            model: this.model,
+            max_tokens: 8000,
+            output_config: { effort: 'high', format: betaZodOutputFormat(ScreenplaySchema) },
+            system: [{ type: 'text', text: `${DIALOGUE_RULES}\n\n${STYLE}` }],
+            messages: [
+              {
+                role: 'user',
+                content: `${brief}\n\nHere is the conversation "${conv.title}" as drafted:\n\n${conv.screenplay}\n\nRewrite it so it reads like Skyrim's own dialogue. Keep every [stage N] tag (on the same choice), every [if …], [gives …], [takes …] and [goodbye] tag, and the speakers. Improve the wording, give the player sensible choices, and add a line or two for when the player comes back before the task is done. Return the whole conversation.`,
+              },
+            ],
+          },
+          ScreenplaySchema,
+        );
+        const text = out.screenplay.trim();
+        if (text && stageTags(text) === stageTags(conv.screenplay) && errors(text) <= errors(conv.screenplay)) conv.screenplay = text;
+      } catch {
+        // Keep the draft.
+      }
+    }
+    if (plan.stages.length) {
+      try {
+        const draft = await this.run(
+          {
+            model: this.model,
+            max_tokens: 6000,
+            output_config: { effort: 'high', format: betaZodOutputFormat(JournalDraftSchema) },
+            system: [{ type: 'text', text: JOURNAL_RULES }],
+            messages: [
+              {
+                role: 'user',
+                content: `${brief}\n\nWrite the journal entry for each stage (by its number) and the text of each objective (by its number; keep the stages it's shown and completed at).\nObjectives now: ${JSON.stringify(plan.objectives.map((o) => ({ index: o.index, text: o.text, shownAtStage: o.shownAtStage, completedAtStage: o.completedAtStage })))}`,
+              },
+            ],
+          },
+          JournalDraftSchema,
+        );
+        for (const st of plan.stages) {
+          const j = draft.stages.find((d) => d.index === st.index)?.journal.trim();
+          if (j) st.journal = j;
+        }
+        for (const o of plan.objectives) {
+          const t = draft.objectives.find((d) => d.index === o.index)?.text.trim();
+          if (t) o.text = t;
+        }
+      } catch {
+        // Keep the draft.
+      }
+    }
+    return plan;
   }
 
   /** Change a plan as the author describes; returns the whole new plan. */
@@ -292,6 +387,38 @@ export class QuestPlanner {
       );
     throw new WorkspaceError(`${this.name}'s plan was incomplete (${issues[0]}). Try again${this.name === 'Claude' ? '' : ', or try a bigger model'}.`);
   }
+}
+
+const ScreenplaySchema = z.object({ screenplay: z.string().describe('The whole conversation in screenplay format') });
+
+/** The dialogue part of the rules, for rewriting one conversation at a time. */
+const DIALOGUE_RULES = RULES.slice(RULES.indexOf('Conversations are written in this screenplay format'));
+
+/** How Skyrim's characters talk, for the dialogue pass. */
+const STYLE = `How lines should sound:
+- Short: one or two sentences a line, under about 150 characters. Split longer speeches into several lines by the same speaker.
+- Plain, slightly old-fashioned words that fit a cold, rough land; no modern slang, no jokes about games, no "okay".
+- Characters sound like who they are: a guard is curt, an innkeeper friendly and busy, a noble formal, a thief sly. They treat the player as a stranger until the quest gives them a reason not to.
+- Player lines are short and say what the player would say: a helpful choice, a blunt or greedy one, and a way to refuse where it matters.
+- Show feelings in the words and with [emotion …], not by describing them.`;
+
+/** What a free AI needs to know about the plan to write one part of it well. */
+function planBrief(plan: QuestPlan, source: string): string {
+  const lines = [
+    `Quest: ${plan.title}. ${plan.summary}`,
+    `Characters (speaker name in capitals = key): ${plan.characters.map((c) => `${c.key.toUpperCase()} = ${c.name}, ${c.role}`).join('; ') || 'none'}`,
+    `Items (keys for [gives]/[takes]): ${plan.items.map((i) => `${i.key} = ${i.name}`).join('; ') || 'none'}`,
+    `Places: ${plan.locations.map((l) => `${l.key} = ${l.name}`).join('; ') || 'none'}`,
+    `Stages: ${plan.stages.map((s) => `${s.index}${s.completesQuest ? ' (completes the quest)' : s.failsQuest ? ' (fails the quest)' : ''}: ${s.journal || '(no journal entry yet)'}`).join(' | ')}`,
+    `What moves the quest on: ${plan.steps.map((st) => `${st.from ?? 'start'} → ${st.to} by ${st.kind}${st.targetKey ? ` ${st.targetKey}` : ''}${st.note ? ` (${st.note})` : ''}`).join('; ') || 'dialogue only'}`,
+  ];
+  if (source.trim()) lines.push(`The author's text:\n<source>\n${source.trim().slice(0, 6000)}\n</source>`);
+  return lines.join('\n');
+}
+
+/** Problems worth one more round with the AI: errors, and gaps that leave the quest stuck. */
+function blockingIssues(issues: PlanIssue[]): PlanIssue[] {
+  return issues.filter((i) => i.severity === 'error' || /^(Nothing moves the quest|Nothing starts the quest|No stage completes)/.test(i.message));
 }
 
 const JournalDraftSchema = z.object({
