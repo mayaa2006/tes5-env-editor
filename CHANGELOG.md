@@ -2,6 +2,16 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.25.0
+
+- **New AI tab: talk to an AI about your mod.** Ask in plain words ("What's in my plugin?", "How does this quest start?", "Where is Lydia used?", "What should I fix before release?") and the AI looks for itself, using the editor's own tools: it searches and reads records, the load order, quests and their dialogue, places and what's in them, routines, scripts, the Items and Magic categories, the release check and the conflict report.
+  - **You see what it did.** Each tool it uses is a card ("Read DemoInnkeeper", "Run the release check") with **Details** and an **Open** button that takes you to that record, quest, cell or script.
+  - **"This quest", "her".** With **Include what I have open** ticked, the AI knows what you have open in the other tabs.
+  - **Conversations are kept** in a list, can be deleted, and **Stop** ends the AI's turn at once.
+  - **Any AI.** Claude, or a free one: Ollama on your PC or a free online service. Models that can't use tools get them in words instead.
+  - It only reads for now. Making changes (quests and dialogue first) comes next.
+- **The AI settings are in Settings** (the menu behind the logo) as well as where they're used.
+
 ## 0.24.0
 
 - **Free AIs get better examples and instructions.**

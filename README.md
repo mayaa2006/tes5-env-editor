@@ -17,7 +17,7 @@ The exe isn't code-signed yet, so Windows SmartScreen may say "Windows protected
 
 ## What it does
 
-[The world](#the-world) · [Characters](#characters) · [Quests and dialogue](#quests-and-dialogue) · [Items, magic and scripts](#items-magic-and-scripts) · [Your mod](#your-mod-records-cleaning-and-release) · [Finding your way](#finding-your-way)
+[The world](#the-world) · [Characters](#characters) · [Quests and dialogue](#quests-and-dialogue) · [Items, magic and scripts](#items-magic-and-scripts) · [The AI workspace](#the-ai-workspace) · [Your mod](#your-mod-records-cleaning-and-release) · [Finding your way](#finding-your-way)
 
 ### The world
 
@@ -194,6 +194,17 @@ Monaco editor for Papyrus with live errors, completion, hover, signature help an
 - The Scripts tab shows how many scripts need compiling, with a button for just those, and **Compile all** for every script. Errors are clickable and take you to the line.
 - **Compiling** shows what's ready. If the game's own script sources aren't unpacked yet, one click unpacks the Creation Kit's Scripts.zip.
 - You can still pick PapyrusCompiler.exe or your own Caprica.exe there instead.
+
+### The AI workspace
+
+The **AI** tab is a conversation with an AI that works through the editor itself. It can look through your load order and your plugin with the same calls the other tabs use, and tell you what it found in plain words. It uses the AI chosen in **Settings → AI** (Claude, or a free one on your PC or online; the same choice as Quests → From writing).
+
+- **Ask anything about your mod:** "What's in my plugin?", "How does this quest start?", "Where is Lydia used?", "What should I fix before release?". Starting points are offered when a conversation is empty.
+- **Every tool the AI uses shows as a card** saying what it did ("Read DemoInnkeeper", "Run the release check"), with **Details** (what the tool returned) and **Open** (the record, quest, cell or script in its own tab).
+- **Include what I have open** (on by default) tells the AI which quest, character, cell, record or script you have open, so you can say "this quest" or "her". Only names and FormKeys are sent.
+- **What it can do so far:** search records by name or Editor ID and kind; read any record in full; look at the load order, a quest (stages, journal, objectives, aliases, what moves it on), a quest's dialogue (as a screenplay, with the dialogue check), places and what's in them, a character's routine, what uses a record, scripts (read and check), the Items and Magic categories, the release check and the conflict report. It doesn't change anything yet; making changes comes next.
+- **Conversations are kept** in a list on the left (saved in `TES5EnvEditor/ai-conversations.json` next to your plugins) and can be deleted. **Stop** ends the AI's turn at once.
+- **Claude** works through Anthropic's tool use. **Free AIs** use their own function calling (Ollama, and services with the OpenAI-style API). A model that can't call tools is given them in words and answers in a small JSON format instead. Small models get fewer tool calls per turn and shorter results.
 
 ### Your mod: records, cleaning and release
 

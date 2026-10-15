@@ -27,14 +27,14 @@ const KINDS = [
 ] as const;
 
 /** A one-line summary with a Change button, or the full settings while choosing. */
-export function AiPicker() {
+export function AiPicker({ verb = 'Planning with', help = "Your text and a list of the characters, places, voices and races in your load order are sent to this AI to make the plan. Nothing is built until you've checked it." }: { verb?: string; help?: string } = {}) {
   const { ready, name } = useAi();
   const [open, setOpen] = useState(!ready);
   if (!open && ready)
     return (
       <div className="row small dim" style={{ gap: 6 }} data-testid="ai-summary">
-        <Icon name="check" size={12} /> Planning with {name}
-        <Help text="Your text and a list of the characters, places, voices and races in your load order are sent to this AI to make the plan. Nothing is built until you've checked it." />
+        <Icon name="check" size={12} /> {verb} {name}
+        <Help text={help} />
         <span className="grow" />
         <button className="btn small ghost" onClick={() => setOpen(true)} data-testid="ai-change">
           Change AI

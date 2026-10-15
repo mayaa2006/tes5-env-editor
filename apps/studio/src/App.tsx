@@ -20,6 +20,7 @@ const CleanerView = lazy(() => import('./views/CleanerView'));
 const AutomationsView = lazy(() => import('./views/AutomationsView'));
 const ReleaseView = lazy(() => import('./views/ReleaseView'));
 const ScriptList = lazy(() => import('./views/script/ScriptList'));
+const AiWorkspace = lazy(() => import('./views/ai/AiWorkspace'));
 
 const TABS: { id: WorkspaceTab; label: string; icon: string; key?: string; hint: string }[] = [
   { id: 'scene', label: 'World', icon: 'scene', key: '1', hint: 'Cells, placing objects, navmesh and world tools' },
@@ -28,6 +29,7 @@ const TABS: { id: WorkspaceTab; label: string; icon: string; key?: string; hint:
   { id: 'items', label: 'Items', icon: 'items', key: '3', hint: 'Weapons, armor, potions, books, loot lists and crafting recipes' },
   { id: 'magic', label: 'Magic', icon: 'magic', key: '4', hint: 'Spells, powers, abilities, enchantments, shouts and perks' },
   { id: 'quest', label: 'Quests', icon: 'quest', key: '5', hint: 'Quest map, dialogue and quests from writing' },
+  { id: 'ai', label: 'AI', icon: 'ai', hint: 'Talk to an AI that looks through your load order and plugin, explains how things are set up and finds problems' },
   { id: 'script', label: 'Scripts', icon: 'script', key: '6', hint: 'Papyrus scripts' },
   { id: 'records', label: 'Records', icon: 'records', key: '7', hint: 'Every record of every type, and how plugins conflict' },
   { id: 'clean', label: 'Clean', icon: 'clean', key: '8', hint: 'Clean dirty edits from a plugin' },
@@ -127,6 +129,7 @@ export function App() {
             {tab === 'items' && <CatalogView key="items" tab="items" />}
             {tab === 'magic' && <CatalogView key="magic" tab="magic" />}
             {tab === 'quest' && <QuestDesigner />}
+            {tab === 'ai' && <AiWorkspace />}
             {tab === 'script' && <ScriptEditor />}
             {tab === 'records' && <RecordsView />}
             {tab === 'clean' && <CleanerView />}

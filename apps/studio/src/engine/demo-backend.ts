@@ -1,8 +1,8 @@
 /** In-page engine on the synthetic demo data set (used when not running in Electron). */
-import { MemoryFileSystem, createDemoData, type WorkspaceEvent } from '@tes5/workspace';
+import { MemoryFileSystem, createDemoData } from '@tes5/workspace';
 import type { HostBridge } from './client';
 import { DEMO_GAME_DIR } from './constants';
-import { EngineHost } from './host';
+import { EngineHost, type HostEvent } from './host';
 
 export { DEMO_GAME_DIR };
 
@@ -10,7 +10,7 @@ export async function createDemoBridge(): Promise<HostBridge> {
   const fs = new MemoryFileSystem();
   createDemoData(fs, DEMO_GAME_DIR);
   const host = new EngineHost(fs);
-  const listeners = new Set<(e: WorkspaceEvent) => void>();
+  const listeners = new Set<(e: HostEvent) => void>();
   host.onEvent((e) => {
     for (const l of listeners) l(e);
   });
