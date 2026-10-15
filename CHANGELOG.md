@@ -2,6 +2,15 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.28.0
+
+- **The AI tab can build and change places.** It uses the World tab's own tools:
+  - **New interiors** copied from a fitting one, with a linked door where the player comes in.
+  - **Objects where they belong:** items on tables and shelves, furniture and characters on open floor next to what you name ("by the fire"); moved, turned, dropped to the floor or removed.
+  - **Rooms dressed and lit** for their use (tavern, home, storeroom, study, alchemy lab, smithy), with a lighting mood and lights for candles and fires.
+  - **Doors and navmesh:** linked doors, and a cell's navmesh generated.
+- New starting point: **Dress and light a room** (the cell you have open in the World tab).
+
 ## 0.27.0
 
 - **The AI tab can make characters, items, magic and scripts.**

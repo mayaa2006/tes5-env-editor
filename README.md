@@ -211,6 +211,11 @@ The **AI** tab is a conversation with an AI that works through the editor itself
   - **New characters**, copied from a fitting one and placed in a cell, exactly as planned characters are: look, outfit, inventory, factions, class, level, routine, combat, services (follower, marriage, merchant, trainer, innkeeper) and relationships. **Existing characters** change only in what you ask (overridden in your plugin).
   - **Items, spells, perks, lists and any other record:** a new one with sensible defaults (any Items or Magic category, or a record type), a copy of an existing one, changes to its fields (the AI reads a similar record first to learn the field names), or deleting one (records from other plugins are disabled or reverted instead).
   - **Scripts:** write a script (saved only if the editor's checker finds no errors, and undone with the turn), compile, attach to a record, set its properties or auto-fill them.
+- **Places and the world it can build and change**, with the World tab's own tools:
+  - **A new interior** copied from a fitting one (rooms, furniture, lights and clutter), with a linked door where the player comes in.
+  - **Objects placed where they belong:** items on tables and shelves, furniture and characters on open floor, next to what you name ("by the fire", "behind the bar"); moved, turned, dropped to the floor or removed (objects from other plugins are disabled, not deleted).
+  - **Rooms dressed and lit:** clutter for a tavern, home, storeroom, study, alchemy lab or smithy, a lighting mood, and lights for every candle, torch and fire.
+  - **Doors and navmesh:** a door elsewhere that leads to an existing door, two doors linked to each other, and a cell's navmesh generated.
 - **You stay in charge of changes:**
   - **Ask before each change** (on by default): the AI stops before each change and waits for **Allow** or **Skip**. Turn it off to let it work and check afterwards.
   - **Each turn's changes are one undo step.** Under each turn that changed something, **Changes in this turn** lists them, with **Undo these changes**. Ctrl+Z does the same right after the turn.
