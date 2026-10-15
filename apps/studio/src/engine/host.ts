@@ -115,6 +115,7 @@ import {
   sessionTitle,
 } from '@tes5/workspace';
 import { aiTools } from './aitools';
+import { questProblems, type QuestToolContext } from './aitools-quest';
 import type { CleanOptions } from '@tes5/cleaner';
 
 export interface SessionInfo {
@@ -1562,6 +1563,8 @@ export class EngineHost {
   /** Conversations, loaded from TES5EnvEditor/ai-conversations.json in the output folder on first use. */
   private aiSessions?: Map<string, AgentSession>;
   private aiRuns = new Map<string, { abort: AbortController; approvals: Map<string, (ok: boolean) => void> }>();
+  /** Plans the AI made in each conversation (kept while the app runs). */
+  private aiPlans = new Map<string, QuestToolContext['plans']>();
   /** Tests swap in a scripted model. */
   aiModel: (ai: AiProvider) => AgentModel = (ai) => agentModel(ai);
 
@@ -1646,11 +1649,17 @@ export class EngineHost {
     this.aiRuns.set(id, run);
     const depth = ws.undoDepth;
     const at = session.messages.length;
+    if (!this.aiPlans.has(id)) this.aiPlans.set(id, new Map());
+    const ctx: QuestToolContext = { ai: asAi(ai), plans: this.aiPlans.get(id)!, touched: new Set() };
     try {
-      const res = await runAgentTurn(model, session, { text: text.trim(), context: opts.context }, aiTools(this), {
+      const res = await runAgentTurn(model, session, { text: text.trim(), context: opts.context }, aiTools(this, ctx), {
         signal: run.abort.signal,
         onEvent: (event) => this.emitHost({ type: 'ai', event }),
-        transaction: (label, fn) => ws.transactionAsync(label, fn),
+        transaction: async (label, fn) => {
+          if (!ws.activeName) throw new Error('No plugin is chosen for changes yet. Ask the author to choose or create one (the plugin chip at the top right, or the Plugins tab), then try again.');
+          return ws.transactionAsync(label, fn);
+        },
+        checkChanges: () => questProblems(this, ctx.touched),
         approve: opts.ask
           ? (call) =>
               new Promise<boolean>((resolve) => {

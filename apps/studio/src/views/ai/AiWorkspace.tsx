@@ -5,7 +5,7 @@
  * to open the result in its own tab.
  */
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { AgentEvent, AgentLink, AgentMessage, AgentSession, AgentToolResult } from '@tes5/workspace';
+import type { AgentEvent, AgentLink, AgentMessage, AgentSession, AgentToolResult, AgentTurn } from '@tes5/workspace';
 import type { FormKey } from '@tes5/esp';
 import type { AiSessionInfo } from '../../engine/host';
 import { Checkbox, EmptyState, Icon, Modal, useDraft, useSummaries } from '../../components/ui';
@@ -14,6 +14,8 @@ import { engine, useStore, type WorkspaceTab } from '../../state/store';
 
 /** Things to ask, for an empty conversation. */
 const STARTERS: { label: string; text: string; title: string }[] = [
+  { label: 'Make a quest from my idea', text: 'Make a quest: ', title: 'Describe the quest after the colon; the AI plans it, tells you the plan, and builds it when you agree' },
+  { label: 'Add to the open quest', text: 'In the quest I have open, add ', title: 'Open a quest in the Quests tab first, then say what to add (a stage, an objective, dialogue…)' },
   { label: "What's in my plugin?", text: 'What does my plugin contain so far? Group it by kind and point out anything unfinished.', title: 'The AI lists your records and points out loose ends' },
   { label: 'Explain a quest', text: 'Explain how the quest I have open works: how it starts, what moves it from stage to stage, and how it ends.', title: 'Open a quest in the Quests tab first, or name it' },
   { label: 'Find problems before release', text: 'Run the release check and the conflict report, and tell me what to fix first and how.', title: 'The AI runs the release check and conflict report and sorts what to fix' },
@@ -118,7 +120,19 @@ export default function AiWorkspace() {
           ))}
         </div>
       </aside>
-      <Conversation session={session} live={live} running={running} onSend={send} onStop={() => current && void engine((c) => c.call('aiStop', current), { refreshSession: false })} />
+      <Conversation
+        session={session}
+        live={live}
+        running={running}
+        onSend={send}
+        onStop={() => current && void engine((c) => c.call('aiStop', current), { refreshSession: false })}
+        onApprove={(callId, ok) => current && void engine((c) => c.call('aiApprove', current, callId, ok), { refreshSession: false })}
+        onUndoTurn={async (n) => {
+          if (!current) return;
+          const s = await engine((c) => c.call('aiUndoTurn', current, n), { success: 'The changes of that turn were undone' });
+          if (s) setSession(s);
+        }}
+      />
       {deleting && (
         <Modal
           title="Delete this conversation?"
@@ -176,8 +190,27 @@ function reduceLive(l: Live, ev: AgentEvent): Live {
   }
 }
 
-function Conversation({ session, live, running, onSend, onStop }: { session: AgentSession | null; live?: Live; running: boolean; onSend: (text: string, ctx: string | undefined, ai: unknown, ask: boolean) => Promise<boolean>; onStop: () => void }) {
+function Conversation({
+  session,
+  live,
+  running,
+  onSend,
+  onStop,
+  onApprove,
+  onUndoTurn,
+}: {
+  session: AgentSession | null;
+  live?: Live;
+  running: boolean;
+  onSend: (text: string, ctx: string | undefined, ai: unknown, ask: boolean) => Promise<boolean>;
+  onStop: () => void;
+  onApprove: (callId: string, ok: boolean) => void;
+  onUndoTurn: (turn: number) => void;
+}) {
   const { ai, ready, name } = useAi();
+  const askFirst = useStore((s) => s.settings.aiAskFirst);
+  const update = useStore((s) => s.updateSettings);
+  const plugin = useStore((s) => s.session.activePlugin);
   const [text, setText] = useDraft('ai:message', '');
   const [withContext, setWithContext] = useState(true);
   const context = useEditorContext();
@@ -185,6 +218,7 @@ function Conversation({ session, live, running, onSend, onStop }: { session: Age
   const messages = session?.messages ?? [];
   useEffect(() => end.current?.scrollIntoView({ block: 'end' }), [messages.length, live?.text, live?.calls.length]);
 
+  const turnEnds = useTurnEnds(session);
   // Tool results by call id, to show each call with its outcome.
   const results = useMemo(() => {
     const m = new Map<string, AgentToolResult>();
@@ -194,7 +228,7 @@ function Conversation({ session, live, running, onSend, onStop }: { session: Age
 
   const submit = async (t = text) => {
     if (!t.trim() || running || !ready) return;
-    const ok = await onSend(t.trim(), withContext && context.text ? context.text : undefined, ai, false);
+    const ok = await onSend(t.trim(), withContext && context.text ? context.text : undefined, ai, askFirst);
     if (ok) setText('');
   };
 
@@ -206,7 +240,7 @@ function Conversation({ session, live, running, onSend, onStop }: { session: Age
       <div className="scroll grow ai-messages" data-testid="ai-messages">
         {!messages.length && !live && (
           <EmptyState icon="ai" title="Ask the AI about your mod" testId="ai-empty">
-            It can look through your load order and your plugin, explain how quests and characters are set up, and find problems before release. Pick a starting point or write your own question below.
+            It can look through your load order and your plugin, explain how things are set up, find problems before release, and make quests and dialogue for you. Each change it makes shows here and can be undone. Pick a starting point or write your own below.
             <div className="row wrap" style={{ gap: 6, marginTop: 10, justifyContent: 'center' }}>
               {STARTERS.map((s) => (
                 <button key={s.label} className="btn small" title={s.title} onClick={() => setText(s.text)} data-testid="ai-starter">
@@ -217,24 +251,43 @@ function Conversation({ session, live, running, onSend, onStop }: { session: Age
           </EmptyState>
         )}
         {messages.map((m, i) => (
-          <MessageView key={i} m={m} results={results} />
+          <Fragment key={i}>
+            <MessageView m={m} results={results} />
+            {turnEnds.has(i) && <TurnSummary turn={turnEnds.get(i)!.turn} last={turnEnds.get(i)!.index === (session?.turns.length ?? 0) - 1} onUndo={() => onUndoTurn(turnEnds.get(i)!.index)} running={running} />}
+          </Fragment>
         ))}
         {live && (
           <div className="ai-msg assistant" data-testid="ai-live">
+            {live.text && <Markdown text={live.text} />}
             {live.calls.map((c) => (
-              <ToolCard key={c.id} summary={c.summary} writes={c.writes} status={c.status} result={c.result} />
+              <ToolCard key={c.id} summary={c.summary} writes={c.writes} status={c.status} result={c.result} onApprove={c.status === 'waiting' ? (ok) => onApprove(c.id, ok) : undefined} />
             ))}
-            {live.text ? <Markdown text={live.text} /> : <div className="dim small ai-thinking">{name} is working…</div>}
+            {!live.calls.some((c) => c.status === 'waiting') && <div className="dim small ai-thinking">{name} is working…</div>}
           </div>
         )}
         <div ref={end} />
       </div>
       <div className="ai-compose">
-        {context.text && (
-          <div className="row small" style={{ gap: 6 }}>
-            <Checkbox checked={withContext} onChange={setWithContext} label={<span className="ellipsis">Include what I have open: {context.label}</span>} help="Tells the AI which tab you're on and what's selected there (names and FormKeys only), so you can say “this quest” or “her”." />
+        {!plugin && (
+          <div className="row small ai-hint" data-testid="ai-no-plugin">
+            <Icon name="warn" size={12} />
+            <span className="grow">Changes go into a plugin, and none is chosen yet. The AI can still look around and answer questions.</span>
+            <button className="btn small" onClick={() => useStore.getState().setPluginPrompt({})} title="Choose the plugin the AI's changes (and yours) go into, or make a new one">
+              Choose or create a plugin
+            </button>
           </div>
         )}
+        <div className="row small wrap" style={{ gap: 12 }}>
+          {context.text && (
+            <Checkbox checked={withContext} onChange={setWithContext} label={<span className="ellipsis">Include what I have open: {context.label}</span>} help="Tells the AI which tab you're on and what's selected there (names and FormKeys only), so you can say “this quest” or “her”." />
+          )}
+          <Checkbox
+            checked={askFirst}
+            onChange={(v) => update({ aiAskFirst: v })}
+            label="Ask before each change"
+            help="On: the AI stops before each change to your plugin and waits for Allow or Skip. Off: it makes the changes and you check them afterwards. Either way, a turn's changes can be undone together."
+          />
+        </div>
         <div className="row" style={{ gap: 6, alignItems: 'stretch' }}>
           <textarea
             className="ai-input"
@@ -266,6 +319,53 @@ function Conversation({ session, live, running, onSend, onStop }: { session: Age
   );
 }
 
+/** Where each turn ends in the message list, to show what it changed there. */
+function useTurnEnds(session: AgentSession | null) {
+  return useMemo(() => {
+    const m = new Map<number, { turn: AgentTurn; index: number }>();
+    const turns = session?.turns ?? [];
+    turns.forEach((t, n) => {
+      const end = (turns[n + 1]?.at ?? session!.messages.length) - 1;
+      if (t.changes.length || t.error) m.set(end, { turn: t, index: n });
+    });
+    return m;
+  }, [session]);
+}
+
+function TurnSummary({ turn, last, onUndo, running }: { turn: AgentTurn; last: boolean; onUndo: () => void; running: boolean }) {
+  if (!turn.changes.length)
+    return turn.error && turn.error !== 'Stopped.' ? (
+      <div className="ai-turn error small" data-testid="ai-turn-error">
+        <Icon name="warn" size={12} /> {turn.error}
+      </div>
+    ) : null;
+  return (
+    <div className={`ai-turn ${turn.undone ? 'undone' : ''}`} data-testid="ai-turn">
+      <div className="row" style={{ gap: 6 }}>
+        <Icon name="wand" size={12} />
+        <strong className="grow">{turn.undone ? 'Undone: ' : ''}Changes in this turn ({turn.changes.length})</strong>
+        {!turn.undone && turn.undoLabel && (
+          <button
+            className="btn small"
+            onClick={onUndo}
+            disabled={running || !last}
+            title={last ? 'Take back every change from this turn in one step (same as Undo, Ctrl+Z, right after it)' : 'Only the latest turn can be undone from here; use Undo (Ctrl+Z) to step back further'}
+            data-testid="ai-undo-turn"
+          >
+            <Icon name="undo" size={12} /> Undo these changes
+          </button>
+        )}
+      </div>
+      <ul>
+        {turn.changes.map((c, n) => (
+          <li key={n}>{c}</li>
+        ))}
+      </ul>
+      {turn.error && turn.error !== 'Stopped.' && <div className="small dim">Stopped early: {turn.error}</div>}
+    </div>
+  );
+}
+
 function MessageView({ m, results }: { m: AgentMessage; results: Map<string, AgentToolResult> }) {
   if (m.role === 'tool') return null;
   if (m.role === 'user') {
@@ -273,7 +373,16 @@ function MessageView({ m, results }: { m: AgentMessage; results: Map<string, Age
     const fromEditor = m.text.startsWith("The editor's checks found");
     return (
       <div className={`ai-msg ${fromEditor ? 'system' : 'user'}`} data-testid={fromEditor ? 'ai-msg-checks' : 'ai-msg-user'}>
-        {fromEditor ? <Markdown text={m.text} /> : <div className="ai-user-text">{m.text}</div>}
+        {fromEditor ? (
+          <>
+            <div className="small" style={{ fontWeight: 600 }}>
+              The editor checked the changes and sent these problems back to the AI:
+            </div>
+            <Markdown text={m.text.split('\n').filter((l) => l.startsWith('- ')).join('\n')} />
+          </>
+        ) : (
+          <div className="ai-user-text">{m.text}</div>
+        )}
       </div>
     );
   }
@@ -298,7 +407,7 @@ const STATUS: Record<string, { label: string; cls: string; title: string }> = {
   stopped: { label: 'Stopped', cls: '', title: 'Not run: the turn was stopped' },
 };
 
-function ToolCard({ summary, writes, status, result }: { summary: string; writes: boolean; status: string; result?: AgentToolResult }) {
+function ToolCard({ summary, writes, status, result, onApprove }: { summary: string; writes: boolean; status: string; result?: AgentToolResult; onApprove?: (ok: boolean) => void }) {
   const [open, setOpen] = useState(false);
   const st = STATUS[status] ?? STATUS.done!;
   const go = useOpenLink();
@@ -319,9 +428,20 @@ function ToolCard({ summary, writes, status, result }: { summary: string; writes
             {open ? 'Hide' : 'Details'}
           </button>
         )}
-        <span className={`chip ${st.cls}`} title={st.title}>
-          {st.label}
-        </span>
+        {onApprove ? (
+          <>
+            <button className="btn small primary" onClick={() => onApprove(true)} title="Let the AI make this change (it can be undone)" data-testid="ai-allow">
+              Allow
+            </button>
+            <button className="btn small" onClick={() => onApprove(false)} title="Don't make this change; the AI is told and carries on without it" data-testid="ai-skip">
+              Skip
+            </button>
+          </>
+        ) : (
+          <span className={`chip ${st.cls}`} title={st.title}>
+            {st.label}
+          </span>
+        )}
       </div>
       {result?.note && status !== 'done' && <div className="small dim">{result.note}</div>}
       {open && result && <pre className="ai-tool-details mono small">{readable(result.content)}</pre>}

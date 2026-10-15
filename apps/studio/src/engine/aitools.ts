@@ -11,6 +11,7 @@ import { z } from 'zod';
 import { isFormKey, type FormKey } from '@tes5/esp';
 import { WorkspaceError, type AgentTool, type RecordSummary } from '@tes5/workspace';
 import type { EngineHost } from './host';
+import { questTools, type QuestToolContext } from './aitools-quest';
 
 /** Common record types, so the AI can narrow a search by kind in plain words. */
 const KINDS: Record<string, string[]> = {
@@ -58,7 +59,8 @@ function line(s: RecordSummary): Record<string, unknown> {
   return { formKey: s.formKey, type: s.sig, editorId: s.editorId, name: s.name || undefined, from: s.owner, ...(s.winner !== s.owner ? { changedBy: s.winner } : {}), ...(s.inActive ? { inYourPlugin: true } : {}), ...(s.base ? { placed: s.base } : {}) };
 }
 
-export function aiTools(host: EngineHost): AgentTool[] {
+/** The tools for one conversation; with a context, the ones that change things too. */
+export function aiTools(host: EngineHost, ctx?: QuestToolContext): AgentTool[] {
   const ws = () => {
     if (!host.ws) throw new WorkspaceError('No game data is open');
     return host.ws;
@@ -308,6 +310,7 @@ export function aiTools(host: EngineHost): AgentTool[] {
       },
     },
   ];
+  if (ctx) tools.push(...questTools(host, ctx));
   return tools;
 }
 

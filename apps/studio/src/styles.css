@@ -1625,3 +1625,33 @@ table.grid tr.diff td {
     grid-template-columns: 200px 1fr;
   }
 }
+.ai-turn {
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--ok);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  padding: 6px 10px;
+  margin: 0 0 14px;
+}
+.ai-turn ul {
+  margin: 4px 0 0;
+  padding-left: 20px;
+}
+.ai-turn.undone {
+  border-left-color: var(--text-faint);
+  opacity: 0.75;
+}
+.ai-turn.error {
+  border-left-color: var(--err);
+  color: var(--text-dim);
+}
+.ai-hint {
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--warn);
+}
+.ai-hint span {
+  color: var(--text-dim);
+}
