@@ -12,6 +12,7 @@ import { isFormKey, type FormKey } from '@tes5/esp';
 import { WorkspaceError, type AgentTool, type RecordSummary } from '@tes5/workspace';
 import type { EngineHost } from './host';
 import { questTools, type QuestToolContext } from './aitools-quest';
+import { moreTools } from './aitools-more';
 
 /** Common record types, so the AI can narrow a search by kind in plain words. */
 const KINDS: Record<string, string[]> = {
@@ -310,7 +311,7 @@ export function aiTools(host: EngineHost, ctx?: QuestToolContext): AgentTool[] {
       },
     },
   ];
-  if (ctx) tools.push(...questTools(host, ctx));
+  if (ctx) tools.push(...questTools(host, ctx), ...moreTools(host));
   return tools;
 }
 

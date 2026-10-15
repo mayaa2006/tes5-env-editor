@@ -2,6 +2,15 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.27.0
+
+- **The AI tab can make characters, items, magic and scripts.**
+  - **Characters:** a new character is copied from a fitting one, placed where you say, and given the look, clothes, inventory, factions, class, level, routine, fighting style, services (follower, marriage, merchant, trainer, innkeeper) and relationships you describe. Existing characters change only in what you ask.
+  - **Items, spells, perks and lists:** new ones, copies of existing ones, changed fields (the AI looks at a similar record first), or removed ones.
+  - **Scripts:** written only if the editor's checker finds no errors, then compiled, attached and given their properties (or auto-filled).
+  - As with quests, each change can wait for **Allow**, and a turn's changes undo together (scripts too).
+- Two new starting points on the AI tab: **Make a character** and **Make an item or spell**.
+
 ## 0.26.0
 
 - **The AI tab can make and change quests and dialogue.**
