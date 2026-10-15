@@ -32,7 +32,7 @@ export const PlanCharacterSchema = z.object({
   name: z.string().describe('Name shown in game'),
   existing: z.string().nullable().describe('Editor ID or name of an existing character from the load order to use (and change, if the text asks) instead of creating one; null to create a new character'),
   basedOn: z.string().nullable().describe('For a new character: an existing character to copy (Editor ID or name) when the text says they are like someone; null to pick one automatically'),
-  sex: z.enum(['male', 'female']).nullable(),
+  sex: z.enum(['male', 'female']).nullable().describe('For existing characters null leaves it as it is'),
   race: z.string().nullable().describe('Race name or Editor ID from the load order, e.g. "Nord"'),
   role: z.string().describe('What they do in the story, e.g. "innkeeper who gives the quest"'),
   appearance: z.string().describe('Short appearance notes, e.g. "middle-aged, grey braids, scar on cheek"'),
@@ -42,7 +42,7 @@ export const PlanCharacterSchema = z.object({
   spot: z.string().nullable().describe('Where in that location, e.g. "behind the bar", "by the forge", "next to the fire"; null for anywhere sensible'),
   essential: z.boolean().nullable().describe("True: can't be killed. For existing characters null leaves it as it is"),
   className: z.string().nullable().describe('Class name or Editor ID (e.g. "Warrior", "Citizen"); null to leave or keep the copied one'),
-  level: z.number().int().nullable(),
+  level: z.number().int().nullable().describe('Fixed level (e.g. 5 for a villager, 20 for a seasoned fighter); null to leave or copy'),
   outfit: z
     .object({
       items: z.array(z.string()).describe('What they wear: item keys from this plan (new clothing) or names/Editor IDs of existing clothing and armour'),
@@ -100,21 +100,21 @@ export const PlanEncounterSchema = z.object({
 
 export const PlanLocationSchema = z.object({
   key: Key,
-  name: z.string(),
-  existing: z.string().nullable().describe('Editor ID or name of an existing cell; null to create a new interior'),
-  description: z.string(),
+  name: z.string().describe('Name shown in game, e.g. "Riverside Cave"'),
+  existing: z.string().nullable().describe('Editor ID of an existing interior from the load order list; null to create a new interior'),
+  description: z.string().describe('What the place is, in a few words'),
   layoutLike: z.string().nullable().describe('For a new interior: Editor ID of an existing interior from the load order whose rooms, furniture, lights and clutter are copied (pick one that fits: an inn, a house, a cave, a shop…); null leaves it empty'),
   doorFrom: z.string().nullable().describe('For a new interior: location key or Editor ID of the place the player enters it from (a door is put there and linked); null for no door'),
 });
 
 export const PlanItemSchema = z.object({
   key: Key,
-  name: z.string(),
-  kind: z.enum(['misc', 'book', 'key', 'gold', 'clothing', 'armor', 'weapon', 'potion', 'other']),
+  name: z.string().describe('Name shown in game, e.g. "Brynja\'s Ring"'),
+  kind: z.enum(['misc', 'book', 'key', 'gold', 'clothing', 'armor', 'weapon', 'potion', 'other']).describe('misc: a trinket or quest object (rings, letters to deliver); book: a note, letter or book the player can read; key: opens a locked door or chest'),
   existing: z.string().nullable().describe('Editor ID or name of an existing item to use; null to create a new one'),
   basedOn: z.string().nullable().describe('For a new item: an existing item it is a variant of (e.g. "Fine Clothes", "Iron Sword"), copied for its model; null to pick one'),
-  value: z.number().nullable(),
-  startsWith: z.enum(['location', 'character', 'player', 'nowhere']).describe('Where the item is when the quest begins'),
+  value: z.number().nullable().describe('Price in gold; null to pick one'),
+  startsWith: z.enum(['location', 'character', 'player', 'nowhere']).describe('Where the item is when the quest begins. location: lying somewhere (needed for anything the player must pick up or read); character: carried by a character (e.g. to hand over with [gives …]); player: the player has it; nowhere: given later'),
   startsAtKey: z.string().nullable().describe('Location or character key for startsWith location/character'),
   spot: z.string().nullable().describe('Where in the location, e.g. "in the chest by the bed", "on the bar", "under the table"; null for a table'),
 });
@@ -122,35 +122,35 @@ export const PlanItemSchema = z.object({
 export const PlanStageSchema = z.object({
   index: z.number().int().describe('Stage number: 0 or 10 to start, then steps of 10; the final stage is usually 100 or 200'),
   journal: z.string().describe('Journal text shown when this stage is reached, written in first person past tense; empty for silent stages'),
-  startsQuest: z.boolean(),
-  completesQuest: z.boolean(),
-  failsQuest: z.boolean(),
+  startsQuest: z.boolean().describe('True on exactly one stage: the first'),
+  completesQuest: z.boolean().describe('True on the final stage (on each final stage when there are several endings)'),
+  failsQuest: z.boolean().describe('True on a stage that fails the quest (used by failures)'),
 });
 
 export const PlanObjectiveSchema = z.object({
-  index: z.number().int(),
+  index: z.number().int().describe('Objective number: use the number of the stage that shows it'),
   text: z.string().describe('Short instruction, e.g. "Find Brynja\'s ring"'),
-  shownAtStage: z.number().int(),
-  completedAtStage: z.number().int().nullable(),
+  shownAtStage: z.number().int().describe('Stage number at which it appears'),
+  completedAtStage: z.number().int().nullable().describe('Stage number at which it is ticked off; null if never'),
   targetKey: z.string().nullable().describe('Character, item or location key the quest marker points at'),
 });
 
 export const PlanStepSchema = z.object({
   from: z.number().int().nullable().describe('Stage the player must be at (null = any time)'),
   to: z.number().int().describe('Stage this step sets'),
-  kind: z.enum(['talk', 'pickup', 'activate', 'death', 'arrive', 'read', 'equip', 'drop', 'script', 'clear']),
+  kind: z.enum(['talk', 'pickup', 'activate', 'death', 'arrive', 'read', 'equip', 'drop', 'script', 'clear']).describe('talk: a conversation line with [stage N] does it (add the tag too); pickup / read / equip / drop: the player does this with an item; activate: the player uses an item or character; death: a character dies; arrive: the player enters a location; clear: every enemy in an encounter is dead; script: right away after the "from" stage'),
   targetKey: z.string().nullable().describe('Item key (pickup/drop/read/equip/activate), character key (death/activate), location key (arrive) or encounter key (clear: every enemy in the group is dead); null for talk and script'),
   note: z.string().describe('What happens, in a few words'),
 });
 
 export const PlanConversationSchema = z.object({
-  title: z.string(),
+  title: z.string().describe('Who it is with, e.g. "Brynja"'),
   screenplay: z.string().describe('The conversation in screenplay format (see the instructions): NAME: line, indentation for choices, tags like [stage 20], [if stage 10], [if has ring], [if speech 50], [goodbye], [once], [persuade 50], [emotion happy], [gives key x1], [takes key x1], [gesture point]; GREETING:, IDLE: and SCENE: name [at stage N] blocks for lines nobody prompts'),
 });
 
 export const PlanAnimationSchema = z.object({
-  atStage: z.number().int(),
-  characterKey: z.string(),
+  atStage: z.number().int().describe('Stage number at which they play it'),
+  characterKey: z.string().describe('Character key from this plan'),
   gesture: z.string().describe('A gesture name from the instructions, e.g. "wave", "laugh", "pray"'),
 });
 
@@ -190,26 +190,26 @@ export const PlanFailureSchema = z.object({
 });
 
 export const PlanRewardSchema = z.object({
-  atStage: z.number().int(),
-  gold: z.number().int().nullable(),
-  itemKey: z.string().nullable(),
+  atStage: z.number().int().describe('Stage number at which the player gets it (usually the final one)'),
+  gold: z.number().int().nullable().describe('Gold to give; null for none'),
+  itemKey: z.string().nullable().describe('Item key from this plan to give; null for none'),
 });
 
 export const QuestPlanSchema = z.object({
   title: z.string().describe('Quest name shown in the journal'),
   editorId: z.string().describe('Editor ID: letters and digits only, e.g. "MyRingQuest"'),
-  summary: z.string(),
+  summary: z.string().describe('The quest in one or two sentences'),
   startsWithGame: z.boolean().describe('True when the quest must be running from the start so its opening dialogue is available'),
   startsWhen: PlanStartSchema.nullable().describe('What starts the quest when it does not start with the game: entering a place, reading a note, picking something up, using something, or another quest reaching a stage; null when it starts with the game'),
-  characters: z.array(PlanCharacterSchema),
-  locations: z.array(PlanLocationSchema),
-  items: z.array(PlanItemSchema),
+  characters: z.array(PlanCharacterSchema).describe('Everyone who speaks, is changed, or matters to the quest'),
+  locations: z.array(PlanLocationSchema).describe('Places the plan refers to: existing interiors, or new ones'),
+  items: z.array(PlanItemSchema).describe('Quest items (to find, read, deliver or give as a reward) and new clothing or weapons'),
   encounters: z.array(PlanEncounterSchema).describe('Groups of enemies waiting somewhere (bandits in a cave, draugr in a tomb), taken from the load order'),
-  stages: z.array(PlanStageSchema),
-  objectives: z.array(PlanObjectiveSchema),
-  steps: z.array(PlanStepSchema),
-  conversations: z.array(PlanConversationSchema),
-  rewards: z.array(PlanRewardSchema),
+  stages: z.array(PlanStageSchema).describe('The quest\'s stages in order; empty when the text describes no quest'),
+  objectives: z.array(PlanObjectiveSchema).describe('What the player is told to do, shown on screen'),
+  steps: z.array(PlanStepSchema).describe('What moves the quest from one stage to the next; one for every stage after the first'),
+  conversations: z.array(PlanConversationSchema).describe('Dialogue, one conversation per character who talks'),
+  rewards: z.array(PlanRewardSchema).describe('Gold or items given at a stage, outside dialogue'),
   animations: z.array(PlanAnimationSchema).describe('Characters playing a gesture when the quest reaches a stage (outside dialogue)'),
   failures: z.array(PlanFailureSchema).describe('Ways the quest fails: someone dies, or time runs out'),
   events: z.array(PlanEventSchema).describe('Things that happen in the world when the quest reaches a stage: enemies appear, someone turns hostile, a door unlocks, something appears or vanishes, a fade to black, a sound, the weather'),
@@ -246,6 +246,83 @@ export function normalizePlan(plan: QuestPlan): QuestPlan {
   plan.animations ??= [];
   plan.rewards ??= [];
   return plan;
+}
+
+/**
+ * Mend the slips smaller models make, where the intent is clear:
+ * - a name, or a key in the wrong case, where a key belongs ("Brynja" for "brynja");
+ * - a quest or outfit Editor ID with spaces or punctuation ("The Lost Ring" → "TheLostRing");
+ * - stages with no start (the first one starts the quest).
+ * Returns what was changed, in words.
+ */
+export function repairPlan(plan: QuestPlan): string[] {
+  const changes: string[] = [];
+  // Called on raw answers before they're checked: anything not shaped as expected is left for the check to report.
+  type Obj = Record<string, unknown>;
+  const list = (v: unknown): Obj[] => (Array.isArray(v) ? v.filter((x): x is Obj => !!x && typeof x === 'object') : []);
+  const p = plan as unknown as Obj;
+  const entries = [...list(p.characters), ...list(p.locations), ...list(p.items), ...list(p.encounters)].filter((e) => typeof e.key === 'string' && e.key);
+  const keys = new Set(entries.map((e) => e.key as string));
+  const lookup = new Map(entries.map((e) => [(e.key as string).toLowerCase(), e.key as string]));
+  // Names count only when they're unambiguous.
+  const names = new Map<string, string | null>();
+  for (const e of entries) {
+    const n = typeof e.name === 'string' ? e.name.trim().toLowerCase() : '';
+    if (n) names.set(n, names.has(n) && names.get(n) !== e.key ? null : (e.key as string));
+  }
+  const fix = (o: Obj | null | undefined, field: string) => {
+    const v = o?.[field];
+    if (!o || typeof v !== 'string' || keys.has(v)) return;
+    const t = v.trim().toLowerCase();
+    const key = lookup.get(t) ?? names.get(t);
+    if (key) {
+      o[field] = key;
+      changes.push(`"${v}" → "${key}"`);
+    }
+  };
+  for (const c of list(p.characters)) {
+    fix(c, 'locationKey');
+    for (const r of list(c.routine)) fix(r, 'where');
+    for (const r of list(c.relationships)) fix(r, 'with');
+  }
+  for (const l of list(p.locations)) fix(l, 'doorFrom');
+  for (const i of list(p.items)) fix(i, 'startsAtKey');
+  for (const e of list(p.encounters)) fix(e, 'locationKey');
+  for (const o of list(p.objectives)) fix(o, 'targetKey');
+  for (const s of list(p.steps)) fix(s, 'targetKey');
+  for (const r of list(p.rewards)) fix(r, 'itemKey');
+  for (const a of list(p.animations)) fix(a, 'characterKey');
+  for (const e of list(p.events)) (fix(e, 'targetKey'), fix(e, 'toKey'));
+  for (const f of list(p.failures)) fix(f, 'targetKey');
+  if (p.startsWhen && typeof p.startsWhen === 'object') fix(p.startsWhen as Obj, 'targetKey');
+  const editorId = (v: string) => {
+    const id = v
+      .replace(/['’]/g, '')
+      .split(/[^A-Za-z0-9_]+/)
+      .filter(Boolean)
+      .map((w) => w[0]!.toUpperCase() + w.slice(1))
+      .join('');
+    return /^[A-Za-z]/.test(id) ? id : `Q${id}`;
+  };
+  const valid = (v: string) => /^[A-Za-z][A-Za-z0-9_]*$/.test(v);
+  if (typeof p.editorId === 'string' && p.editorId && !valid(p.editorId) && editorId(p.editorId).length > 1) {
+    changes.push(`quest Editor ID "${p.editorId}" → "${editorId(p.editorId)}"`);
+    p.editorId = editorId(p.editorId);
+  }
+  for (const c of list(p.characters)) {
+    const outfit = c.outfit as Obj | null | undefined;
+    if (outfit && typeof outfit.saveAs === 'string' && outfit.saveAs && !valid(outfit.saveAs)) {
+      changes.push(`outfit "${outfit.saveAs}" → "${editorId(outfit.saveAs)}"`);
+      outfit.saveAs = editorId(outfit.saveAs);
+    }
+  }
+  const stages = list(p.stages).filter((s) => typeof s.index === 'number');
+  if (stages.length && !stages.some((s) => s.startsQuest === true)) {
+    const first = stages.reduce((a, b) => ((b.index as number) < (a.index as number) ? b : a));
+    first.startsQuest = true;
+    changes.push(`stage ${first.index} starts the quest`);
+  }
+  return changes;
 }
 
 export interface PlanIssue {
