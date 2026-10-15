@@ -47,7 +47,7 @@ for (const size of [
 
     // Nothing yet: what it can do, and places to start.
     await expect(page.getByTestId('ai-empty')).toContainText('Ask the AI about your mod');
-    await expect(page.getByTestId('ai-starter')).toHaveCount(8);
+    await expect(page.getByTestId('ai-starter')).toHaveCount(9);
     // No key yet: the AI's settings are open and sending waits.
     await expect(page.getByTestId('ai-input')).toBeDisabled();
     await page.getByTestId('api-key').fill('sk-ant-test');
@@ -152,5 +152,39 @@ test('the AI asks before changing the plugin, and a turn undoes in one step (128
   await expect(page.getByTestId('ai-undo-turn')).toHaveCount(0);
   await page.locator('.workspace-tab', { hasText: 'Quests' }).click();
   await expect(page.getByText('AiRingQuest')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('with asking off, the AI dresses and lights a room straight away (1920×1080)', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  let n = 0;
+  await page.route('https://api.anthropic.com/**', async (route) => {
+    n++;
+    const answer =
+      n === 1
+        ? sse('', [
+            { id: 'tu_d', name: 'dress_room', input: { place: 'DemoTavern', theme: 'tavern', amount: 'light' } },
+            { id: 'tu_l', name: 'light_room', input: { place: 'DemoTavern', mood: 'tavern' } },
+          ])
+        : sse('The tavern is dressed and lit.');
+    await route.fulfill({ status: 200, headers: { 'content-type': 'text/event-stream', 'access-control-allow-origin': '*' }, body: answer });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: /Explore the demo/ }).click();
+  await page.getByTestId('load-plugins').click();
+  await page.locator('.workspace-tab', { hasText: 'AI' }).click();
+  await page.getByTestId('api-key').fill('sk-ant-test');
+  await page.getByTestId('api-key').blur();
+  await page.getByRole('checkbox', { name: 'Ask before each change' }).uncheck();
+  await page.getByTestId('ai-input').fill('Make the tavern feel lived in');
+  await page.getByTestId('ai-send').click();
+  const turn = page.getByTestId('ai-turn');
+  await expect(turn.locator('li')).toHaveText(['Dress DemoTavern as a tavern', 'Light DemoTavern (tavern)']);
+  await expect(page.getByTestId('ai-allow')).toHaveCount(0);
+  // Open goes to the cell in the World tab.
+  await page.getByTestId('ai-tool').nth(1).getByTestId('ai-tool-open').click();
+  await expect(page.locator('.workspace-tab.active')).toContainText('World');
   expect(errors).toEqual([]);
 });
