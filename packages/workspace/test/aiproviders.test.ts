@@ -54,8 +54,10 @@ describe('free AI providers', () => {
     expect(c.body.messages[0].content).toContain('with these fields');
     expect(c.body.messages[0].content).toContain('characters: list of {');
     expect(c.body.messages[0].content).not.toContain('"$defs"');
-    expect(c.body.messages[0].content).toContain('An example of a complete plan');
+    expect(c.body.messages[0].content).toContain('A worked example');
     expect(c.body.messages[1]).toEqual({ role: 'user', content: expect.stringContaining('Brynja lost her ring.') });
+    // The checklist comes last, after the text.
+    expect(c.body.messages[1].content).toMatch(/Brynja lost her ring\.[\s\S]*Before you answer, check the plan/);
   });
 
   it('plans with an OpenAI-style service, falling back to plain JSON mode when a schema is refused', async () => {

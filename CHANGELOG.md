@@ -2,6 +2,16 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.24.0
+
+- **Free AIs get better examples and instructions.**
+  - **The example that fits your text.** There are now three worked examples instead of one, and a free AI gets the one closest to what you wrote: finding and returning something; a rescue with bandits in a new cave, a boss you can spare or kill, two endings and failure if the hostage dies, started by reading a note; or new and changed characters with no quest (a merchant, trainer and follower, and a beard for someone who exists). Each comes with the writing it was made from, so the AI sees how writing turns into a plan.
+  - **A checklist at the end.** After your text comes a short list of the mistakes small models make most (names instead of keys, made-up Editor IDs, stages nothing reaches, dialogue that moves the quest without a step), to check before answering.
+  - **Every field explained.** The field guide now says what every field is for, including the ones that used to be bare (stage flags, objective and reward stages, step kinds, where an item starts).
+  - **Small slips are mended for you.** A name used where a key belongs ("Brynja" for "brynja"), a quest Editor ID with spaces, numbers or true/false in quotes, "Male" for "male", a list given as null, or no stage marked as the start are fixed without another round trip.
+  - **Clearer second tries.** When an answer doesn't match the format, the AI is told what each wrong field takes. When a plan refers to something that isn't in it, it's given the plan's keys and stage numbers to fix it against.
+- **Claude benefits too:** the field descriptions are part of the plan format it's given, and the same slips are mended.
+
 ## 0.23.0
 
 - **Free AIs write quests in steps, and better.** After the plan is made, each conversation is rewritten on its own, then the journal and objectives, with the whole plan in view and a short guide to how Skyrim's characters talk: short lines, fitting words, real choices for the player, and lines for when you come back early. A rewrite is only kept if it moves the quest the same way and adds no mistakes, so this can only improve the plan. It takes a little longer.

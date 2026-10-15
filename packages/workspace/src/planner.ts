@@ -20,11 +20,11 @@ import type { FormKey } from '@tes5/esp';
 import { GESTURES } from './gestures';
 import { z } from 'zod';
 import type { JournalContext, JournalDraft } from './journal';
-import { PLAN_EVENT_KINDS, QuestPlanSchema, normalizePlan, validatePlan, type PlanIssue, type QuestPlan } from './questplan';
+import { PLAN_EVENT_KINDS, QuestPlanSchema, normalizePlan, repairPlan, validatePlan, type PlanIssue, type QuestPlan } from './questplan';
 import { lintScreenplay } from './dialoguelint';
 import { aiName, chatSend, type AiProvider } from './aiproviders';
 import { WorldService } from './world';
-import { exampleQuestPlan } from './demo/example-plan';
+import { pickPlanExample } from './demo/example-plan';
 
 export const PLANNER_MODEL = 'claude-opus-5-5';
 
@@ -84,6 +84,31 @@ Gestures: ${GESTURES.map((g) => `${g.id} (${g.label.toLowerCase()})`).join(', ')
 Choices the quest remembers: [remember NAME] on a line stores a choice (e.g. [remember spared] when the player spares someone), [forget NAME] clears it, and [if chose NAME] / [if not chose NAME] only offers a line when the choice was (not) made. Use them for later lines that react to what the player did. More tags: [once] says a line only once; [persuade N] on a player line makes the first answer under it the success of a Speech check (Speech N) and the next answer the failure. Conditions in plain words: [if stage N] (also >=, <), [if done N] (stage N has been reached), [if has KEY xN], [if gold N], [if speech N], [if level N], [if female], [if male], [if race Nord], [if quest EditorID done]; several [if] tags on one line must all be true.
 Lines nobody prompts go in blocks: "GREETING:" then NPC lines said when the player comes up to them (put [if …] on the GREETING: line to apply to all), "IDLE:" then things they say to themselves, and "SCENE: name [at stage N]" then lines characters say to each other in order (use [start] instead of [at stage N] to play it when the quest starts). Use greetings to make characters react to how the quest is going ("Any luck with the ring?").
 Put [if stage N] on lines that only make sense at one point of the quest, so they don't show up at the wrong time. When a conversation moves the quest on, add a talk step with the same "to" stage.`;
+
+/**
+ * Read last by free AIs, after the author's text: the mistakes smaller models
+ * make most, as a check to run before answering. Models weigh the end of a
+ * prompt most, and a short list is easier to follow than the long rules.
+ */
+const CHECKLIST = `Before you answer, check the plan:
+1. Keys, not names: every locationKey, startsAtKey, targetKey, characterKey, itemKey, toKey, doorFrom and routine "where" is a key from characters, locations, items or encounters ("brynja", not "Brynja"), or an Editor ID from the load order list.
+2. "existing" is an Editor ID or name copied from the load order list, or null. Never make one up.
+3. Stages: one has startsQuest true, at least one has completesQuest true, and every other stage is set by a step or by a [stage N] tag in a conversation.
+4. Every stage number used anywhere (steps, objectives, rewards, events, animations, routines, failures, [stage N], [if stage N]) is in "stages".
+5. Every [stage N] tag in a conversation has a talk step with "to": N, and that line (or the line it answers) has an [if stage …] tag, so it's only offered at the right point.
+6. Conversation speakers are character keys in capitals (BRYNJA) or PLAYER. A top-level PLAYER line is followed by the answer; choices under an answer are indented by two spaces.
+7. Items the player picks up or reads have startsWith "location" and a location key in startsAtKey. Items handed over in dialogue are carried by the speaker (startsWith "character").
+8. Starting: talking to someone → startsWithGame true and startsWhen null; anything else → startsWithGame false and startsWhen filled in.
+9. Every field is there. Use null or [] where nothing applies, numbers without quotes, true/false without quotes.`;
+
+/** The plan's keys and stage numbers, to fix references against. */
+function planIndex(plan: QuestPlan): string {
+  const keys = (list: { key?: string }[] | undefined) => (list ?? []).map((e) => e.key).filter(Boolean).join(', ') || 'none';
+  return [
+    `Keys in the plan: characters ${keys(plan.characters)}; locations ${keys(plan.locations)}; items ${keys(plan.items)}; encounters ${keys(plan.encounters)}.`,
+    `Stage numbers: ${(plan.stages ?? []).map((s) => s.index).join(', ') || 'none'}.`,
+  ].join('\n');
+}
 
 const MODES: Record<PlannerMode, string> = {
   document: 'Here is the quest design document. Plan the whole quest it describes.',
@@ -197,8 +222,12 @@ export class QuestPlanner {
   /** A free AI (smaller models): they also get a worked example to copy. */
   private readonly free: boolean;
 
-  /** The request: the rules and the load order are cached; the author's text follows. */
-  request(messages: BetaMessageStreamParams['messages'], catalog: string): BetaMessageStreamParams {
+  /**
+   * The request: the rules and the load order are cached; the author's text follows.
+   * `text` (the author's writing) picks the worked example a free AI gets.
+   */
+  request(messages: BetaMessageStreamParams['messages'], catalog: string, text = ''): BetaMessageStreamParams {
+    const example = this.free ? pickPlanExample(text) : undefined;
     return {
       model: this.model,
       max_tokens: 64000,
@@ -207,7 +236,14 @@ export class QuestPlanner {
       system: [
         { type: 'text', text: RULES },
         // Smaller models copy an example far better than they follow long rules.
-        ...(this.free ? [{ type: 'text' as const, text: `An example of a complete plan, for a different quest. Follow its shape and level of detail, not its story:\n\n${JSON.stringify(exampleQuestPlan())}` }] : []),
+        ...(example
+          ? [
+              {
+                type: 'text' as const,
+                text: `A worked example, for a different quest. Follow its shape and level of detail, not its story. Its Editor IDs are only examples: use the ones in the load order list below.\n\nWhat that author wrote:\n<example_source>\n${example.document}\n</example_source>\n\nThe plan made from it:\n${JSON.stringify(example.plan())}`,
+              },
+            ]
+          : []),
         { type: 'text', text: `The load order (existing forms you can use):\n\n${catalog}`, cache_control: { type: 'ephemeral' } },
       ],
       messages,
@@ -219,7 +255,7 @@ export class QuestPlanner {
   /** Plan a quest from a design document or a conversation. */
   async plan(source: string, mode: PlannerMode, catalog: string): Promise<QuestPlan> {
     if (!source.trim()) throw new WorkspaceError('Write or paste something to plan from');
-    const params = this.request([{ role: 'user', content: `${MODES[mode]}\n\n<source>\n${source.trim()}\n</source>` }], catalog);
+    const params = this.request([{ role: 'user', content: `${MODES[mode]}\n\n<source>\n${source.trim()}\n</source>${this.free ? `\n\n${CHECKLIST}` : ''}` }], catalog, source);
     const plan = await this.fixLogic(params, await this.run<QuestPlan>(params));
     // Smaller models write better in small pieces: each conversation, then the journal, gets its own request.
     return this.free ? this.polish(plan, source) : plan;
@@ -239,7 +275,7 @@ export class QuestPlanner {
         messages: [
           ...params.messages,
           { role: 'assistant', content: JSON.stringify(plan) },
-          { role: 'user', content: `The plan has these problems, which would stop the quest working:\n${problems.map((p) => `- ${p.message}`).join('\n')}\nFix them, keep everything else as it is, and return the whole corrected plan.` },
+          { role: 'user', content: `The plan has these problems, which would stop the quest working:\n${problems.map((p) => `- ${p.message}`).join('\n')}\n\n${planIndex(plan)}\n\nFix them, keep everything else as it is, and return the whole corrected plan.` },
         ],
       });
       return blockingIssues(validatePlan(fixed)).length < problems.length ? fixed : plan;
@@ -324,9 +360,10 @@ export class QuestPlanner {
         [
           { role: 'user', content: source?.trim() ? `${MODES.document}\n\n<source>\n${source.trim()}\n</source>` : 'Plan a quest.' },
           { role: 'assistant', content: JSON.stringify(plan) },
-          { role: 'user', content: `Change the plan as follows, keep everything else as it is, and return the whole plan:\n\n${feedback.trim()}` },
+          { role: 'user', content: `Change the plan as follows, keep everything else as it is, and return the whole plan:\n\n${feedback.trim()}${this.free ? `\n\n${planIndex(plan)}\n\n${CHECKLIST}` : ''}` },
         ],
         catalog,
+        `${source ?? ''}\n${feedback}`,
       ),
     );
   }
@@ -368,19 +405,28 @@ export class QuestPlanner {
       if (schema === (QuestPlanSchema as unknown) && json && typeof json === 'object' && !('failures' in json)) (json as Record<string, unknown>).failures = [];
       // Smaller models leave fields out: empty lists and "none" are filled in, so only real gaps count.
       json = fillMissing(schema, json);
-      if (schema === (QuestPlanSchema as unknown) && json && typeof json === 'object') normalizePlan(json as QuestPlan);
+      if (schema === (QuestPlanSchema as unknown) && json && typeof json === 'object') repairPlan(normalizePlan(json as QuestPlan));
     } catch {
       throw new WorkspaceError(`${this.name}'s answer wasn't in the expected format. Try again${this.name === 'Claude' ? '' : ', or try a bigger model'}.`);
     }
     const parsed = schema.safeParse(json);
     if (parsed.success) return parsed.data;
-    const issues = parsed.error.issues.slice(0, 10).map((i) => `${i.path.join('.') || 'plan'}: ${i.message}`);
-    // One chance to fix it, told exactly what was wrong.
+    const wrong = parsed.error.issues.slice(0, 10);
+    const issues = wrong.map((i) => `${i.path.join('.') || 'plan'}: ${i.message}`);
+    // One chance to fix it, told exactly what was wrong and what each field takes.
+    const hinted = wrong.map((i, n) => {
+      const hint = fieldHint(schema, i.path);
+      return `${issues[n]}${hint ? ` (expected ${hint})` : ''}`;
+    });
     if (repair)
       return this.run(
         {
           ...params,
-          messages: [...params.messages, { role: 'assistant', content: text }, { role: 'user', content: `That plan doesn't match the format:\n${issues.join('\n')}\nReturn the whole corrected plan.` }],
+          messages: [
+            ...params.messages,
+            { role: 'assistant', content: text },
+            { role: 'user', content: `That plan doesn't match the format:\n${hinted.join('\n')}\nFill in every field, using null or [] where nothing applies. Return the whole corrected plan.` },
+          ],
         },
         schema,
         false,
@@ -400,7 +446,15 @@ const STYLE = `How lines should sound:
 - Plain, slightly old-fashioned words that fit a cold, rough land; no modern slang, no jokes about games, no "okay".
 - Characters sound like who they are: a guard is curt, an innkeeper friendly and busy, a noble formal, a thief sly. They treat the player as a stranger until the quest gives them a reason not to.
 - Player lines are short and say what the player would say: a helpful choice, a blunt or greedy one, and a way to refuse where it matters.
-- Show feelings in the words and with [emotion …], not by describing them.`;
+- Show feelings in the words and with [emotion …], not by describing them.
+
+For example, instead of:
+PLAYER: Okay, I will go and find the ring for you now.
+BRYNJA: Great! You are a hero! The ring is very important to me because it belonged to my mother who died. [stage 10]
+write:
+PLAYER: I'll find your ring. [stage 10]
+BRYNJA: Would you? It was my mother's. It's all I have left of her. [emotion sad]
+BRYNJA: Try the tables. I was clearing them all morning. [goodbye]`;
 
 /** What a free AI needs to know about the plan to write one part of it well. */
 function planBrief(plan: QuestPlan, source: string): string {
@@ -430,7 +484,54 @@ const JOURNAL_RULES = `You write the quest journal and objectives for a Skyrim q
 
 Journal entries: written by the player in the first person and the past tense, one to three short sentences, saying what happened and what they mean to do next ("Brynja asked me to find her mother's ring. She thinks it was lost somewhere in the tavern."). No game terms (stages, aliases, triggers), no "you". The final stage of a completed quest gets a short closing entry. The opening stage is usually left empty unless the quest starts with something the player should read.
 Objectives: short instructions in the imperative, at most about 50 characters, no full stop ("Find Brynja's ring", "Return the ring to Brynja"). Show each one at the stage where the task starts and complete it at the stage where it's done; use the stage number as the objective number unless the quest already has one there.
-Use the names given. Only use what the quest data says; don't invent new events.`;
+Use the names given. Only use what the quest data says; don't invent new events.
+
+Good journal entry: "I found Brynja's ring on a table in the tavern. I should return it to her."
+Not: "Stage 20: You have found the ring. Return it to Brynja to complete the quest."
+Good objective: "Return the ring to Brynja". Not: "I need to return the ring." or "Go back to Brynja and give her the ring so she pays you."`;
+
+type ZodDef = { type: string; shape?: Record<string, z.ZodType>; element?: z.ZodType; innerType?: z.ZodType; entries?: Record<string, string> };
+const defOf = (s: z.ZodType | undefined): ZodDef | undefined => (s as unknown as { _zod?: { def: ZodDef } } | undefined)?._zod?.def;
+
+/** What a field takes, in words ("\"male\" | \"female\" or null — …"), for telling a model how to fix it. */
+export function fieldHint(schema: z.ZodType, path: PropertyKey[]): string {
+  let s: z.ZodType | undefined = schema;
+  const unwrap = (x: z.ZodType | undefined) => {
+    while (x && ['nullable', 'optional', 'default'].includes(defOf(x)!.type)) x = defOf(x)!.innerType;
+    return x;
+  };
+  for (const seg of path) {
+    const d = defOf(unwrap(s));
+    s = d?.type === 'object' ? d.shape?.[String(seg)] : d?.type === 'array' ? d.element : undefined;
+    if (!s) return '';
+  }
+  let desc = (s as unknown as { description?: string }).description;
+  let nullable = false;
+  let x: z.ZodType | undefined = s;
+  while (x && ['nullable', 'optional', 'default'].includes(defOf(x)!.type)) {
+    if (defOf(x)!.type === 'nullable') nullable = true;
+    x = defOf(x)!.innerType;
+    desc ??= (x as unknown as { description?: string }).description;
+  }
+  const d = defOf(x);
+  const type =
+    d?.type === 'enum'
+      ? Object.values(d.entries ?? {})
+          .map((v) => JSON.stringify(v))
+          .join(' | ')
+      : d?.type === 'object'
+        ? 'an object with all its fields'
+        : d?.type === 'array'
+          ? 'a list ([] for none)'
+          : d?.type === 'number'
+            ? 'a number'
+            : d?.type === 'boolean'
+              ? 'true or false'
+              : d?.type === 'string'
+                ? 'text'
+                : '';
+  return [type && `${type}${nullable ? ' or null' : ''}`, desc].filter(Boolean).join(' — ');
+}
 
 /** Fill fields an answer left out: lists become [] and nullable fields null, all the way down. */
 export function fillMissing(schema: z.ZodType, v: unknown): unknown {
@@ -442,7 +543,8 @@ export function fillMissing(schema: z.ZodType, v: unknown): unknown {
       const o = v as Record<string, unknown>;
       for (const [k, s] of Object.entries(def.shape as Record<string, z.ZodType>)) {
         const t = (s as unknown as { _zod: { def: { type: string } } })._zod.def.type;
-        if (!(k in o) || o[k] === undefined) {
+        // A list given as null means an empty list.
+        if (!(k in o) || o[k] === undefined || (o[k] === null && t === 'array')) {
           if (t === 'array') o[k] = [];
           else if (t === 'nullable') o[k] = null;
         } else o[k] = fillMissing(s, o[k]);
@@ -452,9 +554,19 @@ export function fillMissing(schema: z.ZodType, v: unknown): unknown {
     case 'array':
       return Array.isArray(v) ? v.map((x) => fillMissing(def.element, x)) : v;
     case 'nullable':
+      // "null" in quotes, or nothing at all, is meant as null.
+      if (typeof v === 'string' && /^\s*(null)?\s*$/i.test(v)) return null;
+      return v === null || v === undefined ? v : fillMissing(def.innerType, v);
     case 'optional':
     case 'default':
       return v === null || v === undefined ? v : fillMissing(def.innerType, v);
+    // Smaller models quote numbers and true/false, and capitalise choices.
+    case 'number':
+      return typeof v === 'string' && /^\s*-?\d+(\.\d+)?\s*$/.test(v) ? Number(v) : v;
+    case 'boolean':
+      return typeof v === 'string' && /^\s*(true|false)\s*$/i.test(v) ? v.trim().toLowerCase() === 'true' : v;
+    case 'enum':
+      return typeof v === 'string' ? (Object.values(def.entries as Record<string, string>).find((e) => e.toLowerCase() === v.trim().toLowerCase()) ?? v) : v;
     default:
       return v;
   }

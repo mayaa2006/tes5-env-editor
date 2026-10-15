@@ -2,11 +2,15 @@ import { describe, expect, it } from 'vitest';
 import type { FormKey } from '@tes5/esp';
 import {
   DialogueService,
+  EXAMPLE_QUEST_DOCUMENT,
+  EXAMPLE_RESCUE_DOCUMENT,
   EnvironmentService,
   MemoryFileSystem,
   NpcService,
+  PLAN_EXAMPLES,
   QuestBuilder,
   QuestGraphService,
+  QuestPlanSchema,
   QuestPlanner,
   QuestService,
   ScriptService,
@@ -16,7 +20,10 @@ import {
   createDemoData,
   describePackage,
   exampleQuestPlan,
+  fieldHint,
+  pickPlanExample,
   planCatalog,
+  repairPlan,
   rewriteScreenplay,
   validatePlan,
   type PlannerReply,
@@ -593,13 +600,86 @@ describe('quest planner', () => {
     expect(planCatalog(ws, { limit: 1 }).split('\n')[1]).not.toContain('(');
   });
 
-  it('gives a free AI a worked example to copy; Claude does without', async () => {
+  it('gives a free AI a worked example to copy and a checklist; Claude does without', async () => {
     const sent: any[] = [];
     const ok = async (p: any) => (sent.push(p), reply(JSON.stringify(exampleQuestPlan())));
     await new QuestPlanner({ ai: { kind: 'ollama', model: 'qwen3' }, send: ok }).plan('x', 'document', 'catalog');
     await new QuestPlanner({ ai: { kind: 'claude', apiKey: 'k' }, send: ok }).plan('x', 'document', 'catalog');
-    expect(sent[0].system.map((b: any) => b.text).join('\n')).toContain('An example of a complete plan');
-    expect(sent[1].system.map((b: any) => b.text).join('\n')).not.toContain('An example of a complete plan');
+    const free = sent[0].system.map((b: any) => b.text).join('\n');
+    expect(free).toContain('A worked example');
+    // The example comes with what its author wrote, so the model sees how writing turns into a plan.
+    expect(free).toContain(EXAMPLE_QUEST_DOCUMENT);
+    expect(free).toContain('use the ones in the load order list');
+    expect(sent[0].messages[0].content).toContain('Before you answer, check the plan');
+    expect(sent[1].system.map((b: any) => b.text).join('\n')).not.toContain('A worked example');
+    expect(sent[1].messages[0].content).not.toContain('Before you answer');
+  });
+
+  it('picks the worked example closest to the text', async () => {
+    expect(pickPlanExample('Brynja lost her ring. The player finds it and returns it for a reward.').id).toBe('ring');
+    expect(pickPlanExample('Bandits in a cave have taken the jarl’s son. Kill their leader or spare him; the quest fails if the boy dies.').id).toBe('rescue');
+    expect(pickPlanExample('Make a Khajiit merchant who sells potions, wears fine clothes and can be a follower.').id).toBe('characters');
+    expect(pickPlanExample('').id).toBe('ring');
+    const sent: any[] = [];
+    await new QuestPlanner({ ai: { kind: 'ollama', model: 'qwen3' }, send: async (p: any) => (sent.push(p), reply(JSON.stringify(exampleQuestPlan()))) }).plan('Bandits hide in a cave; kill them all.', 'document', 'catalog');
+    expect(sent[0].system.map((b: any) => b.text).join('\n')).toContain(EXAMPLE_RESCUE_DOCUMENT);
+  });
+
+  it('keeps every worked example a sound plan', () => {
+    for (const e of PLAN_EXAMPLES) expect(validatePlan(e.plan()), e.id).toEqual([]);
+    // Together they show the parts of the format small models leave out when they've never seen them.
+    const all = PLAN_EXAMPLES.map((e) => e.plan());
+    expect(all.some((p) => p.encounters.length && p.events.length && p.failures.length && p.startsWhen)).toBe(true);
+    expect(all.some((p) => p.characters.some((c) => c.roles?.merchant && c.roles.trainer))).toBe(true);
+    expect(all.some((p) => !p.stages.length)).toBe(true);
+  });
+
+  it('mends names used as keys, loose Editor IDs and quoted values in a free AI’s answer', async () => {
+    const odd = exampleQuestPlan() as any;
+    odd.editorId = "The Innkeeper's Ring";
+    odd.items[0].startsAtKey = 'The Demo Tavern';
+    odd.objectives[1].targetKey = 'Brynja';
+    odd.steps[1].targetKey = 'RING';
+    odd.stages[0].startsQuest = false;
+    odd.stages[1].index = '10';
+    odd.characters[1].essential = 'false';
+    odd.characters[1].sex = 'Male';
+    odd.characters[1].spot = 'null';
+    odd.characters[1].factions = null;
+    const ai = { kind: 'ollama' as const, model: 'qwen3' };
+    const plan = await new QuestPlanner({ ai, send: async () => reply(JSON.stringify(odd)) }).plan('x', 'document', '');
+    expect(plan.editorId).toBe('TheInnkeepersRing');
+    expect(plan.items[0]!.startsAtKey).toBe('tavern');
+    expect(plan.objectives[1]!.targetKey).toBe('brynja');
+    expect(plan.steps[1]!.targetKey).toBe('ring');
+    expect(plan.stages[0]!.startsQuest).toBe(true);
+    expect(plan.stages[1]!.index).toBe(10);
+    expect(plan.characters[1]).toMatchObject({ essential: false, sex: 'male', spot: null, factions: [] });
+    // An Editor ID or name that isn't in the plan is left alone.
+    const p = exampleQuestPlan();
+    p.events = [{ atStage: 20, kind: 'unlock', targetKey: 'DemoCellarDoor', toKey: null, what: null, count: null, note: '' }];
+    expect(repairPlan(p)).toEqual([]);
+    expect(p.events[0]!.targetKey).toBe('DemoCellarDoor');
+  });
+
+  it('tells the AI what a wrong field takes, and the plan’s keys when fixing references', async () => {
+    const sent: any[] = [];
+    const bad = { ...exampleQuestPlan(), characters: [{ ...exampleQuestPlan().characters[0], sex: 'woman' }] } as any;
+    const replies = [bad, exampleQuestPlan()];
+    await new QuestPlanner({ send: async (p: any) => (sent.push(p), reply(JSON.stringify(replies.shift() ?? exampleQuestPlan()))) }).plan('x', 'document', '');
+    expect(sent[1].messages.at(-1).content).toContain('characters.0.sex');
+    expect(sent[1].messages.at(-1).content).toContain('(expected "male" | "female" or null');
+    expect(fieldHint(QuestPlanSchema, ['steps', 0, 'kind'])).toMatch(/^"talk" \| "pickup".* — talk: a conversation line/);
+    expect(fieldHint(QuestPlanSchema, ['characters', 0, 'level'])).toMatch(/^a number or null — Fixed level/);
+    expect(fieldHint(QuestPlanSchema, ['nope'])).toBe('');
+    // A step pointing at something that isn't in the plan: the keys are listed with the problem.
+    const stuck = exampleQuestPlan();
+    stuck.steps[1]!.targetKey = 'necklace';
+    const again: any[] = [];
+    const answers = [stuck, exampleQuestPlan()];
+    await new QuestPlanner({ send: async (p: any) => (again.push(p), reply(JSON.stringify(answers.shift() ?? exampleQuestPlan()))) }).plan('x', 'document', '');
+    expect(again[1].messages.at(-1).content).toContain('Keys in the plan: characters brynja, eirik; locations tavern; items ring; encounters none.');
+    expect(again[1].messages.at(-1).content).toContain('Stage numbers: 0, 10, 20, 100.');
   });
 
   it('sends back what would leave the quest stuck, once, and keeps the better plan', async () => {
