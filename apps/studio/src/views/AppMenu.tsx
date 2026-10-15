@@ -7,6 +7,7 @@ import { useState } from 'react';
 import { Icon, Menu, MenuItem, Modal } from '../components/ui';
 import { engine, useStore, type WorkspaceTab } from '../state/store';
 import { OnSave } from '../components/OnSave';
+import { AiSettings } from '../components/AiPicker';
 import { TestLaunchDialog } from './TestLaunch';
 
 declare const __APP_VERSION__: string | undefined;
@@ -204,6 +205,13 @@ function SettingsDialog({ onClose, onGoTo, loaded }: { onClose: () => void; onGo
         Changes apply straight away and are remembered next time. Each option has a ? with the details.
       </p>
       <OnSave />
+      <div className="card" data-testid="settings-ai">
+        <div className="card-title">AI</div>
+        <p className="dim small" style={{ margin: '0 0 6px' }}>
+          Used by the AI tab, Quests → From writing and the journal writer.
+        </p>
+        <AiSettings />
+      </div>
       <div className="row" style={{ gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
         <button className="btn" disabled={!loaded} title={loaded ? 'Set up the script compiler on the Scripts tab' : 'Open a game folder first'} onClick={() => onGoTo('script')}>
           Script compiler setup…

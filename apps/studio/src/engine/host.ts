@@ -106,7 +106,15 @@ import {
   serviceModels,
   OLLAMA_URL,
   type AiProvider,
+  type AgentEvent,
+  type AgentModel,
+  type AgentSession,
+  agentModel,
+  newAgentSession,
+  runAgentTurn,
+  sessionTitle,
 } from '@tes5/workspace';
+import { aiTools } from './aitools';
 import type { CleanOptions } from '@tes5/cleaner';
 
 export interface SessionInfo {
@@ -159,7 +167,18 @@ export interface OpenOptions {
   outputDir?: string;
 }
 
-type Listener = (e: WorkspaceEvent) => void;
+/** Workspace events, and the AI workspace's progress while a turn runs. */
+export type HostEvent = WorkspaceEvent | { type: 'ai'; event: AgentEvent };
+
+type Listener = (e: HostEvent) => void;
+
+/** A conversation in the AI workspace's list. */
+export interface AiSessionInfo {
+  id: string;
+  title: string;
+  updated: number;
+  running: boolean;
+}
 
 export class EngineHost {
   ws?: Workspace;
@@ -270,6 +289,7 @@ export class EngineHost {
     this.release = new ReleaseService(ws, this.scripts, this.npcs, this.quests, this.graphs, this.env, this.faces);
     this.builder = new QuestBuilder(ws, this.quests, this.graphs, this.dialogue, this.npcs, this.env);
     this.meshCache.clear();
+    this.aiSessions = undefined;
     ws.on((e) => {
       if (e.type === 'filesRestored') return; // internal to the engine
       for (const l of this.listeners) l(e);
@@ -1535,6 +1555,151 @@ export class EngineHost {
   updateNavmesh(key: FormKey, geometry: Navmesh) {
     this.requireWs().editRecord(key, (d) => ({ ...d, geometry }), 'Edit navmesh');
     return validateNavmesh(geometry);
+  }
+
+  // ---------------------------------------------------------------- AI workspace
+
+  /** Conversations, loaded from TES5EnvEditor/ai-conversations.json in the output folder on first use. */
+  private aiSessions?: Map<string, AgentSession>;
+  private aiRuns = new Map<string, { abort: AbortController; approvals: Map<string, (ok: boolean) => void> }>();
+  /** Tests swap in a scripted model. */
+  aiModel: (ai: AiProvider) => AgentModel = (ai) => agentModel(ai);
+
+  private aiPath(): string {
+    return joinPath(this.requireWs().options.outputDir, 'TES5EnvEditor', 'ai-conversations.json');
+  }
+
+  private async aiLoad(): Promise<Map<string, AgentSession>> {
+    if (this.aiSessions) return this.aiSessions;
+    const map = new Map<string, AgentSession>();
+    try {
+      const list = JSON.parse(new TextDecoder().decode(await this.fs.readFile(this.aiPath()))) as AgentSession[];
+      for (const s of list) if (s?.id && Array.isArray(s.messages)) map.set(s.id, { ...s, turns: s.turns ?? [] });
+    } catch {
+      // None yet.
+    }
+    this.aiSessions = map;
+    return map;
+  }
+
+  private async aiSave(): Promise<void> {
+    const map = await this.aiLoad();
+    const path = this.aiPath();
+    try {
+      await this.fs.mkdir(path.replace(/[\\/][^\\/]+$/, ''));
+      await this.fs.writeFile(path, new TextEncoder().encode(JSON.stringify([...map.values()])));
+    } catch (e) {
+      this.emitHost({ type: 'warning', message: `Couldn't save the AI conversations: ${(e as Error).message}` });
+    }
+  }
+
+  private emitHost(e: HostEvent): void {
+    for (const l of this.listeners) l(e);
+  }
+
+  /** The AI workspace's conversations, newest first. */
+  async aiSessionList(): Promise<AiSessionInfo[]> {
+    return [...(await this.aiLoad()).values()].sort((a, b) => b.updated - a.updated).map((s) => ({ id: s.id, title: s.title, updated: s.updated, running: this.aiRuns.has(s.id) }));
+  }
+
+  async aiSession(id: string): Promise<AgentSession | null> {
+    return (await this.aiLoad()).get(id) ?? null;
+  }
+
+  async aiNewSession(): Promise<AgentSession> {
+    const s = newAgentSession();
+    (await this.aiLoad()).set(s.id, s);
+    return s;
+  }
+
+  async aiRenameSession(id: string, title: string) {
+    const s = (await this.aiLoad()).get(id);
+    if (s && title.trim()) {
+      s.title = title.trim();
+      await this.aiSave();
+    }
+    return this.aiSessionList();
+  }
+
+  async aiDeleteSession(id: string) {
+    this.aiStop(id);
+    (await this.aiLoad()).delete(id);
+    await this.aiSave();
+    return this.aiSessionList();
+  }
+
+  /**
+   * Send the author's message and run the AI's turn: it reads and (with
+   * change tools) edits through the engine, streaming its progress as 'ai'
+   * events. Its changes become one undo step. Resolves when the turn ends.
+   */
+  async aiSend(id: string, text: string, ai: AiProvider | string, opts: { context?: string; ask?: boolean } = {}) {
+    const ws = this.requireWs();
+    const sessions = await this.aiLoad();
+    const session = sessions.get(id);
+    if (!session) throw new Error('That conversation no longer exists');
+    if (this.aiRuns.has(id)) throw new Error('The AI is still working on this conversation. Wait, or press Stop.');
+    if (!text.trim()) throw new Error('Write something to send');
+    const model = this.aiModel(asAi(ai));
+    if (!session.messages.length) session.title = sessionTitle(text);
+    const run = { abort: new AbortController(), approvals: new Map<string, (ok: boolean) => void>() };
+    this.aiRuns.set(id, run);
+    const depth = ws.undoDepth;
+    const at = session.messages.length;
+    try {
+      const res = await runAgentTurn(model, session, { text: text.trim(), context: opts.context }, aiTools(this), {
+        signal: run.abort.signal,
+        onEvent: (event) => this.emitHost({ type: 'ai', event }),
+        transaction: (label, fn) => ws.transactionAsync(label, fn),
+        approve: opts.ask
+          ? (call) =>
+              new Promise<boolean>((resolve) => {
+                run.approvals.set(call.id, resolve);
+                run.abort.signal.addEventListener('abort', () => resolve(false), { once: true });
+              })
+          : undefined,
+      });
+      // The turn's changes become one undo step, unless other edits were made in between.
+      const added = ws.undoLabelsSince(depth);
+      const label = `AI: ${sessionTitle(text)}`;
+      const undoLabel = added.length && added.every((l) => l.startsWith('AI: ')) && ws.squashUndo(depth, label) ? label : added.length ? (added[added.length - 1] ?? null) : null;
+      session.turns.push({ at, title: sessionTitle(text), undoLabel, changes: res.changes, ...(res.error ? { error: res.error } : {}) });
+      session.updated = Date.now();
+      await this.aiSave();
+      this.emitHost({ type: 'ai', event: { type: 'done', session: id, ...(res.error ? { error: res.error } : {}) } });
+      return { session, error: res.error ?? null };
+    } finally {
+      this.aiRuns.delete(id);
+    }
+  }
+
+  /** Stop the AI's turn in this conversation (what's done so far stays). */
+  aiStop(id: string) {
+    this.aiRuns.get(id)?.abort.abort();
+    return true;
+  }
+
+  /** Answer the AI's request to make a change (when it asks first). */
+  aiApprove(id: string, callId: string, ok: boolean) {
+    const run = this.aiRuns.get(id);
+    const resolve = run?.approvals.get(callId);
+    if (!resolve) return false;
+    run!.approvals.delete(callId);
+    resolve(ok);
+    return true;
+  }
+
+  /** Take back the changes of one turn, if they're still the last thing done. */
+  async aiUndoTurn(id: string, turnIndex: number) {
+    const ws = this.requireWs();
+    const session = (await this.aiLoad()).get(id);
+    const turn = session?.turns[turnIndex];
+    if (!turn?.undoLabel || turn.undone) throw new Error('This turn has nothing to undo');
+    if (ws.undoLabel !== turn.undoLabel) throw new Error('Other changes were made after this turn. Use Undo (Ctrl+Z) to step back through them first.');
+    ws.undo();
+    turn.undone = true;
+    await this.aiSave();
+    return session;
   }
 
   runtimeFormId(key: FormKey) {

@@ -821,6 +821,30 @@ export class Workspace {
   get canUndo(): boolean {
     return this.undoStack.length > 0;
   }
+
+  /** How many undo steps there are (to tell which ones a run of edits added). */
+  get undoDepth(): number {
+    return this.undoStack.length;
+  }
+
+  /** The labels of the undo steps above `depth`, oldest first. */
+  undoLabelsSince(depth: number): string[] {
+    return this.undoStack.slice(depth).map((e) => e.label);
+  }
+
+  /**
+   * Fold the undo steps above `depth` into one step called `label`, so a run
+   * of edits (an AI turn) undoes in one go. Returns false (and changes
+   * nothing) when there are none, or the stack was trimmed below `depth`.
+   */
+  squashUndo(depth: number, label: string): boolean {
+    if (depth < 0 || depth >= this.undoStack.length) return false;
+    const steps = this.undoStack.splice(depth);
+    const files = steps.flatMap((s) => s.files ?? []);
+    this.undoStack.push({ label, bytes: steps[0]!.bytes, files: files.length ? files : undefined });
+    this.emit({ type: 'changed', label });
+    return true;
+  }
   get canRedo(): boolean {
     return this.redoStack.length > 0;
   }

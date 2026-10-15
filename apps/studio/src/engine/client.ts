@@ -3,11 +3,10 @@
  * thread of the main process (real files); in a plain browser it runs in-page
  * on the synthetic demo data set. Both look the same to the UI.
  */
-import type { WorkspaceEvent } from '@tes5/workspace';
-import type { EngineHost, EngineMethod } from './host';
+import type { EngineHost, EngineMethod, HostEvent } from './host';
 
 /** Workspace events, plus the desktop host telling us the engine was restarted after a crash. */
-export type EngineEvent = WorkspaceEvent | { type: 'engineRestarted'; message: string };
+export type EngineEvent = HostEvent | { type: 'engineRestarted'; message: string };
 
 type Fn<M extends EngineMethod> = EngineHost[M] extends (...args: infer A) => infer R ? { args: A; result: Awaited<R> } : never;
 

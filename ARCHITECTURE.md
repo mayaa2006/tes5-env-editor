@@ -72,11 +72,12 @@ Generation runs these steps:
 - **Services:** `WorldService`, `NpcService`, `QuestService` and `ScriptService`.
 - **Automations:** ESL checks, FormID compaction, bounds, navmesh generation.
 - **Demo:** a procedurally generated demo data set built with this repository's own writers. No Bethesda content is included.
+- **AI:** `planner.ts` turns writing into a quest plan in one structured answer; `agent.ts` runs the AI workspace's conversations. A turn sends the conversation and the tools, runs each tool call the AI makes (input checked against its zod schema), sends the results back and repeats until the AI answers. `AgentModel` hides the provider: Claude (Anthropic tool use, streamed; its answers go back unchanged, thinking included), Ollama and OpenAI-style function calling, or tools in words with a JSON answer for models without tool calling. Tools that change things run inside a transaction labelled `AI: …`, can wait for the author's approval, and a turn's steps are folded into one undo step (`Workspace.squashUndo`).
 
 ### `apps/studio`
 React 19 + zustand UI.
 
-- `engine/host.ts` is the full RPC surface.
+- `engine/host.ts` is the full RPC surface. `engine/aitools.ts` turns parts of it into the AI workspace's tools; the host runs AI turns (`aiSend`) and streams their progress as `{ type: 'ai' }` events.
 - The 3D viewport (`views/scene/viewport.ts`) is a framework-free controller around three.js. It implements Blender's modal transform model.
 - The NPC preview applies TRI chargen morphs to head-part meshes.
 - Monaco provides Papyrus editing; its language features call back into the engine.
