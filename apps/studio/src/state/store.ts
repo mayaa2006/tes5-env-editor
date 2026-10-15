@@ -77,6 +77,8 @@ export interface Settings {
   openaiUrl: string;
   openaiKey: string;
   openaiModel: string;
+  /** The AI tab asks before each change it makes to the plugin. */
+  aiAskFirst: boolean;
   /** Save everything into a folder of the user's choosing instead of Data / MO2 Overwrite. */
   saveToFolder: boolean;
   saveFolder: string;
@@ -109,6 +111,7 @@ const DEFAULT_SETTINGS: Settings = {
   openaiUrl: '',
   openaiKey: '',
   openaiModel: '',
+  aiAskFirst: true,
   saveToFolder: false,
   saveFolder: '',
 };

@@ -2,6 +2,14 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.26.0
+
+- **The AI tab can make and change quests and dialogue.**
+  - **A whole quest from a description.** It plans it with the same planner as Quests → From writing, tells you the plan, and builds it (characters, places, items, stages, journal, objectives, dialogue) when you're happy.
+  - **Changes to quests you have**, through a plan or directly: stages and journal entries, objectives, what moves the quest on (talking, killing, picking up, reading, using, arriving, right away), stage scripts, dialogue (checked before it's added), starting with the game, and the journal and objectives worded like Skyrim's.
+  - **It checks its own work.** After changing a quest, the editor's checks run and any problems go back to the AI to fix.
+- **You stay in charge.** **Ask before each change** is on by default: the AI waits for **Allow** or **Skip** before each change. Each turn's changes are listed under it and undo together with **Undo these changes** (or Ctrl+Z). If no plugin is chosen yet, the tab offers to choose or create one.
+
 ## 0.25.0
 
 - **New AI tab: talk to an AI about your mod.** Ask in plain words ("What's in my plugin?", "How does this quest start?", "Where is Lydia used?", "What should I fix before release?") and the AI looks for itself, using the editor's own tools: it searches and reads records, the load order, quests and their dialogue, places and what's in them, routines, scripts, the Items and Magic categories, the release check and the conflict report.

@@ -47,14 +47,14 @@ for (const size of [
 
     // Nothing yet: what it can do, and places to start.
     await expect(page.getByTestId('ai-empty')).toContainText('Ask the AI about your mod');
-    await expect(page.getByTestId('ai-starter')).toHaveCount(4);
+    await expect(page.getByTestId('ai-starter')).toHaveCount(6);
     // No key yet: the AI's settings are open and sending waits.
     await expect(page.getByTestId('ai-input')).toBeDisabled();
     await page.getByTestId('api-key').fill('sk-ant-test');
     await page.getByTestId('api-key').blur();
     await expect(page.getByTestId('ai-input')).toBeEnabled();
 
-    await page.getByTestId('ai-starter').first().click();
+    await page.getByTestId('ai-starter').filter({ hasText: "What's in my plugin?" }).click();
     await expect(page.getByTestId('ai-input')).toHaveValue(/What does my plugin contain/);
     await page.getByTestId('ai-input').fill('Who is the innkeeper?');
     await page.getByTestId('ai-input').press('Enter');
@@ -99,3 +99,58 @@ for (const size of [
     expect(errors).toEqual([]);
   });
 }
+
+test('the AI asks before changing the plugin, and a turn undoes in one step (1280×800)', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const bodies: any[] = [];
+  await page.route('https://api.anthropic.com/**', async (route) => {
+    bodies.push(route.request().postDataJSON());
+    const answer =
+      bodies.length === 1
+        ? sse("I'll make the quest.", [
+            { id: 'tu_q', name: 'create_quest', input: { editorId: 'AiRingQuest', name: 'The Ring', startsWithGame: true } },
+            { id: 'tu_s', name: 'set_stage', input: { quest: 'AiRingQuest', stage: 10, journal: 'Brynja asked me to find her ring.' } },
+          ])
+        : sse('Made **The Ring** with stage 10.');
+    await route.fulfill({ status: 200, headers: { 'content-type': 'text/event-stream', 'access-control-allow-origin': '*' }, body: answer });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: /Explore the demo/ }).click();
+  await page.getByTestId('load-plugins').click();
+  await page.locator('.workspace-tab', { hasText: 'AI' }).click();
+  await page.getByTestId('api-key').fill('sk-ant-test');
+  await page.getByTestId('api-key').blur();
+
+  // Asking first is on by default.
+  await expect(page.getByRole('checkbox', { name: 'Ask before each change' })).toBeChecked();
+  await page.getByTestId('ai-input').fill('Make a ring quest');
+  await page.getByTestId('ai-send').click();
+
+  // Each change waits for Allow.
+  const live = page.getByTestId('ai-live');
+  await expect(live.getByTestId('ai-tool').first()).toContainText('Create the quest The Ring');
+  await live.getByTestId('ai-allow').click();
+  await expect(live.getByTestId('ai-tool').nth(1)).toContainText('Set stage 10 of AiRingQuest');
+  await live.getByTestId('ai-allow').click();
+
+  // What changed, with Undo for the whole turn.
+  const turn = page.getByTestId('ai-turn');
+  await expect(turn).toContainText('Changes in this turn (2)');
+  await expect(turn.locator('li')).toHaveText(['Create the quest The Ring', 'Set stage 10 of AiRingQuest']);
+  await expect(page.getByTestId('ai-msg-assistant').last()).toContainText('with stage 10');
+  expect(bodies[0].tools.map((t: any) => t.name)).toEqual(expect.arrayContaining(['create_quest', 'set_stage', 'plan_quest', 'build_plan', 'add_dialogue']));
+
+  // Open goes to the quest; it's there.
+  await page.getByTestId('ai-tool').first().getByTestId('ai-tool-open').click();
+  await expect(page.locator('.workspace-tab.active')).toContainText('Quests');
+  await expect(page.getByText('AiRingQuest').first()).toBeVisible();
+  await page.locator('.workspace-tab', { hasText: 'AI' }).click();
+  await page.getByTestId('ai-undo-turn').click();
+  await expect(page.getByTestId('ai-turn')).toContainText('Undone: Changes in this turn');
+  await expect(page.getByTestId('ai-undo-turn')).toHaveCount(0);
+  await page.locator('.workspace-tab', { hasText: 'Quests' }).click();
+  await expect(page.getByText('AiRingQuest')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
