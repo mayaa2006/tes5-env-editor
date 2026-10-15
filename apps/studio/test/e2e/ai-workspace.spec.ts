@@ -47,7 +47,7 @@ for (const size of [
 
     // Nothing yet: what it can do, and places to start.
     await expect(page.getByTestId('ai-empty')).toContainText('Ask the AI about your mod');
-    await expect(page.getByTestId('ai-starter')).toHaveCount(6);
+    await expect(page.getByTestId('ai-starter')).toHaveCount(8);
     // No key yet: the AI's settings are open and sending waits.
     await expect(page.getByTestId('ai-input')).toBeDisabled();
     await page.getByTestId('api-key').fill('sk-ant-test');

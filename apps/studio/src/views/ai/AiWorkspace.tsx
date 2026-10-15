@@ -16,6 +16,8 @@ import { engine, useStore, type WorkspaceTab } from '../../state/store';
 const STARTERS: { label: string; text: string; title: string }[] = [
   { label: 'Make a quest from my idea', text: 'Make a quest: ', title: 'Describe the quest after the colon; the AI plans it, tells you the plan, and builds it when you agree' },
   { label: 'Add to the open quest', text: 'In the quest I have open, add ', title: 'Open a quest in the Quests tab first, then say what to add (a stage, an objective, dialogue…)' },
+  { label: 'Make a character', text: 'Make a character: ', title: 'Describe who they are, where they stand, what they wear, carry and do; the AI copies a fitting character and places them' },
+  { label: 'Make an item or spell', text: 'Make a new ', title: 'Say what it is and what it does; the AI copies a similar one and changes it' },
   { label: "What's in my plugin?", text: 'What does my plugin contain so far? Group it by kind and point out anything unfinished.', title: 'The AI lists your records and points out loose ends' },
   { label: 'Explain a quest', text: 'Explain how the quest I have open works: how it starts, what moves it from stage to stage, and how it ends.', title: 'Open a quest in the Quests tab first, or name it' },
   { label: 'Find problems before release', text: 'Run the release check and the conflict report, and tell me what to fix first and how.', title: 'The AI runs the release check and conflict report and sorts what to fix' },
