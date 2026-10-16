@@ -228,3 +228,23 @@ describe('talking to a free AI', () => {
     expect(chat[2]!.body.messages.at(-1)).toMatchObject({ role: 'user', content: expect.stringContaining('Tool results:\nlook:') });
   });
 });
+
+describe('projects for bigger jobs', () => {
+  it('keeps a brief and a to-do list the AI works through', async () => {
+    const { projectTools, projectSummary } = await import('../src');
+    const s = newAgentSession();
+    const tools = new Map(projectTools(s).map((t) => [t.name, t]));
+    const run = (name: string, input: unknown) => tools.get(name)!.run(tools.get(name)!.input.parse(input));
+    expect(() => run('update_task', { id: 1, status: 'done' })).toThrow(/no project/);
+    run('set_project', { brief: 'A questline about the Ring.', tasks: ['Plan quest one', 'Build the cave', 'Plan quest two'] });
+    expect(s.project!.tasks.map((t) => [t.id, t.status])).toEqual([[1, 'todo'], [2, 'todo'], [3, 'todo']]);
+    run('update_task', { id: 1, status: 'done', note: 'Built RingQuest1' });
+    run('update_task', { id: 2, status: 'doing' });
+    run('add_tasks', { tasks: ['Light the cave'], after: 2 });
+    run('update_brief', { brief: 'A questline about the Ring. The thief is Eirik.' });
+    expect(s.project!.tasks.map((t) => t.title)).toEqual(['Plan quest one', 'Build the cave', 'Light the cave', 'Plan quest two']);
+    expect(() => run('update_task', { id: 9, status: 'done' })).toThrow(/no task 9/);
+    expect(projectSummary(s.project)).toBe('Project brief: A questline about the Ring. The thief is Eirik.\nTo-do:\n[x] 1. Plan quest one — Built RingQuest1\n[>] 2. Build the cave\n[ ] 4. Light the cave\n[ ] 3. Plan quest two');
+    expect(projectSummary(undefined)).toBe('');
+  });
+});

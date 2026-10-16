@@ -11,7 +11,7 @@ import { z } from 'zod';
 import { isFormKey, type FormKey } from '@tes5/esp';
 import { WorkspaceError, type AgentTool, type RecordSummary } from '@tes5/workspace';
 import type { EngineHost } from './host';
-import { questTools, type QuestToolContext } from './aitools-quest';
+import { questProblems, questTools, type QuestToolContext } from './aitools-quest';
 import { moreTools } from './aitools-more';
 import { worldTools } from './aitools-world';
 
@@ -285,6 +285,32 @@ export function aiTools(host: EngineHost, ctx?: QuestToolContext): AgentTool[] {
         const findings = r.findings ?? [];
         return {
           data: { problems: findings.length, findings: findings.slice(0, 60).map((f) => ({ severity: f.severity, area: f.category, problem: f.message, why: f.detail, form: f.form ? `${label(f.form)} (${f.form})` : undefined })) },
+          link: { tab: 'release', label: 'Release check' },
+        };
+      },
+    },
+    {
+      name: 'review_mod',
+      group: 'checks',
+      writes: false,
+      description:
+        "Everything that needs fixing in the plugin being edited, in one go: the release check, records other mods also change, and every quest's problems (stages nothing reaches, no ending, dialogue errors). Use it to review a finished project or before release.",
+      input: z.object({}),
+      summary: () => 'Review the whole mod',
+      run: async () => {
+        const plugin = ws().activeName;
+        if (!plugin) throw new WorkspaceError('No plugin is chosen yet, so there is nothing of yours to review');
+        const release = (host.releaseCheck() as unknown as { findings: { severity: string; category: string; message: string; form?: FormKey }[] }).findings ?? [];
+        const quests = ws().search({ sigs: ['QUST'], plugin, limit: 500 }).items.filter((q) => !q.deleted).map((q) => q.formKey);
+        const conflicts = host.conflictReport() as unknown;
+        return {
+          data: {
+            plugin,
+            releaseCheck: release.slice(0, 60).map((f) => `${f.severity} (${f.category}): ${f.message}${f.form ? ` [${label(f.form)}]` : ''}`),
+            quests: quests.map((q) => ws().summary(q)?.editorId ?? q),
+            questProblems: await questProblems(host, quests),
+            conflicts,
+          },
           link: { tab: 'release', label: 'Release check' },
         };
       },

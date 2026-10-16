@@ -5,7 +5,7 @@
  * to open the result in its own tab.
  */
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { AgentEvent, AgentLink, AgentMessage, AgentSession, AgentToolResult, AgentTurn } from '@tes5/workspace';
+import type { AgentEvent, AgentLink, AgentMessage, AgentProject, AgentSession, AgentToolResult, AgentTurn } from '@tes5/workspace';
 import type { FormKey } from '@tes5/esp';
 import type { AiSessionInfo } from '../../engine/host';
 import { Checkbox, EmptyState, Icon, Modal, useDraft, useSummaries } from '../../components/ui';
@@ -14,6 +14,8 @@ import { engine, useStore, type WorkspaceTab } from '../../state/store';
 
 /** Things to ask, for an empty conversation. */
 const STARTERS: { label: string; text: string; title: string }[] = [
+  { label: 'Plan a bigger job', text: 'I want to make ', title: 'Describe a questline, a town, a dungeon or a whole mod: the AI writes a brief and a to-do list and works through it a task at a time, stopping after each so you can check' },
+  { label: 'Review my mod', text: 'Review my mod: what needs fixing before release, most important first, and how to fix each thing?', title: 'The AI runs the release check, the conflict report and every quest’s checks, and sorts what to fix' },
   { label: 'Make a quest from my idea', text: 'Make a quest: ', title: 'Describe the quest after the colon; the AI plans it, tells you the plan, and builds it when you agree' },
   { label: 'Add to the open quest', text: 'In the quest I have open, add ', title: 'Open a quest in the Quests tab first, then say what to add (a stage, an objective, dialogue…)' },
   { label: 'Make a character', text: 'Make a character: ', title: 'Describe who they are, where they stand, what they wear, carry and do; the AI copies a fitting character and places them' },
@@ -25,7 +27,7 @@ const STARTERS: { label: string; text: string; title: string }[] = [
   { label: 'Where is something used?', text: 'Where is Lydia used? List the quests, packages and lists that refer to her.', title: 'Change the name to anything in your load order' },
 ];
 
-type Live = { text: string; calls: { id: string; summary: string; writes: boolean; status: 'running' | 'waiting' | AgentToolResult['status']; result?: AgentToolResult }[] };
+type Live = { text: string; calls: { id: string; name: string; summary: string; writes: boolean; status: 'running' | 'waiting' | AgentToolResult['status']; result?: AgentToolResult }[] };
 
 export default function AiWorkspace() {
   const [list, setList] = useState<AiSessionInfo[]>([]);
@@ -59,6 +61,9 @@ export default function AiWorkspace() {
       const ev: AgentEvent = e.event;
       if (ev.session !== currentRef.current) return;
       setLive((l) => reduceLive(l ?? { text: '', calls: [] }, ev));
+      // The project list updates as the AI works through it.
+      if (ev.type === 'result' && PROJECT_TOOLS.has(ev.result.name))
+        void engine((c) => c.call('aiSession', ev.session), { refreshSession: false }).then((s) => s && setSession((cur) => (cur && cur.id === s.id ? { ...cur, project: s.project } : cur)));
     });
   }, [client]);
 
@@ -135,6 +140,11 @@ export default function AiWorkspace() {
           const s = await engine((c) => c.call('aiUndoTurn', current, n), { success: 'The changes of that turn were undone' });
           if (s) setSession(s);
         }}
+        onClearProject={async () => {
+          if (!current) return;
+          const s = await engine((c) => c.call('aiClearProject', current), { refreshSession: false, success: 'The project was removed; everything it made stays' });
+          if (s) setSession(s);
+        }}
       />
       {deleting && (
         <Modal
@@ -181,11 +191,11 @@ function reduceLive(l: Live, ev: AgentEvent): Live {
     case 'call': {
       const calls = l.calls.filter((c) => c.id !== ev.id);
       // Text before a tool call belongs with it; start a fresh paragraph after.
-      return { text: l.text ? `${l.text}\n\n` : l.text, calls: [...calls, { id: ev.id, summary: ev.summary, writes: ev.writes, status: ev.status }] };
+      return { text: l.text ? `${l.text}\n\n` : l.text, calls: [...calls, { id: ev.id, name: ev.name, summary: ev.summary, writes: ev.writes, status: ev.status }] };
     }
     case 'result': {
       const has = l.calls.some((c) => c.id === ev.result.id);
-      const calls = has ? l.calls.map((c) => (c.id === ev.result.id ? { ...c, status: ev.result.status, result: ev.result } : c)) : [...l.calls, { id: ev.result.id, summary: ev.result.summary, writes: ev.result.writes, status: ev.result.status, result: ev.result }];
+      const calls = has ? l.calls.map((c) => (c.id === ev.result.id ? { ...c, status: ev.result.status, result: ev.result } : c)) : [...l.calls, { id: ev.result.id, name: ev.result.name, summary: ev.result.summary, writes: ev.result.writes, status: ev.result.status, result: ev.result }];
       return { ...l, calls };
     }
     default:
@@ -201,6 +211,7 @@ function Conversation({
   onStop,
   onApprove,
   onUndoTurn,
+  onClearProject,
 }: {
   session: AgentSession | null;
   live?: Live;
@@ -209,6 +220,7 @@ function Conversation({
   onStop: () => void;
   onApprove: (callId: string, ok: boolean) => void;
   onUndoTurn: (turn: number) => void;
+  onClearProject: () => void;
 }) {
   const { ai, ready, name } = useAi();
   const askFirst = useStore((s) => s.settings.aiAskFirst);
@@ -240,6 +252,7 @@ function Conversation({
       <div className="ai-chat-head">
         <AiPicker verb="Talking to" help="Your messages, what you have open (if ticked) and what the AI reads with its tools are sent to this AI. It reads your load order through the editor; nothing is saved to disk until you save." />
       </div>
+      {session?.project && <ProjectPanel project={session.project} running={running} ready={ready} onSend={(t) => void submit(t)} onClear={onClearProject} />}
       <div className="scroll grow ai-messages" data-testid="ai-messages">
         {!messages.length && !live && (
           <EmptyState icon="ai" title="Ask the AI about your mod" testId="ai-empty">
@@ -262,7 +275,7 @@ function Conversation({
         {live && (
           <div className="ai-msg assistant" data-testid="ai-live">
             {live.text && <Markdown text={live.text} />}
-            {live.calls.map((c) => (
+            {live.calls.filter((c) => !PROJECT_TOOLS.has(c.name)).map((c) => (
               <ToolCard key={c.id} summary={c.summary} writes={c.writes} status={c.status} result={c.result} onApprove={c.status === 'waiting' ? (ok) => onApprove(c.id, ok) : undefined} />
             ))}
             {!live.calls.some((c) => c.status === 'waiting') && <div className="dim small ai-thinking">{name} is working…</div>}
@@ -319,6 +332,93 @@ function Conversation({
         </div>
       </div>
     </section>
+  );
+}
+
+const PROJECT_TOOLS = new Set(['set_project', 'update_task', 'add_tasks', 'update_brief']);
+
+const TASK_MARK: Record<string, { icon: string; cls: string; title: string }> = {
+  todo: { icon: '○', cls: 'dim', title: 'Not started' },
+  doing: { icon: '◐', cls: 'accent', title: 'The AI is working on this' },
+  done: { icon: '●', cls: 'ok', title: 'Done' },
+  skipped: { icon: '–', cls: 'dim', title: 'Skipped' },
+};
+
+/** A bigger job's brief and to-do list, with what to do next. */
+function ProjectPanel({ project, running, ready, onSend, onClear }: { project: AgentProject; running: boolean; ready: boolean; onSend: (text: string) => void; onClear: () => void }) {
+  const [open, setOpen] = useState(true);
+  const [confirm, setConfirm] = useState(false);
+  const done = project.tasks.filter((t) => t.status === 'done' || t.status === 'skipped').length;
+  const finished = done === project.tasks.length;
+  const next = project.tasks.find((t) => t.status === 'doing') ?? project.tasks.find((t) => t.status === 'todo');
+  const why = running ? 'Wait for the AI to finish this turn' : !ready ? 'Choose an AI first' : undefined;
+  return (
+    <div className="ai-project" data-testid="ai-project">
+      <div className="row" style={{ gap: 6 }}>
+        <button className="btn icon ghost small" onClick={() => setOpen(!open)} title={open ? 'Hide the project' : 'Show the project'} aria-expanded={open}>
+          <Icon name="chevron" size={12} className={open ? 'rot90' : undefined} />
+        </button>
+        <strong>Project</strong>
+        <span className="chip" title="Tasks done (or skipped) out of all tasks" data-testid="ai-project-progress">
+          {done} of {project.tasks.length} done
+        </span>
+        <span className="grow" />
+        {finished ? (
+          <button className="btn small primary" disabled={!!why} title={why ?? 'Ask the AI to check the whole mod and say what still needs fixing'} onClick={() => onSend('Every task is done. Review my mod and tell me what still needs fixing, most important first.')} data-testid="ai-project-review">
+            Review my mod
+          </button>
+        ) : (
+          <button className="btn small primary" disabled={!!why} title={why ?? `Ask the AI to do the next task${next ? `: ${next.title}` : ''}, then stop so you can check`} onClick={() => onSend('Carry on with the next task.')} data-testid="ai-project-next">
+            Go on with the next task
+          </button>
+        )}
+        <button className="btn small ghost" disabled={running} title="Remove the project (its brief and to-do list). Everything already made stays in your plugin." onClick={() => setConfirm(true)}>
+          Remove
+        </button>
+      </div>
+      {open && (
+        <>
+          <div className="small dim ai-project-brief" title={project.brief}>
+            {project.brief}
+          </div>
+          <ol className="ai-project-tasks">
+            {project.tasks.map((t) => (
+              <li key={t.id} className={t.status} data-testid="ai-project-task">
+                <span className={TASK_MARK[t.status]!.cls} title={TASK_MARK[t.status]!.title}>
+                  {TASK_MARK[t.status]!.icon}
+                </span>{' '}
+                {t.title}
+                {t.note && <span className="dim small"> — {t.note}</span>}
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
+      {confirm && (
+        <Modal
+          title="Remove the project?"
+          onClose={() => setConfirm(false)}
+          footer={
+            <>
+              <button className="btn" onClick={() => setConfirm(false)}>
+                Keep it
+              </button>
+              <button
+                className="btn danger"
+                onClick={() => {
+                  setConfirm(false);
+                  onClear();
+                }}
+              >
+                Remove
+              </button>
+            </>
+          }
+        >
+          <p style={{ marginTop: 0 }}>The brief and to-do list go; everything the AI already made stays in your plugin (use Undo for that). The conversation stays too.</p>
+        </Modal>
+      )}
+    </div>
   );
 }
 
@@ -389,11 +489,13 @@ function MessageView({ m, results }: { m: AgentMessage; results: Map<string, Age
       </div>
     );
   }
-  if (!m.text && !m.calls.length) return null;
+  // The project panel shows the to-do list; its updates don't need cards of their own.
+  const calls = m.calls.filter((c) => !PROJECT_TOOLS.has(c.name));
+  if (!m.text && !calls.length) return null;
   return (
     <div className="ai-msg assistant" data-testid="ai-msg-assistant">
       {m.text && <Markdown text={m.text} />}
-      {m.calls.map((c) => {
+      {calls.map((c) => {
         const r = results.get(c.id);
         return <ToolCard key={c.id} summary={r?.summary ?? c.name} writes={!!r?.writes} status={r?.status ?? 'stopped'} result={r} />;
       })}
