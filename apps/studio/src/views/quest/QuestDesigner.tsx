@@ -9,6 +9,7 @@ import { EMOTIONS, QUEST_TYPES, QuestFlag, type FormKey } from '@tes5/esp';
 import type { InfoModel, QuestModel, TopicModel } from '@tes5/workspace';
 import { DialogueAvailability, InfoAfter, InfoWhen, StageDialogue, useStageDialogue } from './StageLinks';
 import { Checkbox, clearDraft, DragNumber, EmptyState, ExpandableText, Field, FormLink, FormPicker, Icon, Modal, Select, Tabs, TextInput, useDebounced, useDraft, useQuery, useSummaries, useUniqueEditorId } from '../../components/ui';
+import { AskAiButton } from '../../components/AskAi';
 import { engine, useStore } from '../../state/store';
 import { ConditionList } from '../record/ConditionEditor';
 import { TriggersSection } from '../record/TriggersEditor';
@@ -219,6 +220,7 @@ function QuestEditor({ quest }: { quest: FormKey }) {
             {q.editorId} · {q.formKey}
           </div>
         </div>
+        <AskAiButton what="this quest" questions={['Explain how this quest works', 'Find problems in this quest and how to fix them', 'What is this quest missing?']} form={quest} align="right" />
         <button className="btn small" onClick={() => setChanging(true)} data-testid="change-with-plan" title="See this quest as a plan (characters, stages, journal, objectives, steps, dialogue), change it by hand or ask Claude, and apply only the differences">
           <Icon name="wand" size={12} /> Change with a plan
         </button>

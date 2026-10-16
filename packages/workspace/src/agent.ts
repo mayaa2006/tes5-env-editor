@@ -86,6 +86,9 @@ export interface AgentTurn {
   changes: string[];
   undone?: boolean;
   error?: string;
+  /** Tokens the turn used, and which AI answered (for the cost meter). */
+  usage?: AgentUsage;
+  provider?: string;
 }
 
 export interface AgentSession {
@@ -123,6 +126,37 @@ export interface AgentReply {
   stop: 'end' | 'tools' | 'max_tokens' | 'refusal';
   /** Provider-specific content to send back unchanged next time (Claude's blocks, with thinking). */
   raw?: unknown;
+  /** Tokens this request used, when the service says. */
+  usage?: AgentUsage;
+}
+
+/** Tokens used: read in full, written out (thinking included), and read from or written to Claude's prompt cache. */
+export interface AgentUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+export const emptyUsage = (): AgentUsage => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+
+export function addUsage(a: AgentUsage, b: AgentUsage | undefined): AgentUsage {
+  if (b) {
+    a.input += b.input;
+    a.output += b.output;
+    a.cacheRead += b.cacheRead;
+    a.cacheWrite += b.cacheWrite;
+  }
+  return a;
+}
+
+/** Claude's prices per million tokens (Opus 5.5): input, output, cache reads, 5-minute cache writes. */
+export const CLAUDE_PRICES = { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 };
+
+/** What tokens cost in US dollars; free AIs cost nothing. */
+export function usageCost(u: AgentUsage, provider: string | undefined): number {
+  if (provider !== 'claude') return 0;
+  return (u.input * CLAUDE_PRICES.input + u.output * CLAUDE_PRICES.output + u.cacheRead * CLAUDE_PRICES.cacheRead + u.cacheWrite * CLAUDE_PRICES.cacheWrite) / 1_000_000;
 }
 
 export interface AgentModel {
@@ -229,6 +263,7 @@ export interface AgentTurnResult {
   changes: string[];
   results: AgentToolResult[];
   error?: string;
+  usage: AgentUsage;
 }
 
 /**
@@ -248,6 +283,7 @@ export async function runAgentTurn(
   session.messages.push({ role: 'user', text: input.text, ...(input.context ? { context: input.context } : {}) });
   session.updated = Date.now();
   const byName = new Map(tools.map((t) => [t.name, t]));
+  const usage = emptyUsage();
   const maxCalls = model.free ? 15 : 40;
   const maxRounds = model.free ? 10 : 25;
   const resultMax = model.free ? 4000 : 12000;
@@ -261,6 +297,7 @@ export async function runAgentTurn(
     for (let round = 0; round < maxRounds; round++) {
       if (hooks.signal?.aborted) throw new AgentStopped();
       const reply = await model.reply({ system, messages: session.messages, tools, onText: (d) => emit({ type: 'text', session: sid, delta: d }), signal: hooks.signal });
+      addUsage(usage, reply.usage);
       session.messages.push({ role: 'assistant', text: reply.text, calls: reply.calls, provider: model.provider, ...(reply.raw !== undefined ? { raw: reply.raw } : {}) });
       session.updated = Date.now();
       if (reply.text) text = reply.text;
@@ -283,7 +320,7 @@ export async function runAgentTurn(
             continue;
           }
         }
-        return { text, changes, results };
+        return { text, changes, results, usage };
       }
       const out: AgentToolResult[] = [];
       for (const call of reply.calls) {
@@ -307,13 +344,13 @@ export async function runAgentTurn(
       if (hooks.signal?.aborted) throw new AgentStopped();
     }
     const msg = `Stopped after ${maxRounds} rounds of tool calls. Ask the AI to go on if there's more to do.`;
-    return { text: text || msg, changes, results, error: msg };
+    return { text: text || msg, changes, results, error: msg, usage };
   } catch (e) {
     // Every call the AI made gets an answer, so the conversation can go on.
     const last = session.messages[session.messages.length - 1];
     if (last?.role === 'assistant' && last.calls.length) session.messages.push({ role: 'tool', results: last.calls.map((c) => skipped(c, byName.get(c.name), 'Stopped by the author.', 'stopped')) });
     const error = e instanceof AgentStopped ? 'Stopped.' : (e as Error).message;
-    return { text, changes, results, error };
+    return { text, changes, results, error, usage };
   }
 }
 
@@ -411,7 +448,8 @@ export class ClaudeAgentModel implements AgentModel {
         .join('');
       const calls = msg.content.filter((b) => b.type === 'tool_use').map((b) => ({ id: (b as { id: string }).id, name: (b as { name: string }).name, input: (b as { input: unknown }).input }));
       const stop = msg.stop_reason === 'refusal' ? 'refusal' : msg.stop_reason === 'max_tokens' ? 'max_tokens' : calls.length ? 'tools' : 'end';
-      return { text, calls, stop, raw: msg.content };
+      const u = msg.usage as { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null } | undefined;
+      return { text, calls, stop, raw: msg.content, usage: { input: u?.input_tokens ?? 0, output: u?.output_tokens ?? 0, cacheRead: u?.cache_read_input_tokens ?? 0, cacheWrite: u?.cache_creation_input_tokens ?? 0 } };
     } catch (e) {
       if (req.signal?.aborted) throw new AgentStopped();
       if (e instanceof Anthropic.AuthenticationError) throw new WorkspaceError('Anthropic rejected the API key. Check it in the AI settings.');
@@ -512,18 +550,20 @@ export class ChatAgentModel implements AgentModel {
       if (max && promptTokens + 2000 > max) throw new WorkspaceError(`The conversation is too long for ${this.ai.model} (it reads about ${max.toLocaleString('en')} tokens). Start a new conversation, or pick a model that reads more.`);
       const r = await this.call(`${base}/api/chat`, { model: this.ai.model, messages, stream: false, ...(tools ? { tools } : { format: 'json' }), options: { num_ctx: contextWindow(promptTokens, max), temperature: 0.2 } }, {}, req.signal);
       const msg = r?.message ?? {};
-      if (json) return this.fromJson(String(msg.content ?? ''), r?.done_reason === 'length');
+      const usage = { input: Number(r?.prompt_eval_count ?? 0), output: Number(r?.eval_count ?? 0), cacheRead: 0, cacheWrite: 0 };
+      if (json) return { ...this.fromJson(String(msg.content ?? ''), r?.done_reason === 'length'), usage };
       const calls: AgentToolCall[] = ((msg.tool_calls ?? []) as { function?: { name?: string; arguments?: unknown } }[]).map((c) => ({ id: newCallId(), name: String(c.function?.name ?? ''), input: parseArgs(c.function?.arguments) }));
-      return { text: stripThinking(String(msg.content ?? '')), calls, stop: r?.done_reason === 'length' ? 'max_tokens' : calls.length ? 'tools' : 'end' };
+      return { text: stripThinking(String(msg.content ?? '')), calls, stop: r?.done_reason === 'length' ? 'max_tokens' : calls.length ? 'tools' : 'end', usage };
     }
     const url = `${this.ai.url.replace(/\/+$/, '')}/chat/completions`;
     const headers: Record<string, string> = this.ai.apiKey ? { authorization: `Bearer ${this.ai.apiKey}` } : {};
     const r = await this.call(url, { model: this.ai.model, messages, temperature: 0.2, max_tokens: 8000, ...(tools ? { tools } : { response_format: { type: 'json_object' } }) }, headers, req.signal);
     const choice = r?.choices?.[0] ?? {};
     const cut = choice.finish_reason === 'length';
-    if (json) return this.fromJson(String(choice.message?.content ?? ''), cut);
+    const usage = { input: Number(r?.usage?.prompt_tokens ?? 0), output: Number(r?.usage?.completion_tokens ?? 0), cacheRead: 0, cacheWrite: 0 };
+    if (json) return { ...this.fromJson(String(choice.message?.content ?? ''), cut), usage };
     const calls: AgentToolCall[] = ((choice.message?.tool_calls ?? []) as { id?: string; function?: { name?: string; arguments?: unknown } }[]).map((c) => ({ id: c.id || newCallId(), name: String(c.function?.name ?? ''), input: parseArgs(c.function?.arguments) }));
-    return { text: stripThinking(String(choice.message?.content ?? '')), calls, stop: cut ? 'max_tokens' : calls.length ? 'tools' : 'end' };
+    return { text: stripThinking(String(choice.message?.content ?? '')), calls, stop: cut ? 'max_tokens' : calls.length ? 'tools' : 'end', usage };
   }
 
   private fromJson(content: string, cut: boolean): AgentReply {

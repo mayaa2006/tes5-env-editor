@@ -201,6 +201,8 @@ The **AI** tab is a conversation with an AI that works through the editor itself
 
 - **Ask anything about your mod:** "What's in my plugin?", "How does this quest start?", "Where is Lydia used?", "What should I fix before release?". Starting points are offered when a conversation is empty.
 - **Every tool the AI uses shows as a card** saying what it did ("Read DemoInnkeeper", "Run the release check"), with **Details** (what the tool returned) and **Open** (the record, quest, cell or script in its own tab).
+- **Ask the AI from anywhere.** Quests, Characters, World, Scripts, the properties panel and Items/Magic have an **Ask the AI** menu with questions about what's open ("Explain how this quest works", "Which quests use this character?", "Dress and light this room"). Picking one opens the AI tab with the question ready to send.
+- **What it costs.** A chip at the top of the conversation counts the tokens it has used and, with Claude, what that comes to (at $4 per million tokens read, $20 written, $0.20 read from the cache and $5 written to it). It's an estimate; your Anthropic console has the real bill.
 - **Include what I have open** (on by default) tells the AI which quest, character, cell, record or script you have open, so you can say "this quest" or "her". Only names and FormKeys are sent.
 - **What it can look at:** records found by name or Editor ID and kind, any record in full, the load order, a quest (stages, journal, objectives, aliases, what moves it on), a quest's dialogue (as a screenplay, with the dialogue check), places and what's in them, a character's routine, what uses a record, scripts (read and check), the Items and Magic categories, the release check and the conflict report.
 - **Quests and dialogue it can make and change:**

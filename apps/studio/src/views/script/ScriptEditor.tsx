@@ -6,6 +6,7 @@
  */
 import { useEffect, useState } from 'react';
 import { EmptyState, Help, Icon, Modal, useQuery } from '../../components/ui';
+import { AskAiButton } from '../../components/AskAi';
 import { CompilerSettings, useBuildStatus } from './CompilerSettings';
 import { engine, useStore } from '../../state/store';
 import { compileScripts } from '../../state/compile';
@@ -111,6 +112,7 @@ export default function ScriptEditor() {
         <button className="btn small ghost" onClick={() => setCompilerOpen(true)} title="Which compiler is used, the game's script sources it needs, and compiling on save" data-testid="compiler-settings">
           <Icon name="sliders" size={12} /> Compiling
         </button>
+        <AskAiButton what="this script" questions={['Explain what this script does', 'Find bugs in this script', 'Fix the errors in this script']} align="right" />
         <button className={`btn small ${outline ? 'active' : 'ghost'}`} onClick={() => setOutline(!outline)} title="Outline">
           <Icon name="records" size={12} />
         </button>

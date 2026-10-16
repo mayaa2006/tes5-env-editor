@@ -5,7 +5,7 @@
  * to open the result in its own tab.
  */
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { AgentEvent, AgentLink, AgentMessage, AgentProject, AgentSession, AgentToolResult, AgentTurn } from '@tes5/workspace';
+import { CLAUDE_PRICES, addUsage, emptyUsage, usageCost, type AgentEvent, type AgentLink, type AgentMessage, type AgentProject, type AgentSession, type AgentToolResult, type AgentTurn } from '@tes5/workspace';
 import type { FormKey } from '@tes5/esp';
 import type { AiSessionInfo } from '../../engine/host';
 import { Checkbox, EmptyState, Icon, Modal, useDraft, useSummaries } from '../../components/ui';
@@ -230,7 +230,20 @@ function Conversation({
   const [withContext, setWithContext] = useState(true);
   const context = useEditorContext();
   const end = useRef<HTMLDivElement>(null);
+  const input = useRef<HTMLTextAreaElement>(null);
   const messages = session?.messages ?? [];
+  // A question from "Ask the AI" in another workspace: ready in the box, with what's open included.
+  const asked = useStore((s) => s.aiAsk?.n);
+  useEffect(() => {
+    const t = useStore.getState().takeAiAsk();
+    if (t === undefined) return;
+    setText(t);
+    setWithContext(true);
+    setTimeout(() => {
+      input.current?.focus();
+      input.current?.setSelectionRange(t.length, t.length);
+    });
+  }, [asked]);
   useEffect(() => end.current?.scrollIntoView({ block: 'end' }), [messages.length, live?.text, live?.calls.length]);
 
   const turnEnds = useTurnEnds(session);
@@ -249,8 +262,11 @@ function Conversation({
 
   return (
     <section className="ai-chat">
-      <div className="ai-chat-head">
+      <div className="ai-chat-head row" style={{ gap: 12, alignItems: 'flex-start' }}>
+        <div className="grow">
         <AiPicker verb="Talking to" help="Your messages, what you have open (if ticked) and what the AI reads with its tools are sent to this AI. It reads your load order through the editor; nothing is saved to disk until you save." />
+        </div>
+        {session && <UsageMeter turns={session.turns} />}
       </div>
       {session?.project && <ProjectPanel project={session.project} running={running} ready={ready} onSend={(t) => void submit(t)} onClear={onClearProject} />}
       <div className="scroll grow ai-messages" data-testid="ai-messages">
@@ -306,6 +322,7 @@ function Conversation({
         </div>
         <div className="row" style={{ gap: 6, alignItems: 'stretch' }}>
           <textarea
+            ref={input}
             className="ai-input"
             value={text}
             placeholder={ready ? `Ask ${name} about your mod… (Enter to send, Shift+Enter for a new line)` : 'Choose an AI above first'}
@@ -332,6 +349,27 @@ function Conversation({
         </div>
       </div>
     </section>
+  );
+}
+
+/** Tokens this conversation has used, and what that cost with Claude. */
+function UsageMeter({ turns }: { turns: AgentTurn[] }) {
+  const counted = turns.filter((t) => t.usage);
+  if (!counted.length) return null;
+  const total = counted.reduce((u, t) => addUsage(u, t.usage), emptyUsage());
+  const cost = counted.reduce((c, t) => c + usageCost(t.usage!, t.provider), 0);
+  const tokens = total.input + total.output + total.cacheRead + total.cacheWrite;
+  const paid = counted.some((t) => t.provider === 'claude');
+  const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 100_000 ? 0 : 1)}k` : String(n));
+  const title = [
+    `This conversation so far: ${total.input.toLocaleString('en')} tokens read, ${total.output.toLocaleString('en')} written (thinking included), ${total.cacheRead.toLocaleString('en')} read from the cache and ${total.cacheWrite.toLocaleString('en')} written to it.`,
+    paid ? `Claude costs $${CLAUDE_PRICES.input} per million tokens read, $${CLAUDE_PRICES.output} written, $${CLAUDE_PRICES.cacheRead} read from the cache and $${CLAUDE_PRICES.cacheWrite} written to it. The figure is an estimate; your Anthropic console shows the real bill. Planning a whole quest makes extra requests that aren't counted here.` : 'Free AIs cost nothing; the count shows how much of the model\'s reading room long conversations use.',
+    'Each message re-sends the conversation, so long conversations cost more per message: start a new one for a new job.',
+  ].join('\n\n');
+  return (
+    <span className="chip ai-usage" title={title} data-testid="ai-usage">
+      {k(tokens)} tokens{paid ? ` · about $${cost < 0.01 ? cost.toFixed(3) : cost.toFixed(2)}` : ''}
+    </span>
   );
 }
 

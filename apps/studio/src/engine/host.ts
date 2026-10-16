@@ -1675,7 +1675,7 @@ export class EngineHost {
       const added = ws.undoLabelsSince(depth);
       const label = `AI: ${sessionTitle(text)}`;
       const undoLabel = added.length && added.every((l) => l.startsWith('AI: ')) && ws.squashUndo(depth, label) ? label : added.length ? (added[added.length - 1] ?? null) : null;
-      session.turns.push({ at, title: sessionTitle(text), undoLabel, changes: res.changes, ...(res.error ? { error: res.error } : {}) });
+      session.turns.push({ at, title: sessionTitle(text), undoLabel, changes: res.changes, ...(res.error ? { error: res.error } : {}), usage: res.usage, provider: model.provider });
       if (plans.size) session.plans = Object.fromEntries(plans);
       session.updated = Date.now();
       await this.aiSave();

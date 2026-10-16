@@ -1693,3 +1693,10 @@ table.grid tr.diff td {
 .rot90 {
   transform: rotate(90deg);
 }
+.menu-right .menu-pop {
+  left: auto;
+  right: 0;
+}
+.ai-usage {
+  white-space: nowrap;
+}

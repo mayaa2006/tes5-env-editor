@@ -7,6 +7,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import type { FormKey } from '@tes5/esp';
 import type { CatalogItem, CatalogTab, RecordView } from '@tes5/workspace';
 import { Checkbox, Help, Icon, useDebounced, useQuery, useSummaries } from '../../components/ui';
+import { AskAiButton } from '../../components/AskAi';
 import { engine, useStore } from '../../state/store';
 import { Header, RecordActions } from '../record/Inspector';
 import { RecordForm } from '../record/RecordForm';
@@ -139,7 +140,8 @@ function Editor({ formKey, onSelect }: { formKey: FormKey; onSelect: (k: FormKey
       <div className="catalog-editor">
         <div className="row" style={{ alignItems: 'baseline', gap: 8, padding: '12px 12px 0' }}>
           <h2 style={{ margin: 0 }}>{(draft.name as string) || (view.sig === 'COBJ' ? <RecipeTitle view={view} data={draft} /> : view.editorId || view.typeName)}</h2>
-          <span className="dim small">{view.editorId}</span>
+          <span className="dim small grow">{view.editorId}</span>
+          <AskAiButton what="this record" form={view.formKey} questions={['Explain this record in plain words', 'What uses this record?', 'Make a stronger copy of this']} align="right" />
         </div>
         <Header view={view} />
         {!session.activePlugin && <div className="pad small warn" style={{ paddingTop: 0 }}>Your first edit will ask you to create a plugin to hold your changes.</div>}
