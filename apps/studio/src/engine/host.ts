@@ -111,6 +111,8 @@ import {
   type AgentSession,
   agentModel,
   newAgentSession,
+  projectSummary,
+  projectTools,
   runAgentTurn,
   sessionTitle,
 } from '@tes5/workspace';
@@ -1652,7 +1654,9 @@ export class EngineHost {
     if (!this.aiPlans.has(id)) this.aiPlans.set(id, new Map());
     const ctx: QuestToolContext = { ai: asAi(ai), plans: this.aiPlans.get(id)!, touched: new Set() };
     try {
-      const res = await runAgentTurn(model, session, { text: text.trim(), context: opts.context }, aiTools(this, ctx), {
+      // The project's to-do goes with every message, so the AI always works from the current list.
+      const context = [opts.context, projectSummary(session.project)].filter(Boolean).join('\n\n') || undefined;
+      const res = await runAgentTurn(model, session, { text: text.trim(), context }, [...aiTools(this, ctx), ...projectTools(session)], {
         signal: run.abort.signal,
         onEvent: (event) => this.emitHost({ type: 'ai', event }),
         transaction: async (label, fn) => {
@@ -1680,6 +1684,16 @@ export class EngineHost {
     } finally {
       this.aiRuns.delete(id);
     }
+  }
+
+  /** Remove a conversation's project (its brief and to-do list); what was built stays. */
+  async aiClearProject(id: string) {
+    const s = (await this.aiLoad()).get(id);
+    if (!s) throw new Error('That conversation no longer exists');
+    if (this.aiRuns.has(id)) throw new Error('Wait for the AI to finish first');
+    delete s.project;
+    await this.aiSave();
+    return s;
   }
 
   /** Stop the AI's turn in this conversation (what's done so far stays). */

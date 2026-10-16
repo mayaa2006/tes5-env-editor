@@ -2,6 +2,12 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.29.0
+
+- **Bigger jobs in the AI tab become projects.** Ask for a questline, a town, a dungeon or a whole mod, and the AI writes a short brief and a to-do list (shown above the conversation), then works through it one task at a time. It stops after each task so you can look; **Go on with the next task** carries on. Decisions you make along the way go into the brief, so later tasks fit the earlier ones.
+- **Review my mod**, when a project is finished or any time you ask: the release check, conflicts with other mods and every quest's problems in one list, most important first.
+- New starting points: **Plan a bigger job** and **Review my mod**.
+
 ## 0.28.0
 
 - **The AI tab can build and change places.** It uses the World tab's own tools:

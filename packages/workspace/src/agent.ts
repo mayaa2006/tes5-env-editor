@@ -95,6 +95,16 @@ export interface AgentSession {
   updated: number;
   messages: AgentMessage[];
   turns: AgentTurn[];
+  /** A bigger job worked through task by task (a questline, a whole area). */
+  project?: AgentProject;
+}
+
+export type AgentTaskStatus = 'todo' | 'doing' | 'done' | 'skipped';
+
+export interface AgentProject {
+  /** What the whole job is, in a few sentences: the author's goals and decisions so far. */
+  brief: string;
+  tasks: { id: number; title: string; status: AgentTaskStatus; note?: string }[];
 }
 
 /** Streamed to the UI while a turn runs. */
@@ -134,6 +144,12 @@ How to work:
 - After changing things, check your work with the check tools when there is one for it, and fix problems your changes caused.
 - If something can't be done with your tools, say so plainly and say how the author can do it in the editor (which tab).
 - If a request is unclear and getting it wrong would waste the author's work, ask one short question first.
+
+Bigger jobs:
+- When the author asks for something too big for one go (a questline, several quests, a whole area or town, "a mod about…"), first make a project with set_project: a short brief of what they want and a to-do list of tasks in order, each one a piece you can finish and check in one go (plan and build quest 1; make the bandit camp; write the follow-up quest…). Show them the list and ask whether to start.
+- Work on one task at a time: mark it doing, do it, check it, mark it done with a one-line note of what you made. Then stop and tell the author what's done and what's next, so they can look before you go on. Carry on when they say so.
+- Keep the brief up to date with decisions the author makes along the way (names, places, tone), so later tasks fit the earlier ones.
+- When every task is done, run review_mod and sum up what's left to fix.
 
 Quests:
 - For a whole new quest, plan it with plan_quest, tell the author the plan in a few lines (who, where, the stages and what moves them, any questions it raises) and build it with build_plan once they're happy, unless they asked you to just go ahead. Fix problems the plan summary lists with revise_plan first.
@@ -554,6 +570,82 @@ function parseArgs(v: unknown): unknown {
 
 function stripThinking(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+}
+
+// ---------------------------------------------------------------- projects
+
+/** The project in a few lines, for the AI to keep in view at every turn. */
+export function projectSummary(p: AgentProject | undefined): string {
+  if (!p) return '';
+  const mark: Record<AgentTaskStatus, string> = { todo: '[ ]', doing: '[>]', done: '[x]', skipped: '[-]' };
+  return `Project brief: ${p.brief}\nTo-do:\n${p.tasks.map((t) => `${mark[t.status]} ${t.id}. ${t.title}${t.note ? ` — ${t.note}` : ''}`).join('\n')}`;
+}
+
+/** Tools that keep a conversation's project (its brief and to-do list). They change the conversation, not the plugin. */
+export function projectTools(session: AgentSession): AgentTool<any>[] {
+  const need = () => {
+    if (!session.project) throw new WorkspaceError('There is no project in this conversation yet: make one with set_project');
+    return session.project;
+  };
+  const show = () => ({ data: projectSummary(session.project) });
+  return [
+    {
+      name: 'set_project',
+      group: 'read',
+      writes: false,
+      description: 'Start (or replace) the project for a bigger job: a short brief and a to-do list of tasks in order, each small enough to finish and check in one go. The author sees the list beside the conversation.',
+      input: z.object({ brief: z.string().describe("What the whole job is: the author's goals and decisions"), tasks: z.array(z.string()).min(1).max(40).describe('The tasks, in order') }),
+      summary: (i) => `Plan the project (${i.tasks.length} tasks)`,
+      run: (i) => {
+        session.project = { brief: i.brief.trim(), tasks: i.tasks.map((t: string, n: number) => ({ id: n + 1, title: t.trim(), status: 'todo' as const })) };
+        return show();
+      },
+    },
+    {
+      name: 'update_task',
+      group: 'read',
+      writes: false,
+      description: "Mark a project task as doing, done (with a one-line note of what was made) or skipped, or rename it.",
+      input: z.object({ id: z.number().int(), status: z.enum(['todo', 'doing', 'done', 'skipped']).nullable().optional(), note: z.string().nullable().optional(), title: z.string().nullable().optional() }),
+      summary: (i) => `Task ${i.id}${i.status ? `: ${i.status}` : ''}`,
+      run: (i) => {
+        const t = need().tasks.find((x) => x.id === i.id);
+        if (!t) throw new WorkspaceError(`There's no task ${i.id}`);
+        if (i.status) t.status = i.status;
+        if (i.note) t.note = i.note.trim();
+        if (i.title) t.title = i.title.trim();
+        return show();
+      },
+    },
+    {
+      name: 'add_tasks',
+      group: 'read',
+      writes: false,
+      description: 'Add tasks to the project, at the end or after a given task.',
+      input: z.object({ tasks: z.array(z.string()).min(1), after: z.number().int().nullable().optional().describe('Task id to insert after; null for the end') }),
+      summary: (i) => `Add ${i.tasks.length} task${i.tasks.length === 1 ? '' : 's'}`,
+      run: (i) => {
+        const p = need();
+        let next = Math.max(0, ...p.tasks.map((t) => t.id)) + 1;
+        const made = i.tasks.map((t: string) => ({ id: next++, title: t.trim(), status: 'todo' as const }));
+        const at = i.after ? p.tasks.findIndex((t) => t.id === i.after) + 1 : p.tasks.length;
+        p.tasks.splice(at > 0 ? at : p.tasks.length, 0, ...made);
+        return show();
+      },
+    },
+    {
+      name: 'update_brief',
+      group: 'read',
+      writes: false,
+      description: "Rewrite the project's brief with the decisions made so far, so later tasks fit the earlier ones.",
+      input: z.object({ brief: z.string() }),
+      summary: () => 'Update the brief',
+      run: (i) => {
+        need().brief = i.brief.trim();
+        return show();
+      },
+    },
+  ];
 }
 
 // ---------------------------------------------------------------- sessions

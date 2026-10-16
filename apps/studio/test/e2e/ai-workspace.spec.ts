@@ -47,7 +47,7 @@ for (const size of [
 
     // Nothing yet: what it can do, and places to start.
     await expect(page.getByTestId('ai-empty')).toContainText('Ask the AI about your mod');
-    await expect(page.getByTestId('ai-starter')).toHaveCount(9);
+    await expect(page.getByTestId('ai-starter')).toHaveCount(11);
     // No key yet: the AI's settings are open and sending waits.
     await expect(page.getByTestId('ai-input')).toBeDisabled();
     await page.getByTestId('api-key').fill('sk-ant-test');
@@ -186,5 +186,58 @@ test('with asking off, the AI dresses and lights a room straight away (1920×108
   // Open goes to the cell in the World tab.
   await page.getByTestId('ai-tool').nth(1).getByTestId('ai-tool-open').click();
   await expect(page.locator('.workspace-tab.active')).toContainText('World');
+  expect(errors).toEqual([]);
+});
+
+test('a bigger job becomes a project worked through a task at a time (1280×800)', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const bodies: any[] = [];
+  await page.route('https://api.anthropic.com/**', async (route) => {
+    bodies.push(route.request().postDataJSON());
+    const n = bodies.length;
+    const answer =
+      n === 1
+        ? sse('', [{ id: 'tu_p', name: 'set_project', input: { brief: 'A two-part questline about a stolen ring.', tasks: ['Make part one', 'Make part two', 'Dress the tavern'] } }])
+        : n === 2
+          ? sse('Here is the plan: three tasks. Shall I start?')
+          : n === 3
+            ? sse('', [
+                { id: 'tu_a', name: 'update_task', input: { id: 1, status: 'doing' } },
+                { id: 'tu_q', name: 'create_quest', input: { editorId: 'RingPartOne', name: 'The Ring, Part One' } },
+                { id: 'tu_b', name: 'update_task', input: { id: 1, status: 'done', note: 'Made RingPartOne' } },
+              ])
+            : sse('Part one is made. Next: part two.');
+    await route.fulfill({ status: 200, headers: { 'content-type': 'text/event-stream', 'access-control-allow-origin': '*' }, body: answer });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: /Explore the demo/ }).click();
+  await page.getByTestId('load-plugins').click();
+  await page.locator('.workspace-tab', { hasText: 'AI' }).click();
+  await page.getByTestId('api-key').fill('sk-ant-test');
+  await page.getByTestId('api-key').blur();
+  await page.getByRole('checkbox', { name: 'Ask before each change' }).uncheck();
+  await page.getByTestId('ai-starter').filter({ hasText: 'Plan a bigger job' }).click();
+  await page.getByTestId('ai-input').fill('I want to make a questline about a stolen ring');
+  await page.getByTestId('ai-send').click();
+
+  // The project: brief and to-do, nothing done yet.
+  const project = page.getByTestId('ai-project');
+  await expect(project).toContainText('A two-part questline about a stolen ring.');
+  await expect(project.getByTestId('ai-project-task')).toHaveText(['○ Make part one', '○ Make part two', '○ Dress the tavern']);
+  await expect(project.getByTestId('ai-project-progress')).toHaveText('0 of 3 done');
+  await expect(page.getByTestId('ai-msg-assistant').last()).toContainText('Shall I start?');
+
+  // Go on: one task, then it stops.
+  await project.getByTestId('ai-project-next').click();
+  await expect(project.getByTestId('ai-project-progress')).toHaveText('1 of 3 done');
+  await expect(project.getByTestId('ai-project-task').first()).toContainText('Make part one — Made RingPartOne');
+  await expect(page.getByTestId('ai-turn').last()).toContainText('Create the quest The Ring, Part One');
+  await expect(page.getByTestId('ai-msg-assistant').last()).toContainText('Next: part two');
+  // The second request carried the project's to-do list and the "carry on" message.
+  expect(bodies[2].messages.at(-1).content).toContain('Carry on with the next task.');
+  expect(bodies[2].messages.at(-1).content).toContain('[ ] 1. Make part one');
+  expect(bodies[0].tools.map((t: any) => t.name)).toEqual(expect.arrayContaining(['set_project', 'update_task', 'review_mod']));
   expect(errors).toEqual([]);
 });
