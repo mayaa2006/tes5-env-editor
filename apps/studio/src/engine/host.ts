@@ -1565,8 +1565,6 @@ export class EngineHost {
   /** Conversations, loaded from TES5EnvEditor/ai-conversations.json in the output folder on first use. */
   private aiSessions?: Map<string, AgentSession>;
   private aiRuns = new Map<string, { abort: AbortController; approvals: Map<string, (ok: boolean) => void> }>();
-  /** Plans the AI made in each conversation (kept while the app runs). */
-  private aiPlans = new Map<string, QuestToolContext['plans']>();
   /** Tests swap in a scripted model. */
   aiModel: (ai: AiProvider) => AgentModel = (ai) => agentModel(ai);
 
@@ -1651,8 +1649,9 @@ export class EngineHost {
     this.aiRuns.set(id, run);
     const depth = ws.undoDepth;
     const at = session.messages.length;
-    if (!this.aiPlans.has(id)) this.aiPlans.set(id, new Map());
-    const ctx: QuestToolContext = { ai: asAi(ai), plans: this.aiPlans.get(id)!, touched: new Set() };
+    // Plans made earlier in the conversation (saved with it) can be revised and built in later turns.
+    const plans: QuestToolContext['plans'] = new Map(Object.entries(session.plans ?? {}) as [string, { plan: QuestPlan; source?: string; quest?: FormKey }][]);
+    const ctx: QuestToolContext = { ai: asAi(ai), plans, touched: new Set() };
     try {
       // The project's to-do goes with every message, so the AI always works from the current list.
       const context = [opts.context, projectSummary(session.project)].filter(Boolean).join('\n\n') || undefined;
@@ -1677,6 +1676,7 @@ export class EngineHost {
       const label = `AI: ${sessionTitle(text)}`;
       const undoLabel = added.length && added.every((l) => l.startsWith('AI: ')) && ws.squashUndo(depth, label) ? label : added.length ? (added[added.length - 1] ?? null) : null;
       session.turns.push({ at, title: sessionTitle(text), undoLabel, changes: res.changes, ...(res.error ? { error: res.error } : {}) });
+      if (plans.size) session.plans = Object.fromEntries(plans);
       session.updated = Date.now();
       await this.aiSave();
       this.emitHost({ type: 'ai', event: { type: 'done', session: id, ...(res.error ? { error: res.error } : {}) } });

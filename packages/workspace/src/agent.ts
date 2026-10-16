@@ -97,6 +97,8 @@ export interface AgentSession {
   turns: AgentTurn[];
   /** A bigger job worked through task by task (a questline, a whole area). */
   project?: AgentProject;
+  /** Quest plans the AI made in this conversation, by id ("plan1"), kept so they can be revised and built later. */
+  plans?: Record<string, { plan: unknown; source?: string; quest?: string }>;
 }
 
 export type AgentTaskStatus = 'todo' | 'doing' | 'done' | 'skipped';
