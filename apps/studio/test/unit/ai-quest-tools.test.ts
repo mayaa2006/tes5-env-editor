@@ -158,4 +158,23 @@ describe('the AI workspace quest tools', () => {
     expect(host.ws!.byEditorId('InnkeeperRingQuest')).toBeDefined();
     expect(r.session.turns[0]!.changes).toEqual(['Build the quest from plan1']);
   });
+
+  it('keeps plans with the conversation, so one made before a restart can still be built', async () => {
+    const host = await demo();
+    vi.stubGlobal('fetch', async () => ({ ok: true, status: 200, json: async () => ({ choices: [{ message: { content: JSON.stringify(exampleQuestPlan()) }, finish_reason: 'stop' }] }), text: async () => '' }));
+    const ai = { kind: 'openai' as const, url: 'https://x.test/v1', model: 'm' };
+    host.aiModel = () => scripted([{ text: '', calls: [call('plan_quest', { text: 'Brynja lost her ring.' }, 'p')], stop: 'tools' }, { text: 'Here is the plan.', calls: [], stop: 'end' }]);
+    const s = await host.aiNewSession();
+    await host.aiSend(s.id, 'Plan the ring quest', ai);
+    // The app restarts: a new host reads the saved conversation.
+    const again = new EngineHost(host.fs);
+    await again.open({ kind: 'demo', path: DEMO_GAME_DIR, loadOrder: ORDER });
+    await again.loadPlugins(['DemoWorld.esm']);
+    again.createPlugin('Again.esp', {});
+    again.aiModel = () => scripted([{ text: '', calls: [call('build_plan', { planId: 'plan1' }, 'b')], stop: 'tools' }, { text: 'Built.', calls: [], stop: 'end' }]);
+    const r = await again.aiSend(s.id, 'Build it', ai);
+    const built = (r.session.messages.filter((m) => m.role === 'tool').at(-1) as any).results[0];
+    expect(built).toMatchObject({ name: 'build_plan', status: 'done' });
+    expect(again.ws!.byEditorId('InnkeeperRingQuest')).toBeDefined();
+  });
 });
