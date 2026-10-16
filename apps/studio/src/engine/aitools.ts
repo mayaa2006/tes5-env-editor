@@ -14,6 +14,7 @@ import type { EngineHost } from './host';
 import { questProblems, questTools, type QuestToolContext } from './aitools-quest';
 import { moreTools } from './aitools-more';
 import { worldTools } from './aitools-world';
+import { dialogueTools } from './aitools-dialogue';
 
 /** Common record types, so the AI can narrow a search by kind in plain words. */
 const KINDS: Record<string, string[]> = {
@@ -338,7 +339,7 @@ export function aiTools(host: EngineHost, ctx?: QuestToolContext): AgentTool[] {
       },
     },
   ];
-  if (ctx) tools.push(...questTools(host, ctx), ...moreTools(host), ...worldTools(host));
+  if (ctx) tools.push(...questTools(host, ctx), ...dialogueTools(host, ctx), ...moreTools(host), ...worldTools(host));
   return tools;
 }
 
