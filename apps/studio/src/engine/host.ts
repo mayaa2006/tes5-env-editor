@@ -541,7 +541,7 @@ export class EngineHost {
     return this.terrainService!.paintTexture(cell, points, opts);
   }
 
-  sculptTerrain(cell: FormKey, points: { x: number; y: number }[], opts: { mode: SculptMode; radius: number; strength: number }) {
+  sculptTerrain(cell: FormKey, points: { x: number; y: number }[], opts: { mode: SculptMode; radius: number; strength: number; flattenTo?: number }) {
     return this.terrainService!.sculpt(cell, points, opts);
   }
 

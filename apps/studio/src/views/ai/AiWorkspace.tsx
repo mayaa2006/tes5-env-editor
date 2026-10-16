@@ -21,6 +21,8 @@ const STARTERS: { label: string; text: string; title: string }[] = [
   { label: 'Make a character', text: 'Make a character: ', title: 'Describe who they are, where they stand, what they wear, carry and do; the AI copies a fitting character and places them' },
   { label: 'Make an item or spell', text: 'Make a new ', title: 'Say what it is and what it does; the AI copies a similar one and changes it' },
   { label: 'Dress and light a room', text: 'Dress and light the cell I have open as ', title: 'Open a cell in the World tab first, then say what the room is (a tavern, a home, a storeroom, a study, an alchemy lab, a smithy)' },
+  { label: 'Make something happen', text: 'When the player ', title: 'Say what the player does to an object and what should happen ("pulls the lever in the cell I have open, open the secret door"); the AI adds a trigger you can check in the Triggers editor' },
+  { label: 'Shape the land', text: 'In the outdoor cell I have open, ', title: 'Open an outdoor cell in the World tab first, then say what to change: a hill, a flat spot to build on, a road, a new cell beside it, or the ground texture' },
   { label: "What's in my plugin?", text: 'What does my plugin contain so far? Group it by kind and point out anything unfinished.', title: 'The AI lists your records and points out loose ends' },
   { label: 'Explain a quest', text: 'Explain how the quest I have open works: how it starts, what moves it from stage to stage, and how it ends.', title: 'Open a quest in the Quests tab first, or name it' },
   { label: 'Find problems before release', text: 'Run the release check and the conflict report, and tell me what to fix first and how.', title: 'The AI runs the release check and conflict report and sorts what to fix' },
@@ -272,7 +274,7 @@ function Conversation({
       <div className="scroll grow ai-messages" data-testid="ai-messages">
         {!messages.length && !live && (
           <EmptyState icon="ai" title="Ask the AI about your mod" testId="ai-empty">
-            It can look through your load order and your plugin, explain how things are set up, find problems before release, and make quests and dialogue for you. Each change it makes shows here and can be undone. Pick a starting point or write your own below.
+            It can look through your load order and your plugin, explain how things are set up, find problems before release, and make things for you: quests and dialogue, characters, items and scripts, rooms and the land outside, and triggers on objects. Each change it makes shows here and can be undone. Pick a starting point or write your own below.
             <div className="row wrap" style={{ gap: 6, marginTop: 10, justifyContent: 'center' }}>
               {STARTERS.map((s) => (
                 <button key={s.label} className="btn small" title={s.title} onClick={() => setText(s.text)} data-testid="ai-starter">
