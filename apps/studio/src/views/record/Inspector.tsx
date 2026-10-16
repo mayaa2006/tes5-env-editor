@@ -40,7 +40,7 @@ export function Inspector() {
           {view.editorId ?? view.typeName}
         </span>
         <span className="chip">{view.sig}</span>
-        <AskAiButton what="this record" form={view.formKey} questions={['Explain this record in plain words', 'What uses this record?']} align="right" />
+        <AskAiButton what="this record" form={view.formKey} questions={view.sig === 'REFR' || view.sig === 'ACHR' ? ['Explain this record in plain words', 'What uses this record?', 'When the player uses this, '] : ['Explain this record in plain words', 'What uses this record?']} align="right" />
       </div>
       <div className="scroll" style={{ flex: 1 }}>
         <Header view={view} />

@@ -2,6 +2,10 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.32.0
+
+- **The AI can add triggers to objects.** Ask for a lever that opens a secret door, a chest that rewards the player once, a quest item that moves the quest on when picked up, or a message when the player arrives somewhere. The AI writes them as the same "when… if… do…" blocks you see in the Triggers editor, so you can check and change them there, and it can change or remove them later.
+
 ## 0.31.0
 
 - **The AI can change dialogue that's already there.** Ask it to reword a line, change who it suits ("make her sound angrier"), say it only at a certain stage, make it move the quest on, end the conversation, or remove it. It goes line by line through the quest's dialogue, the same as the Dialogue tab, and checks the dialogue afterwards. One Undo takes it all back.
