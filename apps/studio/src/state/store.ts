@@ -151,6 +151,11 @@ interface Store {
   compile: CompileState;
   /** Set when an edit needs a plugin to go into; the edit is retried once one exists. */
   pluginPrompt?: { retry?: () => Promise<unknown> };
+  /** A question for the AI tab to put in its message box ("Ask the AI" from another workspace); `n` changes on each request. */
+  aiAsk?: { text: string; n: number };
+  /** Open the AI tab with this question ready to send. */
+  askAi(text: string): void;
+  takeAiAsk(): string | undefined;
 
   setClient(c: EngineClient): void;
   setSession(s: SessionInfo): void;
@@ -235,6 +240,12 @@ export const useStore = create<Store>((set, get) => ({
   compile: { running: false, done: 0, total: 0, report: [] },
   setBusy: (busy) => set({ busy }),
   setPluginPrompt: (pluginPrompt) => set({ pluginPrompt }),
+  askAi: (text) => set({ aiAsk: { text, n: (get().aiAsk?.n ?? 0) + 1 }, tab: 'ai' }),
+  takeAiAsk: () => {
+    const a = get().aiAsk;
+    if (a) set({ aiAsk: undefined });
+    return a?.text;
+  },
 }));
 
 /** Call the engine with error reporting; returns undefined on failure. */

@@ -2,6 +2,11 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.30.0
+
+- **Ask the AI from any workspace.** Quests, Characters, World, Scripts, the properties panel and Items/Magic have an **Ask the AI** menu with questions about what you have open ("Explain how this quest works", "Which quests use this character?", "Dress and light this room", "Find bugs in this script"…), or your own. The AI tab opens with the question ready and knows which record you mean.
+- **See what a conversation costs.** The AI tab counts the tokens each conversation uses and, with Claude, estimates the cost. Hover it for the details.
+
 ## 0.29.1
 
 - **The AI's quest plans are kept with the conversation.** A plan made in the AI tab can be revised and built after closing and reopening the app, instead of being lost.

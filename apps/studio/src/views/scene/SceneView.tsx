@@ -7,6 +7,7 @@ import type { FormKey, Navmesh } from '@tes5/esp';
 import { addTriangle, buildGrid, deleteTriangles, setTriangleFlags } from '@tes5/navmesh';
 import type { PlacedRef } from '@tes5/workspace';
 import { Checkbox, Field, Icon, Menu, MenuItem, Modal, Select, useQuery } from '../../components/ui';
+import { AskAiButton } from '../../components/AskAi';
 import { engine, useStore } from '../../state/store';
 import { EnvTools, type ToolHandlers } from './EnvTools';
 import { NewCellDialog, cellLabel, type NewCellKind } from './NewCellDialog';
@@ -245,6 +246,7 @@ export default function SceneView() {
           {info ? cellLabel(info) : cell}
         </strong>
         {info && !info.interior && info.grid && <span className="chip" title="Grid position of the current cell (new objects are placed in the cell under the cursor)">{`${info.grid.x}, ${info.grid.y}`}</span>}
+        <AskAiButton what="this place" form={cell} questions={["What's in this place, and what is it used for?", 'Dress and light this room to fit its use', 'Find problems in this place (floating items, doors, navmesh)']} />
         {outdoorArea && (
           <span className="row" style={{ gap: 0 }} data-testid="cell-steps">
             {(

@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import type { FormKey } from '@tes5/esp';
 import type { RecordSummary, RecordView, Transform } from '@tes5/workspace';
 import { DragNumber, Field, Icon, Section, useQuery } from '../../components/ui';
+import { AskAiButton } from '../../components/AskAi';
 import { engine, useStore } from '../../state/store';
 import { RecordForm } from './RecordForm';
 import { TriggersSection } from './TriggersEditor';
@@ -39,6 +40,7 @@ export function Inspector() {
           {view.editorId ?? view.typeName}
         </span>
         <span className="chip">{view.sig}</span>
+        <AskAiButton what="this record" form={view.formKey} questions={['Explain this record in plain words', 'What uses this record?']} align="right" />
       </div>
       <div className="scroll" style={{ flex: 1 }}>
         <Header view={view} />

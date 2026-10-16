@@ -67,7 +67,7 @@ describe('the AI workspace tools on the demo data', () => {
     const r = await host.aiSend(s.id, 'Who runs the tavern?', { kind: 'claude', apiKey: 'k' }, { context: 'Quest open: none' });
     expect(r.error).toBeNull();
     expect(r.session.title).toBe('Who runs the tavern?');
-    expect(r.session.turns).toEqual([{ at: 0, title: 'Who runs the tavern?', undoLabel: null, changes: [] }]);
+    expect(r.session.turns).toEqual([{ at: 0, title: 'Who runs the tavern?', undoLabel: null, changes: [], usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, provider: 'test' }]);
     const ai = events.filter((e): e is Extract<HostEvent, { type: 'ai' }> => e.type === 'ai').map((e) => e.event.type);
     expect(ai).toContain('result');
     expect(ai.at(-1)).toBe('done');

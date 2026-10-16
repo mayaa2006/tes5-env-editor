@@ -241,3 +241,41 @@ test('a bigger job becomes a project worked through a task at a time (1280×800)
   expect(bodies[0].tools.map((t: any) => t.name)).toEqual(expect.arrayContaining(['set_project', 'update_task', 'review_mod']));
   expect(errors).toEqual([]);
 });
+
+test('ask the AI from another workspace, and see what the conversation cost (1280×800)', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const bodies: any[] = [];
+  await page.route('https://api.anthropic.com/**', async (route) => {
+    bodies.push(route.request().postDataJSON());
+    await route.fulfill({ status: 200, headers: { 'content-type': 'text/event-stream', 'access-control-allow-origin': '*' }, body: sse('Brynja runs the Demo Tavern.') });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: /Explore the demo/ }).click();
+  await page.getByTestId('load-plugins').click();
+  // The AI needs a key first.
+  await page.locator('.workspace-tab', { hasText: 'AI' }).click();
+  await page.getByTestId('api-key').fill('sk-ant-test');
+  await page.getByTestId('api-key').blur();
+
+  // From Characters: pick someone and ask.
+  await page.locator('.workspace-tab', { hasText: 'Characters' }).click();
+  await page.getByTestId('npc-list').getByText('Brynja').first().click();
+  await page.getByTestId('ask-ai').click();
+  await page.getByRole('menuitem', { name: /Describe this character/ }).click();
+
+  // The AI tab opens with the question ready and the character included.
+  await expect(page.locator('.workspace-tab.active')).toContainText('AI');
+  await expect(page.getByTestId('ai-input')).toHaveValue(/Describe this character/);
+  await expect(page.getByTestId('ai-input')).toBeFocused();
+  await expect(page.getByRole('checkbox', { name: /Include what I have open: .*DemoInnkeeper/ })).toBeChecked();
+  await page.getByTestId('ai-send').click();
+  await expect(page.getByTestId('ai-msg-assistant').last()).toContainText('Brynja runs the Demo Tavern.');
+  expect(bodies[0].messages[0].content).toContain('Character open in the Characters tab: Brynja');
+
+  // What it cost: 10 tokens read and 50 written, at Claude's prices ($0.00104).
+  await expect(page.getByTestId('ai-usage')).toHaveText('60 tokens · about $0.001');
+  await expect(page.getByTestId('ai-usage')).toHaveAttribute('title', /10 tokens read, 50 written/);
+  expect(errors).toEqual([]);
+});

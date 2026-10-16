@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { FACE_MORPHS, type FormKey } from '@tes5/esp';
 import { CONTROL_HELP, REGION_CONTROLS_FOR, REGION_LABELS, emptySculpt, faceLookFor, type FaceRegion, type FaceSculpt, type HeadPartInfo, type NpcAppearance, type RegionControl } from '@tes5/workspace';
 import { Checkbox, clearDraft, EmptyState, Field, FormPicker, Help, Icon, Modal, Select, Slider, Tabs, TextInput, useDebounced, useDraft, useQuery, DragNumber, useUniqueEditorId } from '../../components/ui';
+import { AskAiButton } from '../../components/AskAi';
 import { engine, useStore } from '../../state/store';
 import { HeadPreview, type PreviewPart } from './headPreview';
 
@@ -291,6 +292,9 @@ function Creator({ npc }: { npc: FormKey }) {
         </div>
       </div>
       <div className="panel" style={{ width: 340, flex: 'none', borderLeft: '1px solid var(--border)', background: 'var(--panel)' }}>
+        <div className="row" style={{ padding: '6px 8px 0', justifyContent: 'flex-end' }}>
+          <AskAiButton what="this character" form={npc} questions={['Describe this character: who they are, where they live and what they do', 'Which quests, lists and places use this character?', 'Suggest changes that would make this character more interesting']} align="right" />
+        </div>
         <Tabs<Tab>
           tabs={[
             { id: 'body', label: 'Body' },

@@ -155,7 +155,7 @@ describe('talking to Claude', () => {
           stream: (p: any) => {
             params = p;
             const handlers: ((d: string) => void)[] = [];
-            return { on: (_: string, h: (d: string) => void) => handlers.push(h), finalMessage: async () => (handlers.forEach((h) => h('Looking.')), { content, stop_reason: 'tool_use' }) };
+            return { on: (_: string, h: (d: string) => void) => handlers.push(h), finalMessage: async () => (handlers.forEach((h) => h('Looking.')), { content, stop_reason: 'tool_use', usage: { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 5000, cache_creation_input_tokens: null } }) };
           },
         },
       },
@@ -163,7 +163,7 @@ describe('talking to Claude', () => {
     const m = new ClaudeAgentModel('', fake as any);
     const deltas: string[] = [];
     const r = await m.reply({ system: 'rules', messages: [{ role: 'user', text: 'hi' }], tools, onText: (d) => deltas.push(d) });
-    expect(r).toEqual({ text: 'Looking.', calls: [{ id: 'tu', name: 'look', input: { what: 'q' } }], stop: 'tools', raw: content });
+    expect(r).toEqual({ text: 'Looking.', calls: [{ id: 'tu', name: 'look', input: { what: 'q' } }], stop: 'tools', raw: content, usage: { input: 100, output: 20, cacheRead: 5000, cacheWrite: 0 } });
     expect(deltas).toEqual(['Looking.']);
     expect(params.model).toBe('claude-opus-5-5');
     expect(params.thinking).toEqual({ type: 'adaptive' });
@@ -246,5 +246,29 @@ describe('projects for bigger jobs', () => {
     expect(() => run('update_task', { id: 9, status: 'done' })).toThrow(/no task 9/);
     expect(projectSummary(s.project)).toBe('Project brief: A questline about the Ring. The thief is Eirik.\nTo-do:\n[x] 1. Plan quest one — Built RingQuest1\n[>] 2. Build the cave\n[ ] 4. Light the cave\n[ ] 3. Plan quest two');
     expect(projectSummary(undefined)).toBe('');
+  });
+});
+
+describe('counting tokens and cost', () => {
+  it('adds up what each request used, and prices Claude', async () => {
+    const { usageCost } = await import('../src');
+    const model = scripted([
+      { text: '', calls: [call('look', { what: 'x' })], stop: 'tools', usage: { input: 1000, output: 200, cacheRead: 9000, cacheWrite: 3000 } },
+      { text: 'Done.', calls: [], stop: 'end', usage: { input: 500, output: 100, cacheRead: 12000, cacheWrite: 0 } },
+    ]);
+    const r = await runAgentTurn(model, newAgentSession(), { text: 'x' }, tools);
+    expect(r.usage).toEqual({ input: 1500, output: 300, cacheRead: 21000, cacheWrite: 3000 });
+    // $4 / $20 / $0.20 / $5 per million.
+    expect(usageCost(r.usage, 'claude')).toBeCloseTo((1500 * 4 + 300 * 20 + 21000 * 0.2 + 3000 * 5) / 1e6, 9);
+    expect(usageCost(r.usage, 'ollama')).toBe(0);
+  });
+
+  it('reads the token counts free services report', async () => {
+    const openai = { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'Hi.' }, finish_reason: 'stop' }], usage: { prompt_tokens: 321, completion_tokens: 12 } }), text: async () => '' };
+    const o = new ChatAgentModel({ kind: 'openai', url: 'https://x.test/v1', model: 'm' }, async () => openai);
+    expect((await o.reply({ system: 's', messages: [{ role: 'user', text: 'hi' }], tools })).usage).toEqual({ input: 321, output: 12, cacheRead: 0, cacheWrite: 0 });
+    const ollama = async (url: string) => (url.endsWith('/api/show') ? { ok: true, status: 200, json: async () => ({ model_info: {} }), text: async () => '' } : { ok: true, status: 200, json: async () => ({ message: { content: 'Hi.' }, done_reason: 'stop', prompt_eval_count: 900, eval_count: 40 }), text: async () => '' });
+    const l = new ChatAgentModel({ kind: 'ollama', model: 'q' }, ollama);
+    expect((await l.reply({ system: 's', messages: [{ role: 'user', text: 'hi' }], tools })).usage).toEqual({ input: 900, output: 40, cacheRead: 0, cacheWrite: 0 });
   });
 });
