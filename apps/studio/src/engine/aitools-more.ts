@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { isFormKey, type FormKey, type VmadProperty } from '@tes5/esp';
 import { PlanCharacterSchema, WorkspaceError, catalogCategory, emptyPlan, isCreatable, validatePlan, type AgentTool, type PlanCharacter, type QuestBuildReport } from '@tes5/workspace';
 import type { EngineHost } from './host';
+import { lookup } from './aitools-lookup';
 
 const Form = z.string().describe('Editor ID or FormKey');
 
@@ -55,12 +56,7 @@ export function moreTools(host: EngineHost): AgentTool<any>[] {
     if (!host.ws) throw new WorkspaceError('No game data is open');
     return host.ws;
   };
-  const resolve = (ref: string, what = 'record'): FormKey => {
-    const r = ref.trim();
-    const key = (isFormKey(r) ? r : ws().byEditorId(r)) as FormKey | undefined;
-    if (!key || !ws().summary(key)) throw new WorkspaceError(`There's no ${what} "${r}". Search for it first and use its Editor ID or FormKey.`);
-    return key;
-  };
+  const resolve = (ref: string, what = 'record'): FormKey => lookup(ws(), ref, { what });
   const label = (k: FormKey) => {
     const s = ws().summary(k);
     return s?.name || s?.editorId || k;
@@ -71,6 +67,8 @@ export function moreTools(host: EngineHost): AgentTool<any>[] {
     plan.title = c.name;
     plan.editorId = `${c.name.replace(/[^A-Za-z0-9]/g, '') || 'Character'}Changes`;
     plan.stages = [];
+    // On their own a character has no quest stages: routine entries apply all the time (small models fill in -1 or 0 for "none").
+    for (const r of c.routine ?? []) Object.assign(r, { fromStage: null, untilStage: null });
     plan.characters = [c];
     if (place) {
       const cell = resolve(place, 'place');

@@ -196,6 +196,7 @@ export class QuestPlanner {
     const ai: AiProvider | undefined = opts.ai ?? (opts.apiKey ? { kind: 'claude', apiKey: opts.apiKey } : undefined);
     this.name = aiName(ai);
     if (opts.send) this.send = opts.send;
+    else if (ai?.kind === 'local') throw new WorkspaceError('The built-in AI has to be started first');
     else if (ai && ai.kind !== 'claude') this.send = chatSend(ai);
     else {
       if (ai?.kind === 'claude') opts = { ...opts, apiKey: ai.apiKey };

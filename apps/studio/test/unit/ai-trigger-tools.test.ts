@@ -65,6 +65,15 @@ describe('the AI workspace trigger tools', () => {
     expect(((host.ws!.view(chest)!.data as any).scripts?.scripts ?? []).map((s: any) => s.name)).not.toContain(script);
   });
 
+  it('takes a base record for its one placed copy, and says when it is not placed', async () => {
+    const { host, run } = await demo();
+    const tavern = host.ws!.byEditorId('DemoTavern')!;
+    const chest = host.references(tavern).find((r) => r.base === host.ws!.byEditorId('DemoChest'))!.formKey;
+    await run('add_trigger', { object: 'DemoChest', when: 'activate', then: [{ kind: 'notification', text: 'Locked.' }] });
+    expect((await host.triggersOf({ kind: 'ref', ref: chest })).specs).toHaveLength(1);
+    await expect(run('add_trigger', { object: 'DemoBottle', when: 'activate', then: [{ kind: 'notification', text: 'x' }] })).rejects.toThrow(/isn't placed anywhere/);
+  });
+
   it('puts triggers on a quest alias and explains what is wrong', async () => {
     const { run } = await demo();
     await run('add_trigger', { quest: 'DemoTavernQuest', alias: 'innkeeper', when: 'death', then: [{ kind: 'setStage', quest: 'DemoTavernQuest', stage: 100 }] });

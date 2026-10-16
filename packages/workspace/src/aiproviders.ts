@@ -11,11 +11,17 @@
  */
 import type { BetaMessageStreamParams } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import { WorkspaceError } from './engine';
+import { localModel } from './localai';
 
 export type AiProvider =
   | { kind: 'claude'; apiKey: string }
   | { kind: 'ollama'; url?: string; model: string }
-  | { kind: 'openai'; url: string; apiKey?: string; model: string };
+  | { kind: 'openai'; url: string; apiKey?: string; model: string; label?: string }
+  /** The built-in AI (localai.ts): the host starts its server and talks to it as an OpenAI-style service. */
+  | { kind: 'local'; model: string };
+
+/** The AIs requests go to directly (the built-in one becomes an OpenAI-style one once its server runs). */
+export type ChatProvider = Extract<AiProvider, { kind: 'ollama' | 'openai' }>;
 
 export const OLLAMA_URL = 'http://localhost:11434';
 
@@ -26,9 +32,11 @@ export const OLLAMA_URL = 'http://localhost:11434';
  * app asks the service for its current models (free models come and go).
  */
 export const OPENAI_PRESETS: { id: string; label: string; url: string; model: string; keyUrl?: string; note: string }[] = [
-  { id: 'gemini', label: 'Google Gemini (free tier)', url: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-3.8-flash', keyUrl: 'https://aistudio.google.com/apikey', note: 'Sign in with a Google account and press "Create API key". Free, with daily limits.' },
-  { id: 'groq', label: 'Groq (free tier)', url: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile', keyUrl: 'https://console.groq.com/keys', note: 'Make a free account and press "Create API Key". Fast, with per-minute and daily limits.' },
-  { id: 'openrouter', label: 'OpenRouter (free models)', url: 'https://openrouter.ai/api/v1', model: '', keyUrl: 'https://openrouter.ai/settings/keys', note: 'Make a free account and create a key. Only models ending in ":free" are listed; they change often.' },
+  { id: 'gemini', label: 'Google Gemini (free tier)', url: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-3.8-flash', keyUrl: 'https://aistudio.google.com/apikey', note: 'Sign in with a Google account and press "Create API key". Free, with daily limits (shown in AI Studio). Outside the EU, UK and Switzerland, Google may use free-tier requests to improve its products.' },
+  { id: 'nvidia', label: 'NVIDIA (free for developers)', url: 'https://integrate.api.nvidia.com/v1', model: 'deepseek-ai/deepseek-v4.1-flash', keyUrl: 'https://build.nvidia.com/settings/api-keys', note: 'Join the free NVIDIA Developer Program, then generate an API key. Large open models (DeepSeek, Kimi, GLM, Gemma, gpt-oss), about 40 requests a minute. Meant for trying things, not for running a service.' },
+  { id: 'mistral', label: 'Mistral (free plan)', url: 'https://api.mistral.ai/v1', model: 'mistral-small-latest', keyUrl: 'https://console.mistral.ai/api-keys', note: 'Make an account (it asks for a phone number), choose the free Experiment plan and create a key. On the free plan, Mistral may use your requests to train its models.' },
+  { id: 'openrouter', label: 'OpenRouter (free models)', url: 'https://openrouter.ai/api/v1', model: '', keyUrl: 'https://openrouter.ai/settings/keys', note: 'Make a free account and create a key. Only models ending in ":free" are listed; they change often. 50 requests a day (1,000 once you have bought $10 of credit); the providers may log what you send.' },
+  { id: 'groq', label: 'Groq (free tier)', url: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-120b', keyUrl: 'https://console.groq.com/keys', note: 'Make a free account and press "Create API Key". Very fast, but the free tier allows only about 8,000 tokens a minute, which one AI-tab message or quest plan can go over: best for short questions.' },
   { id: 'lmstudio', label: 'LM Studio (on this computer)', url: 'http://localhost:1234/v1', model: '', keyUrl: 'https://lmstudio.ai', note: 'Install LM Studio, download a model in it and start its local server (Developer tab). No key needed.' },
 ];
 
@@ -36,14 +44,15 @@ export const OPENAI_PRESETS: { id: string; label: string; url: string; model: st
 export function aiName(p: AiProvider | undefined): string {
   if (!p || p.kind === 'claude') return 'Claude';
   if (p.kind === 'ollama') return `${p.model || 'Ollama'}${p.model ? ' (Ollama)' : ''}`;
-  return p.model || hostOf(p.url) || 'the AI';
+  if (p.kind === 'local') return `${localModel(p.model)?.label ?? 'The built-in AI'} (on this PC)`;
+  return p.label || p.model || hostOf(p.url) || 'the AI';
 }
 
 /** Is it set up enough to try? */
 export function aiReady(p: AiProvider | undefined): boolean {
   if (!p) return false;
   if (p.kind === 'claude') return !!p.apiKey.trim();
-  if (p.kind === 'ollama') return !!p.model.trim();
+  if (p.kind === 'ollama' || p.kind === 'local') return !!p.model.trim();
   return !!p.url.trim() && !!p.model.trim();
 }
 
@@ -64,7 +73,7 @@ interface Reply {
 type Fetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; json(): Promise<any>; text(): Promise<string> }>;
 
 /** Turn the planner's Anthropic-format request into one chat request for Ollama or an OpenAI-style service. */
-export function chatSend(p: Exclude<AiProvider, { kind: 'claude' }>, fetchImpl: Fetch = globalThis.fetch as unknown as Fetch): (params: BetaMessageStreamParams) => Promise<Reply> {
+export function chatSend(p: ChatProvider, fetchImpl: Fetch = globalThis.fetch as unknown as Fetch): (params: BetaMessageStreamParams) => Promise<Reply> {
   return async (params) => {
     const schema = (params.output_config?.format as { schema?: unknown } | undefined)?.schema;
     const system = [
@@ -233,11 +242,13 @@ export async function serviceModels(p: { url: string; apiKey?: string }, fetchIm
   const j = await res.json();
   const list = ((j?.data ?? j?.models ?? []) as { id?: string; name?: string; supported_parameters?: string[] }[])
     .map((m) => ({ id: String(m.id ?? m.name ?? '').replace(/^models\//, ''), params: m.supported_parameters ?? [] }))
-    .filter((m) => m.id && !/embed|tts|whisper|transcri|speech|audio|image|imagen|veo|guard|moderation|safety|aqa/i.test(m.id));
+    .filter((m) => m.id && !/embed|tts|whisper|transcri|speech|audio|image|imagen|veo|guard|moderation|safety|aqa|reward|parse|clip|vila|neva|kosmos|deplot|fuyu|vision|detector|calibration|translate|retriever|diffusion|cosmos|topic-control/i.test(m.id));
   const openrouter = /openrouter\.ai/i.test(base);
   const usable = openrouter ? list.filter((m) => m.id.endsWith(':free')) : list;
+  // Current open families known to use tools well come first on services that list many old models too (NVIDIA).
+  const known = /deepseek-v4|kimi-k2|glm-5|nemotron-3|gemma-4|gpt-oss|qwen3|mistral-(small|medium|large)-latest/i;
   const score = (m: { id: string; params: string[] }) =>
-    (m.params.includes('structured_outputs') ? 4 : 0) + (m.params.includes('response_format') ? 2 : 0) + (/gemini/i.test(m.id) && /flash/i.test(m.id) && !/lite|preview|exp|thinking/i.test(m.id) ? 1 : 0);
+    (m.params.includes('structured_outputs') ? 4 : 0) + (m.params.includes('response_format') ? 2 : 0) + (known.test(m.id) ? 2 : 0) + (/gemini/i.test(m.id) && /flash/i.test(m.id) && !/lite|preview|exp|thinking/i.test(m.id) ? 1 : 0);
   const version = (id: string) => Number(/(\d+(?:\.\d+)?)/.exec(id)?.[1] ?? 0);
   return usable.sort((a, b) => score(b) - score(a) || version(b.id) - version(a.id) || a.id.localeCompare(b.id)).map((m) => m.id);
 }

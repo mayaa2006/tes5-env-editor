@@ -35,6 +35,9 @@ describe('the AI workspace character, record and script tools', () => {
     expect(r.link).toMatchObject({ tab: 'npc', key });
     // Placed in the tavern.
     expect(host.references(host.ws!.byEditorId('DemoTavern')!).some((x) => x.base === key)).toBe(true);
+    // A routine with "stage -1" (a small model's way of saying none) works: on their own, characters have no stages.
+    const r2 = await run('create_character', { name: 'Sven', sex: 'male', place: 'DemoTavern', routine: [{ activity: 'sleep', where: null, hours: { from: 22, to: 6 }, fromStage: -1, untilStage: 0, line: null }] });
+    expect(host.ws!.summary((r2.data as any).character)!.name).toBe('Sven');
   });
 
   it('changes only what it is told about an existing character, as an override', async () => {

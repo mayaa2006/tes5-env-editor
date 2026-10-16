@@ -25,9 +25,36 @@ function bundledCaprica(): string | undefined {
   return existsSync(exe) ? exe.replace(/\\/g, '/') : undefined;
 }
 
+/**
+ * Where the built-in AI's runner and models go: beside the portable exe (so it
+ * stays portable), otherwise in the app's data folder.
+ */
+function localAiDir(): string {
+  const portable = process.env.PORTABLE_EXECUTABLE_DIR;
+  return portable ? join(portable, 'TES5EnvEditor-AI') : join(app.getPath('userData'), 'local-ai');
+}
+
+/** The built-in AI's server processes, stopped when the app quits or the engine restarts. */
+const children = new Set<number>();
+function stopChildren(): void {
+  for (const pid of children) {
+    try {
+      process.kill(pid);
+    } catch {
+      // Already gone.
+    }
+  }
+  children.clear();
+}
+
 function startWorker(): Worker {
-  const w = new Worker(join(__dirname, 'engine-worker.cjs'), { workerData: { caprica: bundledCaprica() } });
-  w.on('message', (m: { id?: number; type?: string; event?: unknown; ok?: boolean; value?: unknown; error?: string }) => {
+  const w = new Worker(join(__dirname, 'engine-worker.cjs'), { workerData: { caprica: bundledCaprica(), localAiDir: localAiDir() } });
+  w.on('message', (m: { id?: number; type?: string; event?: unknown; ok?: boolean; value?: unknown; error?: string; pid?: number; running?: boolean }) => {
+    if (m.type === 'child' && m.pid) {
+      if (m.running) children.add(m.pid);
+      else children.delete(m.pid);
+      return;
+    }
     if (m.type === 'event') {
       win?.webContents.send('engine:event', m.event);
       return;
@@ -42,6 +69,7 @@ function startWorker(): Worker {
     if (worker !== w) return; // already replaced
     for (const [, done] of pending) done({ ok: false, error: `Engine crashed: ${why}` });
     pending.clear();
+    stopChildren();
     worker = startWorker();
     // The new engine starts empty: tell the UI so it returns to the start screen.
     win?.webContents.send('engine:event', { type: 'engineRestarted', message: why });
@@ -114,7 +142,10 @@ app.whenReady().then(() => {
   });
 });
 
+app.on('will-quit', stopChildren);
+
 app.on('window-all-closed', () => {
+  stopChildren();
   void worker?.terminate();
   if (process.platform !== 'darwin') app.quit();
 });

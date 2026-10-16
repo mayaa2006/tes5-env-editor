@@ -1,5 +1,5 @@
 /** In-page engine on the synthetic demo data set (used when not running in Electron). */
-import { MemoryFileSystem, createDemoData } from '@tes5/workspace';
+import { MemoryFileSystem, createDemoData, type LocalAiControl, type LocalAiStatus } from '@tes5/workspace';
 import type { HostBridge } from './client';
 import { DEMO_GAME_DIR } from './constants';
 import { EngineHost, type HostEvent } from './host';
@@ -14,6 +14,9 @@ export async function createDemoBridge(): Promise<HostBridge> {
   host.onEvent((e) => {
     for (const l of listeners) l(e);
   });
+  // The built-in AI needs the desktop app (it downloads and runs a program); browser tests can stand in for it.
+  const testLocalAi = (globalThis as { __tes5TestLocalAi?: (emit: (s: LocalAiStatus) => void) => LocalAiControl }).__tes5TestLocalAi;
+  if (testLocalAi) host.localAi = testLocalAi((status) => listeners.forEach((l) => l({ type: 'localAi', status })));
   return {
     async invoke(method, args) {
       try {

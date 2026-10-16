@@ -31,11 +31,26 @@ describe('the AI workspace tools on the demo data', () => {
     expect(found.results[0]).toMatchObject({ editorId: 'DemoInnkeeper', type: 'NPC_' });
     // Every word must match, in any order.
     expect(((await run('search_records', { query: 'tavern demo', kind: 'place' })).data as any).results.some((r: any) => r.editorId === 'DemoTavern')).toBe(true);
-    await expect(run('search_records', { query: 'x', kind: 'spaceship' })).rejects.toThrow(/Unknown kind/);
+    // Everyday words and plurals are understood; an unknown kind searches everything and says so.
+    expect(((await run('search_records', { query: 'tavern', kind: 'cell' })).data as any).results.some((r: any) => r.editorId === 'DemoTavern')).toBe(true);
+    expect(((await run('search_records', { query: 'innkeeper', kind: 'NPCs' })).data as any).results[0].editorId).toBe('DemoInnkeeper');
+    expect(((await run('search_records', { query: 'tankard', kind: 'item' })).data as any).results[0].editorId).toBe('DemoTankard');
+    const any = (await run('search_records', { query: 'innkeeper', kind: 'spaceship' })).data as any;
+    expect(any.note).toMatch(/isn't a kind I know/);
+    expect(any.results[0].editorId).toBe('DemoInnkeeper');
+    // Nothing of that kind: what the words match instead, and where to look for who's in a place.
+    const none = (await run('search_records', { query: 'tavern', kind: 'character' })).data as any;
+    expect(none.total).toBe(0);
+    expect(none.note).toMatch(/place_contents/);
+    expect(none.otherKinds[0].editorId).toBe('DemoTavern');
+    // No record has every word: the ones with most of them.
+    const some = (await run('search_records', { query: 'mead bottle flagon', kind: 'item' })).data as any;
+    expect(some.note).toMatch(/Nothing has all the words/);
+    expect(some.results[0].editorId).toBe('DemoBottle');
     const rec = await run('read_record', { form: 'DemoInnkeeper' });
     expect((rec.data as any).editorId).toBe('DemoInnkeeper');
     expect(rec.link).toMatchObject({ tab: 'records' });
-    await expect(run('read_record', { form: 'NoSuchThing' })).rejects.toThrow(/Search for it first/);
+    await expect(run('read_record', { form: 'NoSuchThing' })).rejects.toThrow(/There's no record "NoSuchThing".*search_records finds them/);
     expect(((await run('load_order', {})).data as any).plugins[0].name).toBe('DemoWorld.esm');
     const places = (await run('list_places', { query: 'tavern', interiorOnly: true })).data as any;
     expect(places.places[0].editorId).toBe('DemoTavern');

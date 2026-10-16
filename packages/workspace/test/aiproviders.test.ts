@@ -141,6 +141,13 @@ describe('free AI providers', () => {
     expect(gem).not.toContain('text-embedding-004');
     expect(gem).not.toContain('gemini-3.8-flash-tts');
     expect(g.calls[0]!.headers.authorization).toBe('Bearer k');
+    // NVIDIA lists many old and non-chat models: current agent-capable families first, the rest left out.
+    const nv = server({ json: { data: ['writer/palmyra-creative-122b', 'nvidia/nemotron-3.5-content-safety', 'nvidia/nv-embedqa-mistral-7b-v2', 'deepseek-ai/deepseek-v4.1-flash', 'nvidia/vila', 'z-ai/glm-5.3', 'meta/llama2-70b'].map((id) => ({ id })) } });
+    const nvl = await serviceModels({ url: 'https://integrate.api.nvidia.com/v1', apiKey: 'k' }, nv.fetch);
+    expect(nvl.slice(0, 2).sort()).toEqual(['deepseek-ai/deepseek-v4.1-flash', 'z-ai/glm-5.3']);
+    expect(nvl).not.toContain('nvidia/vila');
+    expect(nvl).not.toContain('nvidia/nemotron-3.5-content-safety');
+    expect(pickModel(nvl, OPENAI_PRESETS.find((p) => p.id === 'nvidia')!.model)).toBe('deepseek-ai/deepseek-v4.1-flash');
     // A model the service no longer offers is swapped for one it does.
     expect(pickModel(['x', 'y'], 'gone')).toBe('x');
     expect(pickModel(['x', 'y'], 'y')).toBe('y');

@@ -16,6 +16,7 @@ import { moreTools } from './aitools-more';
 import { worldTools } from './aitools-world';
 import { dialogueTools } from './aitools-dialogue';
 import { triggerTools } from './aitools-triggers';
+import { lookup, rank } from './aitools-lookup';
 import { terrainTools } from './aitools-terrain';
 
 /** Common record types, so the AI can narrow a search by kind in plain words. */
@@ -57,6 +58,34 @@ const KINDS: Record<string, string[]> = {
   keyword: ['KYWD'],
 };
 
+/** Other words models use for the kinds above. */
+const KIND_WORDS: Record<string, string> = {
+  cell: 'place', interior: 'place', room: 'place', inn: 'place', house: 'place', dungeon: 'place', cave: 'place',
+  npc: 'character', actor: 'character', person: 'character', people: 'character', follower: 'character', creature: 'character',
+  world: 'worldspace', topic: 'dialogue', info: 'dialogue', line: 'dialogue',
+  armour: 'armor', clothing: 'armor', clothes: 'armor', sword: 'weapon', axe: 'weapon', bow: 'weapon',
+  food: 'potion', drink: 'potion', mead: 'potion', ale: 'potion', alchemy: 'potion',
+  note: 'book', letter: 'book', scroll: 'book', chest: 'container', barrel: 'container',
+  magic: 'spell', power: 'spell', lvli: 'leveled list', 'leveled item': 'leveled list', voice: 'voice type', ai: 'package', craft: 'recipe', crafting: 'recipe',
+};
+/** What to call a record type in messages ("There's no place …"). */
+const SIG_WORDS: Record<string, string> = Object.fromEntries(Object.entries(KINDS).flatMap(([k, sigs]) => (sigs.length === 1 ? [[sigs[0]!, k]] : [])));
+
+/** Carried things, for "item". */
+const ITEM_SIGS = ['WEAP', 'ARMO', 'MISC', 'BOOK', 'ALCH', 'INGR', 'KEYM', 'AMMO', 'SLGM', 'SCRL'];
+
+/** The record types a kind in words means, or undefined for an unknown kind. */
+function kindSigs(kind: string): string[] | undefined {
+  if (/^[A-Z_0-9]{4}$/.test(kind)) return [kind];
+  const k = kind.toLowerCase().trim();
+  for (const w of [k, k.replace(/s$/, ''), k.replace(/es$/, '')]) {
+    if (KINDS[w]) return KINDS[w];
+    if (KIND_WORDS[w]) return KINDS[KIND_WORDS[w]!];
+    if (w === 'item' || w === 'thing' || w === 'object') return ITEM_SIGS;
+  }
+  return undefined;
+}
+
 const Form = z.string().describe('Editor ID (e.g. "WhiterunBanneredMare") or FormKey (e.g. "012E49:Skyrim.esm")');
 
 /** A record in a line: its key, kind, Editor ID, name and where it comes from. */
@@ -71,21 +100,7 @@ export function aiTools(host: EngineHost, ctx?: QuestToolContext): AgentTool[] {
     return host.ws;
   };
   /** An Editor ID, FormKey or exact in-game name, as a FormKey. */
-  const resolve = (ref: string, sigs?: string[]): FormKey => {
-    const r = ref.trim();
-    if (isFormKey(r)) {
-      if (!ws().summary(r as FormKey)) throw new WorkspaceError(`Nothing in the load order has the FormKey ${r}`);
-      return r as FormKey;
-    }
-    const byId = ws().byEditorId(r);
-    if (byId) return byId;
-    const named = ws()
-      .search({ sigs, query: r, limit: 50 })
-      .items.filter((s) => s.name?.toLowerCase() === r.toLowerCase() || s.editorId?.toLowerCase() === r.toLowerCase());
-    if (named.length === 1) return named[0]!.formKey;
-    if (named.length > 1) throw new WorkspaceError(`Several records are called "${r}": ${named.slice(0, 8).map((s) => `${s.editorId ?? s.formKey} (${s.sig})`).join(', ')}. Use one of these Editor IDs.`);
-    throw new WorkspaceError(`Nothing is called "${r}". Search for it first and use the Editor ID or FormKey from the results.`);
-  };
+  const resolve = (ref: string, sigs?: string[]): FormKey => lookup(ws(), ref, { what: sigs?.length === 1 ? (SIG_WORDS[sigs[0]!] ?? 'record') : 'record', ...(sigs ? { sigs } : {}) });
   const label = (k: FormKey) => {
     const s = ws().summary(k);
     return s?.name || s?.editorId || k;
@@ -106,14 +121,41 @@ export function aiTools(host: EngineHost, ctx?: QuestToolContext): AgentTool[] {
       summary: (i) => `Search for ${i.query ? `"${i.query}"` : 'everything'}${i.kind ? ` (${i.kind})` : ''}`,
       run: (i) => {
         const kind = i.kind?.trim();
-        const sigs = kind ? (KINDS[kind.toLowerCase()] ?? (/^[A-Z_0-9]{4}$/.test(kind) ? [kind] : undefined)) : undefined;
-        if (kind && !sigs) throw new WorkspaceError(`Unknown kind "${kind}". Use one of: ${Object.keys(KINDS).join(', ')}, or a 4-letter record type code.`);
+        // An unknown kind is left out rather than refused: small models repeat a refused call instead of changing it.
+        const sigs = kind ? kindSigs(kind) : undefined;
+        const note = kind && !sigs ? `"${kind}" isn't a kind I know, so every kind was searched. Kinds: ${Object.keys(KINDS).join(', ')}.` : undefined;
         // Each word must match, so "bannered mare" finds "WhiterunBanneredMare".
         const words: string[] = i.query.toLowerCase().split(/\s+/).filter(Boolean);
         const first = ws().search({ sigs, query: words[0] ?? '', plugin: i.onlyMyPlugin ? ws().activeName : undefined, limit: 5000 });
-        const hits = first.items.filter((s) => !s.deleted && words.every((w) => `${s.editorId ?? ''} ${s.name ?? ''} ${s.formKey}`.toLowerCase().includes(w)));
+        const hits = first.items.filter((s) => !s.deleted && words.every((w) => `${s.editorId ?? ''} ${s.name ?? ''} ${s.formKey}`.toLowerCase().includes(w))).sort((a, b) => rank(b, i.query) - rank(a, i.query));
         const limit = i.limit ?? 25;
-        return { data: { total: hits.length, results: hits.slice(0, limit).map(line), ...(hits.length > limit ? { more: `${hits.length - limit} more; narrow the search` } : {}) } };
+        if (!hits.length && words.length > 1) {
+          // Nothing has every word ("mead bottle"): the records with the most of them ("Nord Mead").
+          const some = new Map<string, { s: RecordSummary; n: number }>();
+          for (const w of words)
+            for (const s of ws().search({ sigs, query: w, plugin: i.onlyMyPlugin ? ws().activeName : undefined, limit: 2000 }).items) {
+              if (s.deleted) continue;
+              const e = some.get(s.formKey) ?? { s, n: 0 };
+              e.n++;
+              some.set(s.formKey, e);
+            }
+          const best = [...some.values()].sort((a, b) => b.n - a.n || rank(b.s, i.query) - rank(a.s, i.query)).slice(0, limit);
+          if (best.length) return { data: { total: 0, note: `Nothing has all the words "${i.query}"; these have some of them (most first).`, results: best.map((b) => line(b.s)) } };
+        }
+        if (!hits.length && sigs && words.length) {
+          // Nothing of that kind: show what the words do match, so a small model doesn't give up or guess.
+          const other = ws().search({ query: words[0]!, limit: 5000 }).items.filter((s) => !s.deleted && words.every((w) => `${s.editorId ?? ''} ${s.name ?? ''}`.toLowerCase().includes(w)));
+          if (other.length)
+            return {
+              data: {
+                total: 0,
+                results: [],
+                note: `No ${kind} matches "${i.query}", but ${other.length} other record${other.length === 1 ? '' : 's'} do (best first below). To see who or what is in a place, use place_contents on the place.`,
+                otherKinds: other.sort((a, b) => rank(b, i.query) - rank(a, i.query)).slice(0, 8).map(line),
+              },
+            };
+        }
+        return { data: { ...(note ? { note } : {}), total: hits.length, results: hits.slice(0, limit).map(line), ...(hits.length > limit ? { more: `${hits.length - limit} more; narrow the search` } : {}) } };
       },
     },
     {

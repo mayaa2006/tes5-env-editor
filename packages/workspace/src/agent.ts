@@ -17,7 +17,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { BetaContentBlockParam, BetaMessageParam, BetaToolUnion } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import { z } from 'zod';
 import { WorkspaceError } from './engine';
-import { OLLAMA_URL, aiName, cleanJson, contextWindow, estimateTokens, ollamaContextLength, type AiProvider } from './aiproviders';
+import { OLLAMA_URL, aiName, cleanJson, contextWindow, estimateTokens, ollamaContextLength, type AiProvider, type ChatProvider } from './aiproviders';
 import { PLANNER_MODEL, fillMissing } from './planner';
 
 export const AGENT_MODEL = PLANNER_MODEL;
@@ -259,6 +259,37 @@ export interface AgentHooks {
   /** After the AI finishes a turn that changed something: problems to send back once (empty: none). */
   checkChanges?: () => Promise<string[]>;
   signal?: AbortSignal;
+  /**
+   * Show the model only some tools (small models read every tool's description
+   * with each message): these first, and the rest by topic through more_tools.
+   * Any tool can still be run by name.
+   */
+  offer?: ToolOffer;
+}
+
+export interface ToolOffer {
+  tools: AgentTool[];
+  topics: Record<string, { about: string; tools: AgentTool[] }>;
+}
+
+/** The tool that adds a topic's tools to what the model sees, for the rest of the turn. */
+function moreToolsTool(offer: ToolOffer, offered: AgentTool[]): AgentTool<any> {
+  const names = Object.keys(offer.topics) as [string, ...string[]];
+  return {
+    name: 'more_tools',
+    group: 'read',
+    writes: false,
+    description: `Only the tools for this kind of job are listed, to keep things short. If you need tools for another kind of job, get them here: ${Object.entries(offer.topics)
+      .map(([k, t]) => `${k} (${t.about})`)
+      .join('; ')}.`,
+    input: z.object({ topic: z.enum(names) }),
+    summary: (i) => `Get the ${i.topic} tools`,
+    run: (i) => {
+      const add = offer.topics[i.topic]!.tools.filter((t) => !offered.includes(t));
+      offered.push(...add);
+      return { data: add.length ? `You can now also use: ${add.map((t) => t.name).join(', ')}.` : 'You already have these tools.' };
+    },
+  };
 }
 
 export interface AgentTurnResult {
@@ -285,7 +316,9 @@ export async function runAgentTurn(
   const emit = (e: AgentEvent) => hooks.onEvent?.(e);
   session.messages.push({ role: 'user', text: input.text, ...(input.context ? { context: input.context } : {}) });
   session.updated = Date.now();
-  const byName = new Map(tools.map((t) => [t.name, t]));
+  const offered = hooks.offer ? [...hooks.offer.tools] : tools;
+  const more = hooks.offer ? moreToolsTool(hooks.offer, offered) : undefined;
+  const byName = new Map([...tools, ...(more ? [more] : [])].map((t) => [t.name, t]));
   const usage = emptyUsage();
   const maxCalls = model.free ? 15 : 40;
   const maxRounds = model.free ? 10 : 25;
@@ -294,12 +327,16 @@ export async function runAgentTurn(
   const results: AgentToolResult[] = [];
   let calls = 0;
   let checked = false;
+  /** Calls that failed this turn, by tool and input: small models repeat a failed call word for word. */
+  const failed = new Map<string, string>();
+  /** Reading calls already answered this turn: small models also repeat those instead of moving on. */
+  const read = new Set<string>();
   let text = '';
   const system = `${AGENT_RULES}`;
   try {
     for (let round = 0; round < maxRounds; round++) {
       if (hooks.signal?.aborted) throw new AgentStopped();
-      const reply = await model.reply({ system, messages: session.messages, tools, onText: (d) => emit({ type: 'text', session: sid, delta: d }), signal: hooks.signal });
+      const reply = await model.reply({ system, messages: session.messages, tools: more ? [...offered, more] : tools, onText: (d) => emit({ type: 'text', session: sid, delta: d }), signal: hooks.signal });
       addUsage(usage, reply.usage);
       session.messages.push({ role: 'assistant', text: reply.text, calls: reply.calls, provider: model.provider, ...(reply.raw !== undefined ? { raw: reply.raw } : {}) });
       session.updated = Date.now();
@@ -336,7 +373,21 @@ export async function runAgentTurn(
           out.push(skipped(call, tool, `Not run: this turn has used its ${maxCalls} tool calls. Tell the author what is done and what is left, and they can ask you to go on.`));
           continue;
         }
+        const sig = `${call.name} ${JSON.stringify(call.input ?? {})}`;
+        const before = failed.get(sig);
+        if (before !== undefined) {
+          out.push(skipped(call, tool, `Not run: you already made exactly this call this turn and it failed:\n${clip(before, 600)}\nDon't repeat it. Change the input, use another tool, or tell the author what's wrong.`));
+          continue;
+        }
+        if (read.has(sig)) {
+          out.push({ id: call.id, name: call.name, content: `Not run again: you already made exactly this call this turn, and its result is above. Use what it returned to take the next step, or answer the author.`, isError: true, summary: safeSummary(tool, call.input), writes: false, status: 'error' });
+          continue;
+        }
         const r = await runTool(call, tool, model, hooks, resultMax, sid);
+        if (r.status === 'error') failed.set(sig, r.content);
+        else if (tool && !tool.writes) read.add(sig);
+        // After a change, looking again is worth it.
+        else if (tool?.writes) read.clear();
         out.push(r);
         results.push(r);
         if (r.writes && r.status === 'done') changes.push(r.summary);
@@ -376,10 +427,34 @@ function safeSummary(tool: AgentTool | undefined, input: unknown): string {
   }
 }
 
+/** Fix out-of-range numbers and empty lists where something is needed or nothing is meant; true if anything changed. */
+export function mendInput(input: unknown, issues: readonly { code: string; path: PropertyKey[]; origin?: string; minimum?: unknown; maximum?: unknown }[]): boolean {
+  let changed = false;
+  for (const issue of issues) {
+    if (!issue.path.length) continue;
+    let parent = input as Record<PropertyKey, unknown>;
+    for (const p of issue.path.slice(0, -1)) parent = (parent?.[p] ?? null) as Record<PropertyKey, unknown>;
+    const key = issue.path[issue.path.length - 1]!;
+    if (!parent || typeof parent !== 'object') continue;
+    const v = parent[key];
+    if (typeof v === 'number' && issue.origin === 'number') {
+      if (issue.code === 'too_small' && typeof issue.minimum === 'number') (parent[key] = issue.minimum), (changed = true);
+      if (issue.code === 'too_big' && typeof issue.maximum === 'number') (parent[key] = issue.maximum), (changed = true);
+    } else if (Array.isArray(v) && !v.length && issue.code === 'too_small' && !Array.isArray(parent)) {
+      parent[key] = null;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 async function runTool(call: AgentToolCall, tool: AgentTool | undefined, model: AgentModel, hooks: AgentHooks, max: number, sid: string): Promise<AgentToolResult> {
   if (!tool) return { id: call.id, name: call.name, content: `There is no tool called "${call.name}".`, isError: true, summary: `Unknown tool ${call.name}`, writes: false, status: 'error' };
   // Small models quote numbers and leave out empty fields: read them as meant, then check.
-  const parsed = tool.input.safeParse(fillMissing(tool.input, structuredClone(call.input ?? {})));
+  const input = fillMissing(tool.input, structuredClone(call.input ?? {}));
+  let parsed = tool.input.safeParse(input);
+  // Then mend what is plainly meant: a number past a limit is taken as the limit, an empty list as none.
+  if (!parsed.success && mendInput(input, parsed.error.issues)) parsed = tool.input.safeParse(input);
   if (!parsed.success) {
     const problems = parsed.error.issues.slice(0, 6).map((i) => `${i.path.join('.') || 'input'}: ${i.message}`);
     return { id: call.id, name: call.name, content: `The input doesn't fit this tool:\n${problems.join('\n')}\nIt takes: ${JSON.stringify(toolSchema(tool))}`, isError: true, summary: tool.name, writes: tool.writes, status: 'error' };
@@ -404,6 +479,7 @@ async function runTool(call: AgentToolCall, tool: AgentTool | undefined, model: 
 /** The model behind an AI choice. */
 export function agentModel(ai: AiProvider, fetchImpl?: Fetch): AgentModel {
   if (ai.kind === 'claude') return new ClaudeAgentModel(ai.apiKey);
+  if (ai.kind === 'local') throw new WorkspaceError('The built-in AI has to be started first');
   return new ChatAgentModel(ai, fetchImpl);
 }
 
@@ -498,12 +574,13 @@ export class ChatAgentModel implements AgentModel {
   private readonly fetch: Fetch;
 
   constructor(
-    private readonly ai: Exclude<AiProvider, { kind: 'claude' }>,
+    private readonly ai: ChatProvider,
     fetchImpl?: Fetch,
   ) {
     this.name = aiName(ai);
     this.provider = ai.kind;
-    this.fetch = fetchImpl ?? (globalThis.fetch as unknown as Fetch);
+    // Called as a plain function: a browser's fetch refuses to run as a method of another object ("Illegal invocation").
+    this.fetch = fetchImpl ?? ((url, init) => (globalThis.fetch as unknown as Fetch)(url, init));
   }
 
   async reply(req: { system: string; messages: AgentMessage[]; tools: AgentTool[]; onText?: (d: string) => void; signal?: AbortSignal }): Promise<AgentReply> {
@@ -556,6 +633,8 @@ export class ChatAgentModel implements AgentModel {
       const usage = { input: Number(r?.prompt_eval_count ?? 0), output: Number(r?.eval_count ?? 0), cacheRead: 0, cacheWrite: 0 };
       if (json) return { ...this.fromJson(String(msg.content ?? ''), r?.done_reason === 'length'), usage };
       const calls: AgentToolCall[] = ((msg.tool_calls ?? []) as { function?: { name?: string; arguments?: unknown } }[]).map((c) => ({ id: newCallId(), name: String(c.function?.name ?? ''), input: parseArgs(c.function?.arguments) }));
+      const fromText = calls.length ? null : textCalls(String(msg.content ?? ''), req.tools);
+      if (fromText?.calls.length) return { text: fromText.text, calls: fromText.calls, stop: 'tools', usage };
       return { text: stripThinking(String(msg.content ?? '')), calls, stop: r?.done_reason === 'length' ? 'max_tokens' : calls.length ? 'tools' : 'end', usage };
     }
     const url = `${this.ai.url.replace(/\/+$/, '')}/chat/completions`;
@@ -566,6 +645,8 @@ export class ChatAgentModel implements AgentModel {
     const usage = { input: Number(r?.usage?.prompt_tokens ?? 0), output: Number(r?.usage?.completion_tokens ?? 0), cacheRead: 0, cacheWrite: 0 };
     if (json) return { ...this.fromJson(String(choice.message?.content ?? ''), cut), usage };
     const calls: AgentToolCall[] = ((choice.message?.tool_calls ?? []) as { id?: string; function?: { name?: string; arguments?: unknown } }[]).map((c) => ({ id: c.id || newCallId(), name: String(c.function?.name ?? ''), input: parseArgs(c.function?.arguments) }));
+    const fromText = calls.length || cut ? null : textCalls(String(choice.message?.content ?? ''), req.tools);
+    if (fromText?.calls.length) return { text: fromText.text, calls: fromText.calls, stop: 'tools', usage };
     return { text: stripThinking(String(choice.message?.content ?? '')), calls, stop: cut ? 'max_tokens' : calls.length ? 'tools' : 'end', usage };
   }
 
@@ -611,6 +692,30 @@ function parseArgs(v: unknown): unknown {
   } catch {
     return {};
   }
+}
+
+/**
+ * Tool calls a model wrote out as text instead of making them (small models
+ * do: "<tool_call>{"name": …, "arguments": {…}}</tool_call>", the format many
+ * were trained on). Only calls to tools it has are taken.
+ */
+export function textCalls(content: string, tools: AgentTool[]): { text: string; calls: AgentToolCall[] } | null {
+  if (!/<tool_call>/i.test(content)) return null;
+  const names = new Set(tools.map((t) => t.name));
+  const calls: AgentToolCall[] = [];
+  const text = content.replace(/<tool_call>\s*([\s\S]*?)\s*(?:<\/tool_call>|$)/gi, (whole, body: string) => {
+    try {
+      const j = JSON.parse(cleanJson(body)) as { name?: unknown; arguments?: unknown; parameters?: unknown };
+      if (typeof j.name === 'string' && names.has(j.name)) {
+        calls.push({ id: newCallId(), name: j.name, input: parseArgs(j.arguments ?? j.parameters ?? {}) });
+        return '';
+      }
+    } catch {
+      // Not a call after all: leave the text as it is.
+    }
+    return whole;
+  });
+  return { text: stripThinking(text), calls };
 }
 
 function stripThinking(text: string): string {
