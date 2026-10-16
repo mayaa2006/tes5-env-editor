@@ -2,6 +2,10 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.31.0
+
+- **The AI can change dialogue that's already there.** Ask it to reword a line, change who it suits ("make her sound angrier"), say it only at a certain stage, make it move the quest on, end the conversation, or remove it. It goes line by line through the quest's dialogue, the same as the Dialogue tab, and checks the dialogue afterwards. One Undo takes it all back.
+
 ## 0.30.0
 
 - **Ask the AI from any workspace.** Quests, Characters, World, Scripts, the properties panel and Items/Magic have an **Ask the AI** menu with questions about what you have open ("Explain how this quest works", "Which quests use this character?", "Dress and light this room", "Find bugs in this script"…), or your own. The AI tab opens with the question ready and knows which record you mean.
