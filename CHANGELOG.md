@@ -2,6 +2,10 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.33.0
+
+- **The AI can work outdoors.** Ask it to add an outdoor cell next to one you have, make a new worldspace, raise a hill, dig a hollow, flatten a spot to build on, run a ridge or a road across a cell, or paint the ground with grass, dirt, rock or road. Hills come out about as high as you ask, the cells around follow along, and each change is one undo step.
+
 ## 0.32.0
 
 - **The AI can add triggers to objects.** Ask for a lever that opens a secret door, a chest that rewards the player once, a quest item that moves the quest on when picked up, or a message when the player arrives somewhere. The AI writes them as the same "when… if… do…" blocks you see in the Triggers editor, so you can check and change them there, and it can change or remove them later.

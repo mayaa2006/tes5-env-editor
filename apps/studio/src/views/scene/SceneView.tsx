@@ -246,7 +246,11 @@ export default function SceneView() {
           {info ? cellLabel(info) : cell}
         </strong>
         {info && !info.interior && info.grid && <span className="chip" title="Grid position of the current cell (new objects are placed in the cell under the cursor)">{`${info.grid.x}, ${info.grid.y}`}</span>}
-        <AskAiButton what="this place" form={cell} questions={["What's in this place, and what is it used for?", 'Dress and light this room to fit its use', 'Find problems in this place (floating items, doors, navmesh)']} />
+        <AskAiButton what="this place" form={cell} questions={
+            info && !info.interior
+              ? ["What's in this place, and what is it used for?", 'Make a hill here, about 5 metres high, ', 'Flatten a spot here to build on, and paint it dirt', 'Add an outdoor cell next to this one, to the ']
+              : ["What's in this place, and what is it used for?", 'Dress and light this room to fit its use', 'Find problems in this place (floating items, doors, navmesh)']
+          } />
         {outdoorArea && (
           <span className="row" style={{ gap: 0 }} data-testid="cell-steps">
             {(
