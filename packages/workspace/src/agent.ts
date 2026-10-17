@@ -27,7 +27,8 @@ export type AgentToolGroup = 'read' | 'quest' | 'characters' | 'items' | 'script
 
 /** Where a result can be opened in the editor. */
 export interface AgentLink {
-  tab: 'scene' | 'npc' | 'items' | 'magic' | 'quest' | 'script' | 'records' | 'release';
+  /** 'people' is Characters → Factions, classes & more. */
+  tab: 'scene' | 'npc' | 'items' | 'magic' | 'people' | 'quest' | 'script' | 'records' | 'release';
   key?: string;
   label: string;
 }

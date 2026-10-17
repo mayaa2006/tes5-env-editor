@@ -11,6 +11,7 @@ import type { AiSessionInfo } from '../../engine/host';
 import { Checkbox, EmptyState, Icon, Modal, useDraft, useSummaries } from '../../components/ui';
 import { AiPicker, useAi } from '../../components/AiPicker';
 import { engine, useStore, type WorkspaceTab } from '../../state/store';
+import { openInCatalog } from '../record/Inspector';
 
 /** Things to ask, for an empty conversation. */
 const STARTERS: { label: string; text: string; title: string }[] = [
@@ -616,6 +617,7 @@ function useOpenLink() {
     else if (l.tab === 'npc' && key) s.setNpc(key);
     else if (l.tab === 'scene' && key) s.setCell(key);
     else if (l.tab === 'script' && l.key) s.setScript(l.key);
+    else if ((l.tab === 'items' || l.tab === 'magic' || l.tab === 'people') && key) return void openInCatalog(key);
     else if (key) s.select(key);
     s.setTab(l.tab as WorkspaceTab);
   };

@@ -71,6 +71,17 @@ A RaceMenu-style creator with a live 3D preview:
 
 **Face files without the Creation Kit:** the head mesh (every slider, shape and morph baked in, merged the way the CK's Ctrl+F4 does) and the face tint are generated into your mod's Data folder: from the character's page, from the Release tab, or automatically on save. The extra shaping is baked into those files, so it shows in game without SKSE or RaceMenu. The output was checked against the Creation Kit's own face files for about 150 vanilla characters: same layout and settings, and shapes within about 3 mm (see the ROADMAP).
 
+#### Factions, classes and relationships
+
+**Characters → Factions, classes & more** (the switch at the top of the Characters tab) lists the groups characters belong to and how they get along, laid out like Items and Magic: a category on the left, the records with a line about each, and a plain-language editor.
+
+- **Factions:** who's in it and at which rank (add someone, change their rank or take them out; that character is changed in your plugin), the ranks with their titles for men and women, how members treat other factions and races (friends, allies, neutral, enemies), whether it can own beds, doors and chests, **crime** (a hold-style bounty for murder, assault, trespassing, pickpocketing, stealing, escaping jail and being seen as a werewolf, whether guards arrest or attack on sight, which crimes members ignore, the jail clothes) and **shops** (opening hours, what they trade, whether they buy stolen goods). Turning on a bounty starts with the values Skyrim's holds use.
+- **Classes:** what a trainer with the class teaches and up to which level, how fast each of the 18 skills grows, how each level is split between health, magicka and stamina, and when they kneel instead of dying.
+- **Leveled characters:** lists that pick a character by the player's level, like the bandits in a dungeon.
+- **Relationships:** two characters, how they feel about each other (lover to archnemesis), how they're connected (parent and child, spouse, boss and employee…) and whether it's secret. They're listed by who they're between.
+
+New factions, classes, leveled characters and relationships start with values like Skyrim's own, every change can be undone, and **Show every field** has the rest. A faction, class, leveled character or relationship opened anywhere else (Records, the properties panel, a link from the AI) has an **Open in Characters** button.
+
 #### Routines
 
 What characters do with their day, in plain words: **go about their business** (sit, chat, work), **sleep**, **eat**, **stay put** or **travel**, in a place or around where they stand, at chosen hours. Each one is an AI package made from the game's own template (Sandbox, Sleep, Eat, Travel). It's on the Characters tab's **Routine** page and in quest plans. Quest plans can also make someone **follow the player** or **walk up and speak** (forcegreet) during some stages; that behaviour goes on the quest alias, so it ends with the quest.

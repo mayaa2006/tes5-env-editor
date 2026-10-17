@@ -69,6 +69,8 @@ import {
   catalogCounts,
   catalogList,
   categoryFor,
+  factionMembers,
+  setFactionRank,
   createInCategory,
   perkEntryPointTabs,
   WORKBENCHES,
@@ -440,7 +442,7 @@ export class EngineHost {
     return this.requireWs().createRecord(sig, data, where);
   }
 
-  // ---------------------------------------------------------------- Items & Magic workspaces
+  // ---------------------------------------------------------------- Items, Magic and Factions & more
 
   catalogCounts(tab: CatalogTab) {
     return catalogCounts(this.requireWs(), tab);
@@ -454,7 +456,17 @@ export class EngineHost {
     return createInCategory(this.requireWs(), category);
   }
 
-  /** Which Items/Magic category a form belongs to (null if it has none). */
+  /** Characters in a faction and their ranks (Characters → Factions & more). */
+  factionMembers(faction: FormKey) {
+    return factionMembers(this.requireWs(), faction);
+  }
+
+  /** Put a character in a faction at a rank, or (null) take them out. */
+  setFactionRank(npc: FormKey, faction: FormKey, rank: number | null) {
+    setFactionRank(this.requireWs(), npc, faction, rank);
+  }
+
+  /** Which Items/Magic/people category a form belongs to (null if it has none). */
   categoryOf(key: FormKey) {
     const v = this.requireWs().view(key);
     const c = v ? categoryFor(v.sig, v.data) : undefined;

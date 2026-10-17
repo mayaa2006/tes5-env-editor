@@ -34,6 +34,7 @@ export * from './facegen';
 export * from './facekit';
 export * from './newrecord';
 export * from './catalog';
+export * from './people';
 export * from './terrain';
 export * from './worldspace';
 export * from './actormodel';

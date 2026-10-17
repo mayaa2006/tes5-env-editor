@@ -15,7 +15,7 @@ export const CREATABLE_TYPES = [
   'ARMO', 'ARMA', 'WEAP', 'AMMO', 'BOOK', 'MISC', 'KEYM', 'ALCH', 'INGR', 'SLGM', 'APPA', 'SCRL',
   'LVLI', 'LVLN', 'LVSP', 'COBJ', 'OTFT',
   'MGEF', 'SPEL', 'ENCH', 'SHOU', 'WOOP', 'PERK',
-  'GLOB', 'KYWD', 'FLST', 'MESG', 'FACT', 'CLAS',
+  'GLOB', 'KYWD', 'FLST', 'MESG', 'FACT', 'CLAS', 'RELA',
 ] as const;
 
 export function isCreatable(sig: string): boolean {
@@ -72,7 +72,7 @@ export function requiredDefaults(def: RecordDef): Record<string, unknown> {
 
 const TYPE_LABEL: Record<string, string> = {
   MGEF: 'Magic Effect', SPEL: 'Spell', ENCH: 'Enchantment', SCRL: 'Scroll', SHOU: 'Shout', WOOP: 'Word', PERK: 'Perk',
-  LVLI: 'Leveled Item', LVSP: 'Leveled Spell', LVLN: 'Leveled NPC', COBJ: 'Recipe', ALCH: 'Potion', INGR: 'Ingredient',
+  LVLI: 'Leveled Item', LVSP: 'Leveled Spell', LVLN: 'Leveled Character', COBJ: 'Recipe', ALCH: 'Potion', INGR: 'Ingredient',
 };
 
 /** A ready-to-create record of the given type: required fields, a name, and per-type defaults that match vanilla. */
@@ -122,6 +122,19 @@ export function blankRecordData(ws: Workspace, sig: string, editorId?: string): 
       data.chanceNone = 0;
       data.flags = 1;
       data.entries = [];
+      break;
+    case 'FACT':
+      data.flags = 0;
+      data.relations = [];
+      data.ranks = [];
+      break;
+    case 'CLAS':
+      // The unknown first field takes the value most of Skyrim.esm's classes have; a body weight of 1 each grows all three evenly.
+      data.description = '';
+      data.data = { unknown: 0xfffc0000, teaches: 0, maxTrainingLevel: 0, skillWeights: Array.from({ length: 18 }, () => 0), bleedoutDefault: 0.1, voicePoints: 0, healthWeight: 1, magickaWeight: 1, staminaWeight: 1, flags: 0 };
+      break;
+    case 'RELA':
+      data.data = { parent: null, child: null, rank: 3, unknown: 0, flags: 0, associationType: null };
       break;
     case 'COBJ':
       data.items = [];

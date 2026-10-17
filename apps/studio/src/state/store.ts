@@ -139,7 +139,9 @@ interface Store {
   quest?: FormKey;
   npc?: FormKey;
   script?: string;
-  catalog: { items: CatalogPlace; magic: CatalogPlace };
+  catalog: { items: CatalogPlace; magic: CatalogPlace; people: CatalogPlace };
+  /** The Characters workspace shows characters, or factions, classes, leveled characters and relationships. */
+  npcView: 'characters' | 'people';
   /** Bumped whenever the engine reports a change; views re-query on change. */
   revision: number;
   /** A request (from an empty screen) for a list to open its New dialog; `n` changes on each request. */
@@ -172,8 +174,9 @@ interface Store {
   setCell(k?: FormKey): void;
   setQuest(k?: FormKey): void;
   setNpc(k?: FormKey): void;
-  /** Open a category (and optionally a record) in the Items or Magic workspace. */
-  openCatalog(tab: 'items' | 'magic', place: Partial<CatalogPlace>): void;
+  /** Open a category (and optionally a record) in Items, Magic or Characters → Factions & more. */
+  openCatalog(tab: 'items' | 'magic' | 'people', place: Partial<CatalogPlace>): void;
+  setNpcView(v: 'characters' | 'people'): void;
   setScript(n?: string): void;
   bump(): void;
   toast(kind: Toast['kind'], text: string): void;
@@ -190,7 +193,8 @@ export const useStore = create<Store>((set, get) => ({
   session: { open: false, dirty: false, canUndo: false, canRedo: false, loadOrder: [] },
   tab: 'scene',
   sceneSelection: [],
-  catalog: { items: { category: 'weapons' }, magic: { category: 'spells' } },
+  catalog: { items: { category: 'weapons' }, magic: { category: 'spells' }, people: { category: 'factions' } },
+  npcView: 'characters',
   revision: 0,
   toasts: [],
   log: [],
@@ -213,8 +217,9 @@ export const useStore = create<Store>((set, get) => ({
     const cur = get().catalog[tab];
     const next = { ...cur, ...place };
     if (place.category && place.category !== cur.category && !('record' in place)) next.record = undefined;
-    set({ catalog: { ...get().catalog, [tab]: next } });
+    set({ catalog: { ...get().catalog, [tab]: next }, ...(tab === 'people' ? { npcView: 'people' as const } : {}) });
   },
+  setNpcView: (npcView) => set({ npcView }),
   setScript: (script) => set({ script }),
   requestNew: (kind) => set({ newRequest: { kind, n: (get().newRequest?.n ?? 0) + 1 } }),
   takeNew: (kind) => {

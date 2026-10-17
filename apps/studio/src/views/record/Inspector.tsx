@@ -93,6 +93,9 @@ export function RecordActions({ view, onSelect }: { view: RecordView; onSelect: 
   const isRef = REF_SIGS.has(view.sig);
   const newHere = view.owner === session.activePlugin;
   const category = categoryLink(view);
+  const tab = useStore((s) => s.tab);
+  const npcView = useStore((s) => s.npcView);
+  const here = category && (category.tab === 'people' ? tab === 'npc' && npcView === 'people' : tab === category.tab);
   return (
     <>
       <div className="row wrap pad" style={{ paddingTop: 0, gap: 4 }}>
@@ -118,6 +121,11 @@ export function RecordActions({ view, onSelect }: { view: RecordView; onSelect: 
         <button className="btn small ghost" onClick={async () => setRefs((await engine((c) => c.call('findReferences', view.formKey), { refreshSession: false })) ?? [])}>
           <Icon name="link" size={12} /> Used by…
         </button>
+        {category && !here && (
+          <button className="btn small ghost" onClick={() => void openInCatalog(view.formKey)} title="Edit it in its own workspace, with plain-language fields" data-testid="open-in-catalog">
+            <Icon name="wand" size={12} /> {category.label}
+          </button>
+        )}
         {view.sig === 'NPC_' && (
           <button className="btn small ghost" onClick={() => (useStore.getState().setNpc(view.formKey), useStore.getState().setTab('npc'))}>
             <Icon name="npc" size={12} /> Character creator
@@ -135,20 +143,23 @@ export function RecordActions({ view, onSelect }: { view: RecordView; onSelect: 
 }
 
 /** Items/Magic workspace that has a dedicated editor for this record, if any. */
-function categoryLink(view: RecordView): { tab: 'items' | 'magic'; label: string } | null {
+function categoryLink(view: RecordView): { tab: 'items' | 'magic' | 'people'; label: string } | null {
   const items = ['WEAP', 'ARMO', 'ALCH', 'INGR', 'BOOK', 'SCRL', 'AMMO', 'KEYM', 'SLGM', 'MISC', 'APPA', 'LVLI', 'COBJ', 'OTFT'];
   const magic = ['SPEL', 'MGEF', 'ENCH', 'SHOU', 'WOOP', 'PERK', 'LVSP'];
+  const people = ['FACT', 'CLAS', 'LVLN', 'RELA'];
   if (items.includes(view.sig)) return { tab: 'items', label: 'Open in Items' };
   if (magic.includes(view.sig)) return { tab: 'magic', label: 'Open in Magic' };
+  if (people.includes(view.sig)) return { tab: 'people', label: 'Open in Characters' };
   return null;
 }
 
-async function openInCatalog(key: FormKey) {
+/** Open a record in Items, Magic or Characters → Factions & more, at its category. */
+export async function openInCatalog(key: FormKey) {
   const where = await engine((c) => c.call('categoryOf', key), { refreshSession: false });
   if (!where) return;
   const s = useStore.getState();
   s.openCatalog(where.tab, { category: where.id, record: key });
-  s.setTab(where.tab);
+  s.setTab(where.tab === 'people' ? 'npc' : where.tab);
 }
 
 

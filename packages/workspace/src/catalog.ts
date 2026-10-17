@@ -1,13 +1,15 @@
 /**
- * The Items and Magic workspaces: records grouped the way a player thinks of
- * them (weapons, potions, spells, powers, perks…) instead of by four-letter
- * record type, each listed with a one-line summary.
+ * The Items and Magic workspaces, and Characters → Factions & more: records
+ * grouped the way a player thinks of them (weapons, potions, spells, perks,
+ * factions…) instead of by four-letter record type, each listed with a
+ * one-line summary.
  */
 import { ACTOR_VALUES, type FormKey } from '@tes5/esp';
 import type { Workspace } from './engine';
 import { CATEGORY_PRESETS, createBlankRecord, isCreatable } from './newrecord';
+import { RELATIONSHIP_RANKS } from './questplan';
 
-export type CatalogTab = 'items' | 'magic';
+export type CatalogTab = 'items' | 'magic' | 'people';
 
 export interface CatalogCategory {
   id: string;
@@ -48,6 +50,11 @@ export const CATALOG: CatalogCategory[] = [
   { id: 'words', tab: 'magic', label: 'Words of power', one: 'word', sigs: ['WOOP'], help: 'The words learned from word walls.' },
   { id: 'perks', tab: 'magic', label: 'Perks', one: 'perk', sigs: ['PERK'], help: 'Skill tree perks and hidden perks: what they need and what they change.' },
   { id: 'spelllists', tab: 'magic', label: 'Leveled spells', one: 'leveled spell', sigs: ['LVSP'], help: 'Spell lists picked by level, for enemies and followers.' },
+
+  { id: 'factions', tab: 'people', label: 'Factions', one: 'faction', sigs: ['FACT'], help: 'Groups characters belong to: who is friendly or hostile to whom, crime and jail, shops, and ranks with titles.' },
+  { id: 'classes', tab: 'people', label: 'Classes', one: 'class', sigs: ['CLAS'], help: 'What a character is good at: which skills grow fastest, what they can train, and how health, magicka and stamina grow.' },
+  { id: 'leveledchars', tab: 'people', label: 'Leveled characters', one: 'leveled character', sigs: ['LVLN'], help: 'Lists that pick a character by the player\'s level, like the bandits in a dungeon or a random encounter.' },
+  { id: 'relationships', tab: 'people', label: 'Relationships', one: 'relationship', sigs: ['RELA'], help: 'How two characters feel about each other (lover, friend, rival, enemy…), which changes how they talk and fight.' },
 ];
 
 export function catalogCategory(id: string): CatalogCategory | undefined {
@@ -80,6 +87,8 @@ const DELIVERY = ['Self', 'Touch', 'Aimed', 'Target actor', 'Target location'];
 const WEAPON_KIND = ['Hand to hand', 'One-handed sword', 'Dagger', 'One-handed axe', 'Mace', 'Two-handed sword', 'Two-handed axe / hammer', 'Bow', 'Staff', 'Crossbow'];
 const ARMOR_KIND = ['Light armor', 'Heavy armor', 'Clothing'];
 const SCHOOLS: Record<number, string> = { 18: 'Alteration', 19: 'Conjuration', 20: 'Destruction', 21: 'Illusion', 22: 'Restoration' };
+/** Class skill weights and training, in the order they're stored (actor values 6–23). */
+export const CLASS_SKILLS = ['One-handed', 'Two-handed', 'Archery', 'Block', 'Smithing', 'Heavy armor', 'Light armor', 'Pickpocket', 'Lockpicking', 'Sneak', 'Alchemy', 'Speech', 'Alteration', 'Conjuration', 'Destruction', 'Illusion', 'Restoration', 'Enchanting'];
 
 /** Friendly names for the vanilla crafting stations' keywords. */
 export const WORKBENCHES: Record<string, string> = {
@@ -138,7 +147,8 @@ export function summarize(ws: Workspace, sig: string, data: Record<string, any>)
     case 'APPA':
       return [gold(data.data?.value), `weight ${round(num(data.data?.weight))}`].join(' · ');
     case 'LVLI':
-    case 'LVSP': {
+    case 'LVSP':
+    case 'LVLN': {
       const n = (data.entries ?? []).length;
       const none = num(data.chanceNone);
       return [plural(n, 'entry').replace('entrys', 'entries'), none ? `${none}% chance of nothing` : null].filter(Boolean).join(' · ');
@@ -174,6 +184,35 @@ export function summarize(ws: Workspace, sig: string, data: Record<string, any>)
     case 'PERK': {
       const d = data.data ?? {};
       return [num(d.playable) ? 'In a skill tree' : 'Hidden perk', plural((data.effects ?? []).length, 'effect'), data.nextPerk ? `then ${nameOf(data.nextPerk)}` : null].filter(Boolean).join(' · ');
+    }
+    case 'FACT': {
+      const f = num(data.flags);
+      const enemies = (data.relations ?? []).filter((r: any) => num(r.reaction) === 1).length;
+      return [
+        f & 0x4000 ? 'Shop' : null,
+        f & 0x40 ? 'Tracks crime' : null,
+        (data.ranks ?? []).length ? plural(data.ranks.length, 'rank') : null,
+        enemies ? plural(enemies, 'enemy').replace('enemys', 'enemies') : null,
+      ]
+        .filter(Boolean)
+        .join(' · ');
+    }
+    case 'CLAS': {
+      const d = data.data ?? {};
+      const weights: number[] = d.skillWeights ?? [];
+      const best = weights
+        .map((w, i) => ({ w: num(w), i }))
+        .filter((x) => x.w > 0)
+        .sort((a, b) => b.w - a.w || a.i - b.i)
+        .slice(0, 3)
+        .map((x) => CLASS_SKILLS[x.i]);
+      const trains = num(d.maxTrainingLevel) > 0 ? `trains ${CLASS_SKILLS[num(d.teaches)] ?? 'a skill'} to ${num(d.maxTrainingLevel)}` : null;
+      return [best.length ? `Best at ${best.join(', ')}` : 'No skill weights', trains].filter(Boolean).join(' · ');
+    }
+    case 'RELA': {
+      const d = data.data ?? {};
+      const who = (k: unknown) => nameOf(k) ?? 'nobody yet';
+      return [`${who(d.parent)} and ${who(d.child)}`, RELATIONSHIP_RANKS[num(d.rank)] ?? 'relationship', num(d.flags) & 0x80 ? 'secret' : null].filter(Boolean).join(' · ');
     }
   }
   return '';
@@ -230,7 +269,7 @@ export function catalogCounts(ws: Workspace, tab: CatalogTab): CatalogCount[] {
 }
 
 /** Categories whose records have no name of their own: they're found by what their summary says (e.g. "Makes Iron Sword"). */
-const NAMELESS = new Set(['recipes', 'loot', 'spelllists', 'outfits']);
+const NAMELESS = new Set(['recipes', 'loot', 'spelllists', 'outfits', 'leveledchars', 'relationships']);
 
 /** Summaries of records from other plugins don't change during a session. */
 const stableSummaries = new WeakMap<Workspace, Map<string, string>>();
@@ -271,7 +310,10 @@ export function catalogList(ws: Workspace, categoryId: string, query = '', limit
   found.sort((a, b) => Number(b.inActive) - Number(a.inActive) || (label(a) < label(b) ? -1 : label(a) > label(b) ? 1 : 0));
   const items = found.slice(0, limit).map((it) => {
     const summary = summaryOf(ws, it);
-    return { formKey: it.formKey, sig: it.sig, editorId: it.editorId, name: it.name, inActive: it.inActive, summary, title: it.name || titleFromSummary(it.sig, summary) || it.editorId || it.formKey };
+    const title = it.name || titleFromSummary(it.sig, summary) || it.editorId || it.formKey;
+    // A title made from the summary ("Lydia and Hulda") isn't repeated under it.
+    const shown = !it.name && summary.startsWith(`${title} · `) ? summary.slice(title.length + 3) : summary;
+    return { formKey: it.formKey, sig: it.sig, editorId: it.editorId, name: it.name, inActive: it.inActive, summary: shown, title };
   });
   return { total: found.length, items };
 }
@@ -312,6 +354,8 @@ export function perkEntryPointTabs(ws: Workspace): Record<number, number> {
 
 /** A readable title for records without a name: recipes are called by what they make. */
 export function titleFromSummary(sig: string, summary: string): string | undefined {
+  // Relationships are called by who they're between ("Lydia and Hulda").
+  if (sig === 'RELA') return summary.split(' · ')[0];
   if (sig !== 'COBJ') return undefined;
   const m = /^Makes (.+?)(?: ×\d+)?(?: · at (.+?))?(?: · |$)/.exec(summary);
   if (!m || m[1] === 'nothing yet') return undefined;

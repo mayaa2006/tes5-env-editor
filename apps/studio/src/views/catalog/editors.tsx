@@ -1,13 +1,14 @@
 /**
- * Simple editors for the Items and Magic workspaces. Each shows the fields that
- * matter for that kind of record, in plain words, with help on anything that
- * isn't obvious. Everything else stays reachable with "Show every field".
+ * Simple editors for the Items and Magic workspaces and Characters → Factions,
+ * classes & more. Each shows the fields that matter for that kind of record,
+ * in plain words, with help on anything that isn't obvious. Everything else
+ * stays reachable with "Show every field".
  */
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { ACTOR_VALUES, ARCHETYPES, ENTRY_FUNCTIONS, ENTRY_POINTS, type FormKey } from '@tes5/esp';
-import type { RecordView } from '@tes5/workspace';
+import { CLASS_SKILLS, DEFAULT_CRIME, RELATIONSHIP_RANKS, readCrimeValues, writeCrimeValues, type CrimeValues, type RecordView } from '@tes5/workspace';
 import { Checkbox, DragNumber, Field, FormPicker, Help, Icon, Section, Select, Slider, TextInput, useQuery, useSummaries } from '../../components/ui';
-import { useStore } from '../../state/store';
+import { engine, useStore } from '../../state/store';
 import { ConditionList } from '../record/ConditionEditor';
 
 type Data = Record<string, any>;
@@ -1122,6 +1123,400 @@ function OutfitEditor({ data, commit }: EditorProps) {
   );
 }
 
+// ------------------------------------------------------------------ factions, classes, relationships
+
+/** XNAM reactions, friendliest first (the stored numbers are 0 neutral, 1 enemy, 2 ally, 3 friend). */
+const REACTIONS = [
+  { value: 3, label: 'Friends' },
+  { value: 2, label: 'Allies' },
+  { value: 0, label: 'Neutral' },
+  { value: 1, label: 'Enemies' },
+];
+/** Faction flag bits for the crimes members can ignore. */
+const IGNORED_CRIMES: [number, string][] = [
+  [7, 'Murder'],
+  [8, 'Assault'],
+  [9, 'Stealing'],
+  [10, 'Trespassing'],
+  [13, 'Pickpocketing'],
+  [16, 'Werewolves'],
+];
+const CRIME_FIELDS: [keyof CrimeValues, string, string][] = [
+  ['murder', 'Murder', 'Bounty for killing a member or someone under this faction\'s law.'],
+  ['assault', 'Assault', 'Bounty for attacking someone.'],
+  ['trespass', 'Trespassing', 'Bounty for going where you may not.'],
+  ['pickpocket', 'Pickpocketing', 'Bounty for being caught picking a pocket.'],
+  ['escape', 'Escaping jail', 'Bounty added for breaking out of jail.'],
+  ['werewolf', 'Werewolf seen', 'Bounty for being seen changing into a werewolf.'],
+];
+
+function FactionEditor({ view, data, commit }: EditorProps) {
+  const f = data.flags;
+  const flag = (b: number, on: boolean) => commit({ ...data, flags: setBit(f, b, on) });
+  const relations: Data[] = data.relations ?? [];
+  const ranks: Data[] = data.ranks ?? [];
+  const setRelation = (i: number, patch: Data) => commit({ ...data, relations: relations.map((r, j) => (j === i ? { ...r, ...patch } : r)) });
+  const setRank = (i: number, patch: Data) => commit({ ...data, ranks: ranks.map((r, j) => (j === i ? { ...r, ...patch } : r)) });
+  const crime = readCrimeValues(data.crimeValues);
+  const setCrime = (patch: Partial<CrimeValues>) => commit({ ...data, crimeValues: writeCrimeValues({ ...(crime ?? DEFAULT_CRIME), ...patch }, data.crimeValues) });
+  const vendor: Data = data.vendor ?? { startHour: 0, endHour: 24, radius: 0, buysStolen: 0, notBuySell: 0, buysNonStolen: 0, unused: new Uint8Array(1) };
+  const setVendor = (patch: Data) => commit({ ...data, vendor: { ...vendor, ...patch } });
+  const hours = Array.from({ length: 25 }, (_, h) => ({ value: h, label: h === 0 ? 'Midnight' : h === 12 ? 'Noon' : h === 24 ? 'Midnight (end of day)' : `${h % 12 || 12} ${h < 12 ? 'am' : 'pm'}` }));
+  return (
+    <>
+      <Pad>
+        <NameField data={data} commit={commit} help="The faction's name. Players rarely see it; it shows in the Creation Kit and in some messages." />
+        <div className="catalog-flags">
+          <Checkbox checked={bit(f, 15)} onChange={(on) => flag(15, on)} label="Can own things" help="Beds, doors, chests and items can belong to this faction: members may use them, and anyone else taking or using them is stealing or trespassing." />
+        </div>
+      </Pad>
+      <FactionMembers faction={view.formKey} ranks={ranks} />
+      <Pad>
+        <Section
+          title={<Title help="How members treat members of another faction or a race. Friends and allies help each other in fights; enemies attack on sight.">{`How they treat others (${relations.length})`}</Title>}
+          actions={
+            <button className="btn small" onClick={() => commit({ ...data, relations: [...relations, { faction: null, modifier: 0, reaction: 3 }] })} data-testid="add-relation" title="Add a faction or race and choose how members treat it">
+              <Icon name="plus" size={12} /> Add faction or race
+            </button>
+          }
+        >
+          {!relations.length && <div className="faint small">No one in particular: members treat other groups as the game does by default (neutral to most). Add a faction or race to make them friends or enemies.</div>}
+          {relations.length > 0 && (
+            <table className="grid catalog-table">
+              <thead>
+                <tr>
+                  <th>Faction or race</th>
+                  <th style={{ width: 130 }}>They are</th>
+                  <th style={{ width: 30 }} />
+                </tr>
+              </thead>
+              <tbody>
+                {relations.map((r, i) => (
+                  <tr key={i}>
+                    <td>
+                      <FormPicker value={r.faction ?? null} sigs={['FACT', 'RACE']} onChange={(faction) => setRelation(i, { faction })} />
+                    </td>
+                    <td>
+                      <Select value={num(r.reaction)} options={REACTIONS} onChange={(reaction) => setRelation(i, { reaction })} />
+                    </td>
+                    <td>
+                      <button className="btn icon ghost" title="Remove" onClick={() => commit({ ...data, relations: relations.filter((_, j) => j !== i) })}>
+                        <Icon name="close" size={12} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Section>
+      </Pad>
+      <Pad>
+        <Section
+          title={<Title help="Steps within the faction, each with a title (like Initiate, Member, Master). Characters are put in at a rank, and scripts can raise it.">{`Ranks (${ranks.length})`}</Title>}
+          actions={
+            <button
+              className="btn small"
+              data-testid="add-rank"
+              title="Add the next rank, with a title for men and women"
+              onClick={() => commit({ ...data, ranks: [...ranks, { number: ranks.length ? Math.max(...ranks.map((r) => num(r.number))) + 1 : 0, maleTitle: '', femaleTitle: '' }] })}
+            >
+              <Icon name="plus" size={12} /> Add rank
+            </button>
+          }
+        >
+          {!ranks.length && <div className="faint small">No ranks: everyone in it is simply a member (rank 0). Add ranks to give them titles.</div>}
+          {ranks.length > 0 && (
+            <table className="grid catalog-table">
+              <thead>
+                <tr>
+                  <th style={{ width: 60 }}>Rank</th>
+                  <th>Title for men</th>
+                  <th>Title for women</th>
+                  <th style={{ width: 30 }} />
+                </tr>
+              </thead>
+              <tbody>
+                {ranks.map((r, i) => (
+                  <tr key={i}>
+                    <td>{num(r.number)}</td>
+                    <td>
+                      <TextInput value={String(r.maleTitle ?? '')} placeholder="e.g. Initiate" onCommit={(maleTitle) => setRank(i, { maleTitle, ...(!r.femaleTitle ? { femaleTitle: maleTitle } : {}) })} />
+                    </td>
+                    <td>
+                      <TextInput value={String(r.femaleTitle ?? '')} placeholder="Same as for men" onCommit={(femaleTitle) => setRank(i, { femaleTitle })} />
+                    </td>
+                    <td>
+                      <button className="btn icon ghost" title="Remove this rank" onClick={() => commit({ ...data, ranks: ranks.filter((_, j) => j !== i) })}>
+                        <Icon name="close" size={12} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Section>
+      </Pad>
+      <Pad>
+        <Section title={<Title help="A hold's crime faction (like CrimeFactionWhiterun) keeps the player's bounty there and sends its guards after them. Characters and places owned by it are under its law.">Crime</Title>}>
+          <Checkbox
+            checked={bit(f, 6)}
+            onChange={(on) => commit({ ...data, flags: setBit(f, 6, on), ...(on && !crime ? { crimeValues: writeCrimeValues(DEFAULT_CRIME) } : {}) })}
+            label="Keeps a bounty, like a hold's crime faction"
+            help="Crimes against its members add bounty to this faction, and its guards come after the player. Turning it on starts with the bounties Skyrim's holds use."
+          />
+          {bit(f, 6) && !crime && (
+            <button className="btn small" style={{ marginTop: 6 }} onClick={() => commit({ ...data, crimeValues: writeCrimeValues(DEFAULT_CRIME) })} title="Store bounties for this faction, starting with the ones Skyrim's holds use">
+              Set its bounties
+            </button>
+          )}
+          {bit(f, 6) && crime && (
+            <>
+              <div className="catalog-grid3" style={{ marginTop: 8 }}>
+                {CRIME_FIELDS.filter(([k]) => crime[k] !== undefined).map(([k, label, help]) => (
+                  <Field key={k} label={label} title={help}>
+                    <Num value={crime[k]} min={0} max={65535} onCommit={(v) => setCrime({ [k]: v })} suffix=" gold" />
+                  </Field>
+                ))}
+                {crime.stealMult !== undefined && (
+                  <Field label="Stealing (× item value)" title="Bounty for stealing, as a multiple of what the item is worth.">
+                    <Num value={crime.stealMult} min={0} max={10} step={0.1} precision={2} onCommit={(stealMult) => setCrime({ stealMult })} />
+                  </Field>
+                )}
+              </div>
+              <div className="catalog-flags">
+                <Checkbox checked={crime.arrest} onChange={(arrest) => setCrime({ arrest })} label="Guards arrest" help="Guards try to arrest the player instead of only fighting." />
+                <Checkbox checked={crime.attackOnSight} onChange={(attackOnSight) => setCrime({ attackOnSight })} label="Attack on sight when the bounty is high" help="Guards attack straight away once the bounty is big enough." />
+                <Checkbox checked={bit(f, 12)} onChange={(on) => flag(12, on)} label="Use the game's default bounties" help="Ignore the numbers above and use the game settings' values instead." />
+              </div>
+            </>
+          )}
+          <div className="small dim" style={{ margin: '10px 0 4px' }}>
+            Members don't react to: <Help text="Members of this faction ignore these crimes when they see them, as bandits ignore each other's murders." />
+          </div>
+          <div className="catalog-flags" style={{ marginTop: 0 }}>
+            {IGNORED_CRIMES.map(([b, label]) => (
+              <Checkbox key={b} checked={bit(f, b)} onChange={(on) => flag(b, on)} label={label} />
+            ))}
+            <Checkbox checked={bit(f, 11)} onChange={(on) => flag(11, on)} label="Crimes against members" help="Crimes against members aren't reported to the guards." />
+          </div>
+          <div className="catalog-grid2" style={{ marginTop: 8 }}>
+            <Field label="Jail clothes" title="What the player wears in this faction's jail.">
+              <FormPicker value={data.jailOutfit ?? null} sigs={['OTFT']} onChange={(jailOutfit) => commit({ ...data, jailOutfit })} />
+            </Field>
+            <PlacedLink label="Jail" value={data.exteriorJailMarker} help="Where the player is taken when arrested (a marker outside the jail). Set it under Show every field." />
+          </div>
+        </Section>
+      </Pad>
+      <Pad>
+        <Section title={<Title help="Members of a shop faction are merchants: the player can trade with them during opening hours, from the chest the shop keeps its stock in.">Shop</Title>}>
+          <Checkbox checked={bit(f, 14)} onChange={(on) => commit({ ...data, flags: setBit(f, 14, on), ...(on && !data.vendor ? { vendor } : {}) })} label="Members run a shop" help="Members can be traded with, using the settings below." />
+          {bit(f, 14) && (
+            <>
+              <div className="catalog-grid2" style={{ marginTop: 8 }}>
+                <Field label="Opens at" title="When the shop opens (game time).">
+                  <Select value={num(vendor.startHour)} options={hours} onChange={(startHour) => setVendor({ startHour })} />
+                </Field>
+                <Field label="Closes at" title="When the shop closes. Opening at midnight and closing at midnight (end of day) means always open.">
+                  <Select value={num(vendor.endHour)} options={hours} onChange={(endHour) => setVendor({ endHour })} />
+                </Field>
+                <Field label="What they trade" title="A form list of keywords (like VendorItemWeapon) for the kinds of items they buy and sell.">
+                  <FormPicker value={data.vendorList ?? null} sigs={['FLST']} onChange={(vendorList) => commit({ ...data, vendorList })} />
+                </Field>
+                <Field label="The list is" title="Whether the list says what they trade, or what they won't.">
+                  <Select value={num(vendor.notBuySell)} options={[{ value: 0, label: 'What they buy and sell' }, { value: 1, label: "What they won't buy or sell" }]} onChange={(notBuySell) => setVendor({ notBuySell })} />
+                </Field>
+                <PlacedLink label="Stock chest" value={data.merchantContainer} help="The chest the shop sells from (placed somewhere the player can't reach). Set it under Show every field." />
+              </div>
+              <div className="catalog-flags">
+                <Checkbox checked={!!num(vendor.buysStolen)} onChange={(on) => setVendor({ buysStolen: on ? 1 : 0 })} label="Buys stolen goods" help="Like a fence: stolen items can be sold here." />
+                <Checkbox checked={!num(vendor.buysNonStolen)} onChange={(on) => setVendor({ buysNonStolen: on ? 0 : 1 })} label="Buys goods that aren't stolen" help="Off for a fence that takes only stolen goods." />
+              </div>
+            </>
+          )}
+        </Section>
+      </Pad>
+    </>
+  );
+}
+
+/** A placed object (a jail marker, a shop's chest), shown with a link; it's chosen under Show every field. */
+function PlacedLink({ label, value, help }: { label: string; value: FormKey | null | undefined; help: string }) {
+  const sums = useSummaries([value ?? null]);
+  const s = value ? sums[value] : undefined;
+  return (
+    <Field label={label} title={help}>
+      {value ? (
+        <button className="btn small ghost" style={{ justifySelf: 'start' }} onClick={() => useStore.getState().showProperties(value)} title="Show it in the properties panel">
+          <Icon name="link" size={12} /> {s?.name || s?.editorId || value}
+        </button>
+      ) : (
+        <span className="faint small">None</span>
+      )}
+    </Field>
+  );
+}
+
+/** Who is in a faction, at which rank; adding or removing someone changes that character in your plugin. */
+function FactionMembers({ faction, ranks }: { faction: FormKey; ranks: Data[] }) {
+  const client = useStore((s) => s.client);
+  const { data, loading } = useQuery(() => client?.call('factionMembers', faction), [faction]);
+  const [adding, setAdding] = useState(false);
+  const set = (npc: FormKey, rank: number | null) => engine((c) => c.call('setFactionRank', npc, faction, rank), { success: rank === null ? 'Taken out of the faction. Ctrl+Z undoes it.' : undefined });
+  const rankOptions = (current: number) => {
+    const list = ranks.map((r) => ({ value: num(r.number), label: `${num(r.number)}${r.maleTitle ? ` · ${r.maleTitle}` : ''}` }));
+    if (!list.some((o) => o.value === current)) list.unshift({ value: current, label: String(current) });
+    return list.sort((a, b) => a.value - b.value);
+  };
+  return (
+    <Pad>
+      <Section
+        title={<Title help="Characters in this faction. Adding, removing or changing someone's rank changes that character in your plugin.">{`Members${data ? ` (${data.total})` : ''}`}</Title>}
+        actions={
+          <button className="btn small" onClick={() => setAdding(!adding)} data-testid="add-member" title="Put a character in this faction">
+            <Icon name="plus" size={12} /> Add character
+          </button>
+        }
+      >
+        {adding && (
+          <div className="row" style={{ gap: 6, marginBottom: 6 }} data-testid="member-picker">
+            <span className="small dim">Who:</span>
+            <div className="grow">
+              <FormPicker
+                value={null}
+                sigs={['NPC_']}
+                placeholder="Pick a character"
+                onChange={(npc) => {
+                  if (npc) void set(npc, ranks.length ? Math.min(...ranks.map((r) => num(r.number))) : 0);
+                  setAdding(false);
+                }}
+              />
+            </div>
+          </div>
+        )}
+        {!data && loading && <div className="faint small">Looking for members…</div>}
+        {data && !data.total && <div className="faint small">No one is in this faction yet. Add a character, or put characters in it from their own page.</div>}
+        {data && data.total > 0 && (
+          <table className="grid catalog-table" data-testid="faction-members">
+            <thead>
+              <tr>
+                <th>Character</th>
+                <th style={{ width: 160 }}>Rank</th>
+                <th style={{ width: 30 }} />
+              </tr>
+            </thead>
+            <tbody>
+              {data.members.map((m) => (
+                <tr key={m.formKey}>
+                  <td>
+                    <a href="#" onClick={(e) => (e.preventDefault(), useStore.getState().setNpc(m.formKey), useStore.getState().setNpcView('characters'))} title="Open in Characters">
+                      {m.name || m.editorId}
+                    </a>{' '}
+                    {m.inActive && <span className="chip accent">yours</span>}
+                  </td>
+                  <td>
+                    <Select value={m.rank} options={rankOptions(m.rank)} onChange={(rank) => void set(m.formKey, rank)} />
+                  </td>
+                  <td>
+                    <button className="btn icon ghost" title={`Take ${m.name || m.editorId} out of this faction`} onClick={() => void set(m.formKey, null)}>
+                      <Icon name="close" size={12} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {data && data.total > data.members.length && <div className="faint small">Showing {data.members.length} of {data.total}.</div>}
+      </Section>
+    </Pad>
+  );
+}
+
+const TRAINS = [{ value: -1, label: 'Nothing' }, ...CLASS_SKILLS.map((label, value) => ({ value, label }))];
+
+function ClassEditor({ data, commit }: EditorProps) {
+  const d: Data = data.data ?? {};
+  const set = (patch: Data) => commit({ ...data, data: { ...d, ...patch } });
+  const weights: number[] = d.skillWeights ?? CLASS_SKILLS.map(() => 0);
+  const trains = num(d.maxTrainingLevel) > 0 ? num(d.teaches) : -1;
+  return (
+    <>
+      <Pad>
+        <NameField data={data} commit={commit} help="The class's name, like Warrior or Enchanter." />
+        <Section title={<Title help="Characters with this class who are also trainers (in the trainer faction) can train the player in one skill, up to a level. Skyrim's expert trainers go to 75 and masters to 90.">Training</Title>}>
+          <div className="catalog-grid2">
+            <Field label="Trains" title="The skill a trainer with this class teaches.">
+              <Select value={trains} options={TRAINS} onChange={(t) => (t < 0 ? set({ teaches: 0, maxTrainingLevel: 0 }) : set({ teaches: t, maxTrainingLevel: num(d.maxTrainingLevel) || 50 }))} />
+            </Field>
+            <Field label="Up to level" title="The highest level they can train the skill to.">
+              {trains < 0 ? <span className="faint small">Pick a skill first</span> : <Num value={d.maxTrainingLevel} min={1} max={100} onCommit={(maxTrainingLevel) => set({ maxTrainingLevel })} />}
+            </Field>
+          </div>
+        </Section>
+      </Pad>
+      <Pad>
+        <Section title={<Title help="How fast each skill grows as a character with this class levels up: higher numbers grow faster, 0 not at all. Skyrim's classes give 3 to their main skills, 1 or 2 to a few others and 0 to the rest.">Skills</Title>}>
+          <div className="catalog-grid3" data-testid="class-skills">
+            {CLASS_SKILLS.map((label, i) => (
+              <Field key={label} label={label}>
+                <Num value={weights[i]} min={0} max={50} onCommit={(w) => set({ skillWeights: weights.map((x, j) => (j === i ? w : num(x))) })} />
+              </Field>
+            ))}
+          </div>
+        </Section>
+      </Pad>
+      <Pad>
+        <Section title={<Title help="How each level's increase is split between health, magicka and stamina: 2, 1 and 0 gives two thirds to health and one third to magicka.">Health, magicka and stamina</Title>}>
+          <div className="catalog-grid3">
+            <Field label="Health">
+              <Num value={d.healthWeight} min={0} max={20} onCommit={(healthWeight) => set({ healthWeight })} />
+            </Field>
+            <Field label="Magicka">
+              <Num value={d.magickaWeight} min={0} max={20} onCommit={(magickaWeight) => set({ magickaWeight })} />
+            </Field>
+            <Field label="Stamina">
+              <Num value={d.staminaWeight} min={0} max={20} onCommit={(staminaWeight) => set({ staminaWeight })} />
+            </Field>
+          </div>
+          <Field label="Kneels (bleeds out) below" title="Characters who can't die kneel when their health drops below this share of the full amount. Skyrim uses 10%.">
+            <Slider value={Math.round(num(d.bleedoutDefault, 0.1) * 100)} min={0} max={100} step={1} onCommit={(p) => set({ bleedoutDefault: Math.round(p) / 100 })} />
+          </Field>
+        </Section>
+      </Pad>
+    </>
+  );
+}
+
+/** How each rank behaves in game. */
+const RANK_HELP = ['Lover', 'Ally (fights for the other)', 'Confidant', 'Friend', 'Acquaintance', 'Rival', 'Foe', 'Enemy (may attack)', 'Archnemesis'];
+
+function RelationshipEditor({ data, commit }: EditorProps) {
+  const d: Data = data.data ?? {};
+  const set = (patch: Data) => commit({ ...data, data: { ...d, ...patch } });
+  return (
+    <Pad>
+      <div className="catalog-grid2">
+        <Field label="Between" title="The first character. For family and work links (parent and child, boss and employee) this is the parent or the boss.">
+          <FormPicker value={d.parent ?? null} sigs={['NPC_']} placeholder="Pick a character" onChange={(parent) => set({ parent })} />
+        </Field>
+        <Field label="…and" title="The second character: the child or the employee in family and work links.">
+          <FormPicker value={d.child ?? null} sigs={['NPC_']} placeholder="Pick a character" onChange={(child) => set({ child })} />
+        </Field>
+        <Field label="How they feel about each other" title="Changes how they greet each other, whether they help in a fight, and what they say. Lover, ally, confidant and friend are friendly; rival, foe, enemy and archnemesis are not.">
+          <Select value={num(d.rank, 3)} options={RELATIONSHIP_RANKS.map((_, i) => ({ value: i, label: RANK_HELP[i]! }))} onChange={(rank) => set({ rank })} />
+        </Field>
+        <Field label="Connected as" title="Optional: how they're linked (parent and child, siblings, spouse, boss and employee…). Some dialogue, scenes and quests look for it.">
+          <FormPicker value={d.associationType ?? null} sigs={['ASTP']} placeholder="Not related" onChange={(associationType) => set({ associationType })} />
+        </Field>
+      </div>
+      <Checkbox checked={bit(d.flags, 7)} onChange={(on) => set({ flags: setBit(d.flags, 7, on) })} label="Secret" help="Kept hidden from others, like secret lovers or conspirators." />
+      {(!d.parent || !d.child) && <div className="small warn" style={{ marginTop: 6 }}>Pick both characters: a relationship with only one does nothing in game.</div>}
+    </Pad>
+  );
+}
+
 export const FRIENDLY_EDITORS: Record<string, (p: EditorProps) => ReactNode> = {
   SPEL: SpellEditor,
   ENCH: EnchantmentEditor,
@@ -1145,4 +1540,7 @@ export const FRIENDLY_EDITORS: Record<string, (p: EditorProps) => ReactNode> = {
   AMMO: SimpleItemEditor,
   APPA: SimpleItemEditor,
   OTFT: OutfitEditor,
+  FACT: FactionEditor,
+  CLAS: ClassEditor,
+  RELA: RelationshipEditor,
 };

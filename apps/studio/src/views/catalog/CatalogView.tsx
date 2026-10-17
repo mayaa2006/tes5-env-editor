@@ -1,7 +1,8 @@
 /**
- * The Items and Magic workspaces: categories on the left (weapons, potions,
- * spells, perks…), the records of the chosen one with a one-line summary each,
- * and a full-size editor for the open record.
+ * The Items and Magic workspaces, and Characters → Factions, classes & more:
+ * categories on the left (weapons, potions, spells, factions…), the records of
+ * the chosen one with a one-line summary each, and a full-size editor for the
+ * open record.
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import type { FormKey } from '@tes5/esp';
@@ -16,7 +17,9 @@ import { FRIENDLY_EDITORS, type EditorProps } from './editors';
 const INTRO: Record<CatalogTab, string> = {
   items: 'Everything that can be carried, crafted or found as loot.',
   magic: 'Spells, powers, enchantments, shouts and perks.',
+  people: 'What characters belong to and how they get along: factions, classes, leveled characters and relationships.',
 };
+const TITLE: Record<CatalogTab, string> = { items: 'Items', magic: 'Magic', people: 'Groups' };
 
 export default function CatalogView({ tab }: { tab: CatalogTab }) {
   const place = useStore((s) => s.catalog[tab]);
@@ -42,7 +45,7 @@ function Categories({ tab, current, onPick }: { tab: CatalogTab; current: string
   return (
     <div className="panel catalog-categories" style={{ flex: 'none', borderRight: '1px solid var(--border)', background: 'var(--panel)' }}>
       <div className="panel-header">
-        <span className="grow">{tab === 'items' ? 'Items' : 'Magic'}</span>
+        <span className="grow">{TITLE[tab]}</span>
         <Help text={INTRO[tab]} />
       </div>
       <ul className="list scroll" style={{ flex: 1 }} data-testid="catalog-categories">
@@ -139,7 +142,7 @@ function Editor({ formKey, onSelect }: { formKey: FormKey; onSelect: (k: FormKey
     <div className="scroll" style={{ flex: 1 }} data-testid="catalog-editor">
       <div className="catalog-editor">
         <div className="row" style={{ alignItems: 'baseline', gap: 8, padding: '12px 12px 0' }}>
-          <h2 style={{ margin: 0 }}>{(draft.name as string) || (view.sig === 'COBJ' ? <RecipeTitle view={view} data={draft} /> : view.editorId || view.typeName)}</h2>
+          <h2 style={{ margin: 0 }}>{(draft.name as string) || (view.sig === 'COBJ' || view.sig === 'RELA' ? <NamelessTitle view={view} data={draft} /> : view.editorId || view.typeName)}</h2>
           <span className="dim small grow">{view.editorId}</span>
           <AskAiButton what="this record" form={view.formKey} questions={['Explain this record in plain words', 'What uses this record?', 'Make a stronger copy of this']} align="right" />
         </div>
@@ -169,10 +172,12 @@ function Editor({ formKey, onSelect }: { formKey: FormKey; onSelect: (k: FormKey
   );
 }
 
-/** Recipes have no name: call them by what they make. */
-function RecipeTitle({ view, data }: { view: RecordView; data: Record<string, any> }) {
-  const sums = useSummaries([view.sig === 'COBJ' ? data.createdObject : null]);
-  if (view.sig !== 'COBJ') return null;
-  const made = data.createdObject ? sums[data.createdObject] : undefined;
-  return <>{made ? `${made.name ?? made.editorId} recipe` : 'New recipe'}</>;
+/** Recipes and relationships have no name: call them by what they make, or by who they're between. */
+function NamelessTitle({ view, data }: { view: RecordView; data: Record<string, any> }) {
+  const keys = view.sig === 'COBJ' ? [data.createdObject] : [data.data?.parent, data.data?.child];
+  const sums = useSummaries(keys.map((k) => k ?? null));
+  const call = (k: FormKey | null | undefined) => (k && sums[k] ? (sums[k]!.name ?? sums[k]!.editorId) : undefined);
+  if (view.sig === 'COBJ') return <>{call(data.createdObject) ? `${call(data.createdObject)} recipe` : 'New recipe'}</>;
+  const [a, b] = [call(data.data?.parent), call(data.data?.child)];
+  return <>{a || b ? `${a ?? '…'} and ${b ?? '…'}` : 'New relationship'}</>;
 }

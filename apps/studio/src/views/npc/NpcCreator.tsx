@@ -1,6 +1,8 @@
 /**
  * Character creator: edits an NPC's look the way the in-game RaceMenu does —
- * race, sex, head parts, sliders and colours — with a live 3D preview.
+ * race, sex, head parts, sliders and colours — with a live 3D preview. The
+ * switch at the top shows factions, classes, leveled characters and
+ * relationships instead (a catalog like Items and Magic).
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FACE_MORPHS, type FormKey } from '@tes5/esp';
@@ -9,6 +11,7 @@ import { Checkbox, clearDraft, EmptyState, Field, FormPicker, Help, Icon, Modal,
 import { AskAiButton } from '../../components/AskAi';
 import { engine, useStore } from '../../state/store';
 import { HeadPreview, type PreviewPart } from './headPreview';
+import CatalogView from '../catalog/CatalogView';
 
 type Tab = 'body' | 'head' | 'face' | 'colors' | 'tints' | 'routine';
 
@@ -36,6 +39,24 @@ const toHex = (c: { r: number; g: number; b: number }) => `#${[c.r, c.g, c.b].ma
 const fromHex = (h: string) => ({ r: parseInt(h.slice(1, 3), 16) / 255, g: parseInt(h.slice(3, 5), 16) / 255, b: parseInt(h.slice(5, 7), 16) / 255 });
 
 export default function NpcCreator() {
+  const view = useStore((s) => s.npcView);
+  const setView = useStore((s) => s.setNpcView);
+  return (
+    <div className="col" style={{ flex: 1, minHeight: 0, gap: 0 }}>
+      <Tabs<'characters' | 'people'>
+        tabs={[
+          { id: 'characters', label: <span title="Characters: their looks, outfit, items, routine and more">Characters</span> },
+          { id: 'people', label: <span title="Factions (who is friendly or hostile, crime, shops, ranks), classes, leveled characters and relationships">Factions, classes &amp; more</span> },
+        ]}
+        value={view}
+        onChange={setView}
+      />
+      {view === 'people' ? <CatalogView key="people" tab="people" /> : <Characters />}
+    </div>
+  );
+}
+
+function Characters() {
   const npc = useStore((s) => s.npc);
   return (
     <div className="row" style={{ flex: 1, minHeight: 0, alignItems: 'stretch', gap: 0 }}>

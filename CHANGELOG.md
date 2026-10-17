@@ -2,6 +2,13 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.35.0
+
+- **Factions, classes, leveled characters and relationships, in plain words.** The Characters tab has a new switch, **Factions, classes & more**, laid out like Items and Magic. Factions show who's in them (add someone, change their rank or take them out), their ranks and titles, who they're friends or enemies with, crime bounties and jail clothes, and shop hours and goods. Classes show what they train, how fast each skill grows, and how health, magicka and stamina grow. Relationships say who and how they feel about each other. New ones start with values like Skyrim's, and everything can be undone.
+- **Open in Characters, Items or Magic** from Records and the properties panel, for anything those workspaces edit. Links from the AI tab open the record at its category too.
+- **The AI knows the new categories**, so you can ask it to make a faction, a class or a relationship.
+- **Fixed:** Ctrl+Z, Ctrl+S and the other shortcuts did nothing while a checkbox or slider had focus.
+
 ## 0.34.1
 
 - **Free AIs find the right thing to place.** A search for one kind of item ("mead" as a misc item) also lists items of the other kinds with that name. In Skyrim, Nord Mead is food and drink, and it was never mentioned before. Dialogue topics are no longer offered as "other kinds". Looking for a table, shelf or counter to put something on now gets told that placing an item finds one by itself. Re-run on Skyrim's data, Qwen3.5 4B put two Nord Meads on a table in the Bannered Mare in three steps (it had missed that job in all five earlier runs); Qwen3.5 2B still struggles with it.
