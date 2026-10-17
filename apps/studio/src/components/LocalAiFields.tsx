@@ -79,7 +79,7 @@ export function LocalAiFields() {
           return (
             <div key={m.id} className={`local-model ${using ? 'selected' : ''}`} data-testid={`local-model-${m.id}`}>
               <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
-                <b>{m.label}</b>
+                <b title={`${m.file} from huggingface.co/${m.repo} · licence: ${m.license}`}>{m.label}</b>
                 {m.recommended && <span className="chip">Recommended</span>}
                 <span className="dim small" title="Download size, and about how much free memory it needs while it runs">
                   {formatBytes(m.size)} · needs about {m.memoryGb} GB of memory

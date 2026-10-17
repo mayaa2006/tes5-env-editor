@@ -70,7 +70,91 @@ interface Reply {
   stop_reason: string | null;
 }
 
-type Fetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; json(): Promise<any>; text(): Promise<string> }>;
+type Fetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<ChatResponse>;
+
+/** What the AI code reads from a response (a fetch Response, or a test's stand-in). */
+export interface ChatResponse {
+  ok: boolean;
+  status: number;
+  json(): Promise<any>;
+  text(): Promise<string>;
+  headers?: { get(name: string): string | null };
+  body?: ReadableStream<Uint8Array> | null;
+}
+
+/**
+ * A chat answer, streamed or not, in the shape of the non-streamed one:
+ * OpenAI-style `{choices: [{message, finish_reason}], usage}` or Ollama's
+ * `{message, done_reason, prompt_eval_count, eval_count}`.
+ *
+ * Requests are streamed so the answer starts at once: a server that sends
+ * nothing until it's done (llama.cpp, Ollama) can take minutes on a
+ * processor, and fetch gives up on a server that's silent for 5 minutes.
+ * Services that ignore the request to stream answer in plain JSON, which is
+ * read as it is.
+ */
+export async function readChat(res: ChatResponse, kind: 'openai' | 'ollama', onText?: (delta: string) => void): Promise<any> {
+  const type = res.headers?.get('content-type') ?? '';
+  if (!res.body || !/event-stream|ndjson/i.test(type)) return res.json();
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let content = '';
+  let finish: string | null = null;
+  let usage: unknown;
+  const calls: { id?: string; type?: string; function: { name: string; arguments: string } }[] = [];
+  let ollama: Record<string, any> = {};
+  const ollamaCalls: unknown[] = [];
+  const line = (l: string) => {
+    if (kind === 'openai') {
+      const m = /^data:\s*(.*)$/.exec(l);
+      if (!m || m[1] === '[DONE]' || !m[1]) return;
+      const j = JSON.parse(m[1]);
+      if (j.usage) usage = j.usage;
+      const c = j.choices?.[0];
+      if (!c) return;
+      if (c.finish_reason) finish = c.finish_reason;
+      const d = c.delta ?? {};
+      if (typeof d.content === 'string' && d.content) {
+        content += d.content;
+        onText?.(d.content);
+      }
+      for (const t of d.tool_calls ?? []) {
+        const at = typeof t.index === 'number' ? t.index : calls.length;
+        const cur = (calls[at] ??= { function: { name: '', arguments: '' } });
+        if (t.id) cur.id = t.id;
+        if (t.type) cur.type = t.type;
+        if (t.function?.name) cur.function.name += t.function.name;
+        if (typeof t.function?.arguments === 'string') cur.function.arguments += t.function.arguments;
+        else if (t.function?.arguments) cur.function.arguments = JSON.stringify(t.function.arguments);
+      }
+    } else {
+      if (!l.trim()) return;
+      const j = JSON.parse(l);
+      if (j.error) throw new WorkspaceError(String(j.error));
+      const piece = j.message?.content;
+      if (typeof piece === 'string' && piece) {
+        content += piece;
+        onText?.(piece);
+      }
+      for (const t of j.message?.tool_calls ?? []) ollamaCalls.push(t);
+      if (j.done) ollama = j;
+    }
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (value) buf += decoder.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      line(buf.slice(0, nl).replace(/\r$/, ''));
+      buf = buf.slice(nl + 1);
+    }
+    if (done) break;
+  }
+  if (buf.trim()) line(buf.trim());
+  if (kind === 'openai') return { choices: [{ message: { content, ...(calls.length ? { tool_calls: calls.filter(Boolean) } : {}) }, finish_reason: finish }], ...(usage ? { usage } : {}) };
+  return { ...ollama, message: { role: 'assistant', content, ...(ollamaCalls.length ? { tool_calls: ollamaCalls } : {}) } };
+}
 
 /** Turn the planner's Anthropic-format request into one chat request for Ollama or an OpenAI-style service. */
 export function chatSend(p: ChatProvider, fetchImpl: Fetch = globalThis.fetch as unknown as Fetch): (params: BetaMessageStreamParams) => Promise<Reply> {
@@ -103,7 +187,7 @@ export function chatSend(p: ChatProvider, fetchImpl: Fetch = globalThis.fetch as
         (err as WorkspaceError & { status?: number }).status = res.status;
         throw err;
       }
-      return res.json();
+      return readChat(res, p.kind === 'ollama' ? 'ollama' : 'openai');
     };
     if (p.kind === 'ollama') {
       // Ollama's own API: the JSON schema constrains the answer. Ollama cuts a prompt that doesn't fit its
@@ -118,7 +202,7 @@ export function chatSend(p: ChatProvider, fetchImpl: Fetch = globalThis.fetch as
       const r = await call(`${base}/api/chat`, {
         model: p.model,
         messages,
-        stream: false,
+        stream: true,
         format: schema ?? 'json',
         options: { num_ctx: contextWindow(promptTokens, max), temperature: 0.3 },
       });
@@ -126,7 +210,7 @@ export function chatSend(p: ChatProvider, fetchImpl: Fetch = globalThis.fetch as
     }
     const url = `${p.url.replace(/\/+$/, '')}/chat/completions`;
     const headers: Record<string, string> = p.apiKey ? { authorization: `Bearer ${p.apiKey}` } : {};
-    const base = { model: p.model, messages, temperature: 0.3, max_tokens: Math.min(params.max_tokens ?? 16000, 32000) };
+    const base = { model: p.model, messages, temperature: 0.3, max_tokens: Math.min(params.max_tokens ?? 16000, 32000), ...streamFields(p.url) };
     let r;
     try {
       r = await call(url, { ...base, response_format: schema ? { type: 'json_schema', json_schema: { name: 'answer', schema, strict: false } } : { type: 'json_object' } }, headers);
@@ -138,6 +222,11 @@ export function chatSend(p: ChatProvider, fetchImpl: Fetch = globalThis.fetch as
     const choice = r?.choices?.[0];
     return { content: [{ type: 'text', text: cleanJson(String(choice?.message?.content ?? '')) }], stop_reason: choice?.finish_reason === 'length' ? 'max_tokens' : 'end_turn' };
   };
+}
+
+/** Ask to stream (see readChat); servers on this computer are also asked for the token counts at the end. */
+export function streamFields(url: string): Record<string, unknown> {
+  return { stream: true, ...(/\/\/(localhost|127\.0\.0\.1)[:/]/.test(url) ? { stream_options: { include_usage: true } } : {}) };
 }
 
 /** Room left for the answer: a whole quest plan is a few thousand tokens. */

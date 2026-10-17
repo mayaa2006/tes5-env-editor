@@ -64,8 +64,14 @@ describe('the AI workspace character, record and script tools', () => {
     const k2 = (copy.data as any).formKey;
     expect(host.ws!.summary(k2)).toMatchObject({ editorId: 'AiBlade2', name: 'Second Blade' });
     const value = (host.view(k2)!.data as any).data?.value;
-    await run('update_record', { form: 'AiBlade2', changes: { data: { value: (value ?? 0) + 250 } } });
+    const upd = await run('update_record', { form: 'AiBlade2', changes: { data: { value: (value ?? 0) + 250 } } });
     expect((host.view(k2)!.data as any).data.value).toBe((value ?? 0) + 250);
+    // What changed is reported field by field; a field the record didn't have is pointed out.
+    expect((upd.data as any).changed[0]).toMatch(/^data(\.value)?: .* → .*250/);
+    const again = await run('update_record', { form: 'AiBlade2', changes: { data: { value: 300 } } });
+    expect((again.data as any).changed).toEqual([`data.value: ${(value ?? 0) + 250} → 300`]);
+    const odd = await run('update_record', { form: 'AiBlade2', changes: { data: { sharpness: 3 } } });
+    expect((odd.data as any).note).toMatch(/had no data\.sharpness before/);
     // Other fields of the merged object are kept.
     expect(Object.keys((host.view(k2)!.data as any).data).length).toBeGreaterThan(1);
     expect((await run('delete_record', { form: 'AiBlade2' })).data).toMatch(/removed/);

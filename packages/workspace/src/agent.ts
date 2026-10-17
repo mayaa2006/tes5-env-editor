@@ -17,7 +17,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { BetaContentBlockParam, BetaMessageParam, BetaToolUnion } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import { z } from 'zod';
 import { WorkspaceError } from './engine';
-import { OLLAMA_URL, aiName, cleanJson, contextWindow, estimateTokens, ollamaContextLength, type AiProvider, type ChatProvider } from './aiproviders';
+import { OLLAMA_URL, aiName, cleanJson, contextWindow, estimateTokens, ollamaContextLength, readChat, streamFields, type AiProvider, type ChatProvider, type ChatResponse } from './aiproviders';
 import { PLANNER_MODEL, fillMissing } from './planner';
 
 export const AGENT_MODEL = PLANNER_MODEL;
@@ -356,7 +356,7 @@ export async function runAgentTurn(
           checked = true;
           const problems = await hooks.checkChanges().catch(() => [] as string[]);
           if (problems.length) {
-            session.messages.push({ role: 'user', text: `The editor's checks found these problems after your changes:\n${problems.map((p) => `- ${p}`).join('\n')}\nFix the ones your changes caused (leave the rest, but mention them), then sum up again.` });
+            session.messages.push({ role: 'user', text: `The editor's checks found these problems after your changes:\n${problems.map((p) => `- ${p}`).join('\n')}\nFix the ones your changes caused if fixing them is part of what the author asked for; otherwise don't change anything else: tell the author about them in your summary (for example, a new stage that nothing leads to yet). Then sum up again.` });
             continue;
           }
         }
@@ -558,7 +558,7 @@ export function claudeMessages(messages: AgentMessage[]): BetaMessageParam[] {
   return out;
 }
 
-type Fetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; json(): Promise<any>; text(): Promise<string> }>;
+type Fetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<ChatResponse>;
 
 /**
  * Ollama (its own API, so the context window can be sized) or an
@@ -584,10 +584,13 @@ export class ChatAgentModel implements AgentModel {
   }
 
   async reply(req: { system: string; messages: AgentMessage[]; tools: AgentTool[]; onText?: (d: string) => void; signal?: AbortSignal }): Promise<AgentReply> {
+    // Text is shown as it streams in; a service that answers all at once has it shown at the end.
+    let streamed = false;
+    const onText = req.onText ? (d: string) => ((streamed = true), req.onText!(d)) : undefined;
     if (!this.jsonTools) {
       try {
-        const r = await this.send(req, false);
-        if (r.text) req.onText?.(r.text);
+        const r = await this.send({ ...req, onText }, false);
+        if (r.text && !streamed) req.onText?.(r.text);
         return r;
       } catch (e) {
         // "does not support tools", "tool use is not supported"…: fall back to tools in words.
@@ -595,7 +598,8 @@ export class ChatAgentModel implements AgentModel {
         this.jsonTools = true;
       }
     }
-    const r = await this.send(req, true);
+    // In words, the answer is JSON: it's shown once read, not as it streams.
+    const r = await this.send({ ...req, onText: undefined }, true);
     if (r.text) req.onText?.(r.text);
     return r;
   }
@@ -620,7 +624,7 @@ export class ChatAgentModel implements AgentModel {
     return out;
   }
 
-  private async send(req: { system: string; messages: AgentMessage[]; tools: AgentTool[]; signal?: AbortSignal }, json: boolean): Promise<AgentReply> {
+  private async send(req: { system: string; messages: AgentMessage[]; tools: AgentTool[]; signal?: AbortSignal; onText?: (d: string) => void }, json: boolean): Promise<AgentReply> {
     const messages = this.messages(req, json);
     const tools = json ? undefined : req.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: toolSchema(t) } }));
     if (this.ai.kind === 'ollama') {
@@ -628,7 +632,7 @@ export class ChatAgentModel implements AgentModel {
       const promptTokens = estimateTokens(JSON.stringify(messages) + JSON.stringify(tools ?? []));
       const max = await ollamaContextLength(base, this.ai.model, this.fetch);
       if (max && promptTokens + 2000 > max) throw new WorkspaceError(`The conversation is too long for ${this.ai.model} (it reads about ${max.toLocaleString('en')} tokens). Start a new conversation, or pick a model that reads more.`);
-      const r = await this.call(`${base}/api/chat`, { model: this.ai.model, messages, stream: false, ...(tools ? { tools } : { format: 'json' }), options: { num_ctx: contextWindow(promptTokens, max), temperature: 0.2 } }, {}, req.signal);
+      const r = await this.call(`${base}/api/chat`, { model: this.ai.model, messages, stream: true, ...(tools ? { tools } : { format: 'json' }), options: { num_ctx: contextWindow(promptTokens, max), temperature: 0.2 } }, {}, req.signal, req.onText);
       const msg = r?.message ?? {};
       const usage = { input: Number(r?.prompt_eval_count ?? 0), output: Number(r?.eval_count ?? 0), cacheRead: 0, cacheWrite: 0 };
       if (json) return { ...this.fromJson(String(msg.content ?? ''), r?.done_reason === 'length'), usage };
@@ -639,7 +643,7 @@ export class ChatAgentModel implements AgentModel {
     }
     const url = `${this.ai.url.replace(/\/+$/, '')}/chat/completions`;
     const headers: Record<string, string> = this.ai.apiKey ? { authorization: `Bearer ${this.ai.apiKey}` } : {};
-    const r = await this.call(url, { model: this.ai.model, messages, temperature: 0.2, max_tokens: 8000, ...(tools ? { tools } : { response_format: { type: 'json_object' } }) }, headers, req.signal);
+    const r = await this.call(url, { model: this.ai.model, messages, temperature: 0.2, max_tokens: 8000, ...streamFields(this.ai.url), ...(tools ? { tools } : { response_format: { type: 'json_object' } }) }, headers, req.signal, req.onText);
     const choice = r?.choices?.[0] ?? {};
     const cut = choice.finish_reason === 'length';
     const usage = { input: Number(r?.usage?.prompt_tokens ?? 0), output: Number(r?.usage?.completion_tokens ?? 0), cacheRead: 0, cacheWrite: 0 };
@@ -664,7 +668,7 @@ export class ChatAgentModel implements AgentModel {
     return { text: typeof j.say === 'string' ? j.say : '', calls, stop: cut ? 'max_tokens' : calls.length ? 'tools' : 'end' };
   }
 
-  private async call(url: string, body: unknown, headers: Record<string, string>, signal?: AbortSignal): Promise<any> {
+  private async call(url: string, body: unknown, headers: Record<string, string>, signal?: AbortSignal, onText?: (d: string) => void): Promise<any> {
     let res;
     try {
       res = await this.fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body), signal });
@@ -681,7 +685,12 @@ export class ChatAgentModel implements AgentModel {
       (err as WorkspaceError & { status?: number }).status = res.status;
       throw err;
     }
-    return res.json();
+    try {
+      return await readChat(res, this.ai.kind === 'ollama' ? 'ollama' : 'openai', onText);
+    } catch (e) {
+      if (signal?.aborted) throw new AgentStopped();
+      throw e;
+    }
   }
 }
 

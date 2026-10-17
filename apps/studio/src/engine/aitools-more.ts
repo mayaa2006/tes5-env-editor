@@ -51,6 +51,20 @@ export function mergeChanges(data: Record<string, unknown>, changes: Record<stri
   return data;
 }
 
+/** The leaf fields a change sets, with their values before and after. */
+export function changedFields(before: Record<string, unknown>, changes: Record<string, unknown>, prefix = ''): { path: string; was: unknown; now: unknown }[] {
+  const out: { path: string; was: unknown; now: unknown }[] = [];
+  for (const [k, v] of Object.entries(changes)) {
+    const path = prefix ? `${prefix}.${k}` : k;
+    const was = before?.[k];
+    if (v && typeof v === 'object' && !Array.isArray(v) && was && typeof was === 'object' && !Array.isArray(was) && !(was instanceof Uint8Array)) out.push(...changedFields(was as Record<string, unknown>, v as Record<string, unknown>, path));
+    else out.push({ path, was, now: v });
+  }
+  return out;
+}
+
+const short = (v: unknown) => (v === undefined ? '(none)' : JSON.stringify(v).slice(0, 80));
+
 export function moreTools(host: EngineHost): AgentTool<any>[] {
   const ws = () => {
     if (!host.ws) throw new WorkspaceError('No game data is open');
@@ -157,12 +171,25 @@ export function moreTools(host: EngineHost): AgentTool<any>[] {
       writes: true,
       description:
         "Change fields of a record: 'changes' is merged into the record's data as read_record shows it (objects merge, lists and values are replaced; FormKeys as strings). Read the record first. Records from other plugins are overridden in the plugin being edited. Works for any record with a typed form.",
-      input: z.object({ form: Form, changes: z.record(z.string(), z.unknown()).describe('Fields to change, e.g. {"name": "Ebony Dagger of Fire", "data": {"value": 500}}') }),
+      input: z.object({ form: Form, changes: z.record(z.string(), z.unknown()).describe('Fields to change, with the names read_record shows. For a weapon, {"data": {"damage": 12}} sets its damage and {"data": {"value": 500}} its price; {"name": "Ebony Dagger of Fire"} renames it') }),
       summary: (i) => `Change ${i.form} (${Object.keys(i.changes).join(', ')})`,
       run: (i) => {
         const key = resolve(i.form);
+        const before = structuredClone(ws().view(key)?.data ?? {}) as Record<string, unknown>;
         const v = ws().editRecord(key, (d) => mergeChanges(d, structuredClone(i.changes)), `Edit ${label(key)}`);
-        return { data: { formKey: key, editorId: v.editorId, name: v.name, fields: v.data }, link: { tab: 'records', key, label: `${label(key)} in Records` } };
+        // What changed, field by field, so a wrong field name shows ("data.value: 30 → 12" when damage was meant).
+        const changed = changedFields(before, i.changes);
+        const added = changed.filter((c) => c.was === undefined).map((c) => c.path);
+        return {
+          data: {
+            formKey: key,
+            editorId: v.editorId,
+            name: v.name,
+            changed: changed.map((c) => `${c.path}: ${short(c.was)} → ${short(c.now)}`),
+            ...(added.length ? { note: `The record had no ${added.join(', ')} before, so ${added.length === 1 ? 'it was' : 'they were'} added. If that wasn't meant, check the field names with read_record.` } : {}),
+          },
+          link: { tab: 'records', key, label: `${label(key)} in Records` },
+        };
       },
     },
     {
