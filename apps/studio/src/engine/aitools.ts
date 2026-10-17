@@ -16,7 +16,7 @@ import { moreTools } from './aitools-more';
 import { worldTools } from './aitools-world';
 import { dialogueTools } from './aitools-dialogue';
 import { triggerTools } from './aitools-triggers';
-import { lookup, rank } from './aitools-lookup';
+import { MINOR_SIGS, lookup, rank } from './aitools-lookup';
 import { terrainTools } from './aitools-terrain';
 
 /** Common record types, so the AI can narrow a search by kind in plain words. */
@@ -155,14 +155,17 @@ export function aiTools(host: EngineHost, ctx?: QuestToolContext): AgentTool[] {
               },
             };
         }
-        // Nothing of the kind asked for is called that: what other kinds have the name ("mead" is a potion, not a misc item).
+        // Other kinds with the name ("mead" is a potion, not a misc item): models pick an item kind almost at random, so
+        // items of the other item kinds are shown unless one of the asked kind has exactly that name; for other kinds,
+        // only when nothing of the kind starts with it. Placed copies and dialogue parts aren't what's meant.
         const q = i.query.toLowerCase().trim();
         const named = (s: RecordSummary) => !!q && ((s.name ?? '').toLowerCase().includes(q) || (s.editorId ?? '').toLowerCase() === q);
+        const items = !!sigs?.every((s) => ITEM_SIGS.includes(s));
         const elsewhere =
-          sigs && words.length && !hits.some((s) => (s.name ?? '').toLowerCase() === q || (s.name ?? '').toLowerCase().startsWith(q))
+          sigs && words.length && !hits.some((s) => (s.name ?? '').toLowerCase() === q || (!items && (s.name ?? '').toLowerCase().startsWith(q)))
             ? ws()
                 .search({ query: words[0]!, limit: 5000 })
-                .items.filter((s) => !s.deleted && !sigs.includes(s.sig) && named(s) && words.every((w) => `${s.editorId ?? ''} ${s.name ?? ''}`.toLowerCase().includes(w)))
+                .items.filter((s) => !s.deleted && !sigs.includes(s.sig) && (!items || ITEM_SIGS.includes(s.sig)) && !MINOR_SIGS.has(s.sig) && named(s) && words.every((w) => `${s.editorId ?? ''} ${s.name ?? ''}`.toLowerCase().includes(w)))
                 .sort((a, b) => rank(b, i.query) - rank(a, i.query))
                 .slice(0, 5)
             : [];

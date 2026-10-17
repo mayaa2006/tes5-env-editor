@@ -10,7 +10,7 @@ import { WorkspaceError, type RecordSummary, type Workspace } from '@tes5/worksp
 
 /** Records people mean when they name something, before the placed copies and dialogue parts that share its name. */
 const MAIN_SIGS = new Set(['CELL', 'WRLD', 'LCTN', 'NPC_', 'QUST', 'WEAP', 'ARMO', 'MISC', 'BOOK', 'ALCH', 'INGR', 'KEYM', 'AMMO', 'CONT', 'DOOR', 'FURN', 'SPEL', 'PERK', 'FACT', 'RACE', 'CLAS', 'OTFT', 'SHOU', 'ENCH', 'MGEF', 'LVLI', 'LVLN']);
-const MINOR_SIGS = new Set(['REFR', 'ACHR', 'PGRE', 'PHZD', 'INFO', 'DIAL', 'PACK', 'SCEN', 'DLBR', 'DLVW', 'NAVM', 'LAND', 'IDLE']);
+export const MINOR_SIGS = new Set(['REFR', 'ACHR', 'PGRE', 'PHZD', 'INFO', 'DIAL', 'PACK', 'SCEN', 'DLBR', 'DLVW', 'NAVM', 'LAND', 'IDLE']);
 
 /** How well a record matches what was asked for: its exact name first, then the main records, then placed copies and dialogue parts. */
 export function rank(s: RecordSummary, query: string): number {
