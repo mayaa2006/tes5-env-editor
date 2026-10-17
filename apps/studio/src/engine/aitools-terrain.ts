@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { isFormKey, type FormKey } from '@tes5/esp';
 import { WorkspaceError, type AgentTool } from '@tes5/workspace';
 import type { EngineHost } from './host';
+import { formKeyOf } from './aitools-lookup';
 
 /** Game units along a side of an outdoor cell. */
 const CELL = 4096;
@@ -62,10 +63,7 @@ export function terrainTools(host: EngineHost): AgentTool<any>[] {
     if (!host.ws) throw new WorkspaceError('No game data is open');
     return host.ws;
   };
-  const key = (ref: string) => {
-    const r = ref.trim();
-    return (isFormKey(r) ? r : ws().byEditorId(r)) as FormKey | undefined;
-  };
+  const key = (ref: string) => formKeyOf(ws(), ref);
   const worldspace = (ref: string): FormKey => {
     const k = key(ref);
     if (!k || ws().summary(k)?.sig !== 'WRLD') throw new WorkspaceError(`There's no worldspace "${ref}". list_worldspaces shows them.`);

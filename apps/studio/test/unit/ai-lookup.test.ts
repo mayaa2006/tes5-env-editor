@@ -21,6 +21,10 @@ describe('finding the record an AI means', () => {
     expect(lookup(w, 'DemoTankard', { what: 'item' })).toBe(tankard);
     expect(lookup(w, 'tankard', { what: 'item' })).toBe(tankard);
     expect(lookup(w, '"Bottle of Mead"', { what: 'item' })).toBe(w.byEditorId('DemoBottle'));
+    // A bare form ID, without its plugin, when only one plugin has it.
+    const [hex] = tankard.split(':');
+    expect(lookup(w, hex!, { what: 'item' })).toBe(tankard);
+    expect(lookup(w, `0x00${hex}`, { what: 'item' })).toBe(tankard);
   });
 
   it('lists the closest records for a made-up Editor ID or a wrong type', async () => {

@@ -36,6 +36,25 @@ export function wordsOf(text: string): string[] {
     .filter((w) => w.length > 2 && !['the', 'and', 'for'].includes(w));
 }
 
+/**
+ * A FormKey for what was written: a FormKey, an Editor ID, or a bare form ID
+ * ("0095FE", "000095FE") that names one record among the loaded plugins.
+ */
+export function formKeyOf(ws: Workspace, ref: string): FormKey | undefined {
+  const r = ref.trim();
+  if (isFormKey(r)) return r as FormKey;
+  const byId = ws.byEditorId(r) as FormKey | undefined;
+  if (byId) return byId;
+  const hex = /^(?:0x)?([0-9a-f]{6,8})$/i.exec(r);
+  if (!hex) return undefined;
+  const id = hex[1]!.slice(-6).toUpperCase();
+  const found = ws
+    .loaded()
+    .map((p) => `${id}:${p.name}` as FormKey)
+    .filter((k) => ws.summary(k));
+  return found.length === 1 ? found[0] : undefined;
+}
+
 const line = (s: RecordSummary) => `${s.editorId ?? s.formKey}${s.name ? ` "${s.name}"` : ''} (${s.sig}${s.editorId ? `, ${s.formKey}` : ''})`;
 
 /**
@@ -49,7 +68,7 @@ export function lookup(ws: Workspace, ref: string, opts: { what: string; sigs?: 
     if (ok(r as FormKey)) return r as FormKey;
     if (!ws.summary(r as FormKey)) throw new WorkspaceError(`Nothing in the load order has the FormKey ${r}.`);
   }
-  const byId = ws.byEditorId(r) as FormKey | undefined;
+  const byId = formKeyOf(ws, r);
   if (ok(byId)) return byId!;
   const words = wordsOf(r);
   // The name shown in game, exactly (ignoring case).
