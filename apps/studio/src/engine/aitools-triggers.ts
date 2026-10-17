@@ -111,7 +111,7 @@ export function triggerTools(host: EngineHost): AgentTool<any>[] {
 
   const Trigger = {
     name: z.string().nullable().optional().describe('A short name, e.g. "Pull the lever"'),
-    when: z.enum(EVENT_KINDS).describe(TRIGGER_EVENTS.map((e) => `${e.kind}: ${e.label}${e.actorOnly ? ' (characters only)' : ''}`).join('; ')),
+    when: z.enum(EVENT_KINDS).describe(TRIGGER_EVENTS.map((e) => `${e.kind}: ${e.label} (${e.hint.replace(/\.$/, '')})${e.actorOnly ? ', characters only' : ''}`).join('; ')),
     onlyIf: z.array(Condition).nullable().optional().describe('All must be true'),
     then: z.array(Action).min(1).describe('Done in order'),
     once: z.boolean().nullable().optional().describe('Only the first time'),

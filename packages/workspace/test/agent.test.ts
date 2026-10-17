@@ -106,6 +106,15 @@ describe('the AI workspace loop', () => {
     expect(r.changes).toEqual(['Change to x']);
   });
 
+  it('ends a turn that keeps repeating the same calls', async () => {
+    const same = () => ({ text: '', calls: [call('look', { what: 'x' }, `c${Math.random()}`)], stop: 'tools' as const });
+    const model = scripted([same(), same(), same(), same(), same(), same(), same()], true);
+    const r = await runAgentTurn(model, newAgentSession(), { text: 'x' }, tools);
+    expect(r.error).toMatch(/kept repeating the same calls/);
+    // One look, three warnings, then the stop: not all ten rounds.
+    expect(model.seen.length).toBe(5);
+  });
+
   it('makes each change one labelled step, asks first when told to, and lists what changed', async () => {
     log.length = 0;
     const labels: string[] = [];

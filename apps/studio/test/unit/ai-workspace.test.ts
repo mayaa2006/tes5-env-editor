@@ -47,6 +47,12 @@ describe('the AI workspace tools on the demo data', () => {
     const some = (await run('search_records', { query: 'mead bottle flagon', kind: 'item' })).data as any;
     expect(some.note).toMatch(/Nothing has all the words/);
     expect(some.results[0].editorId).toBe('DemoBottle');
+    // place_contents takes kinds in words too; words that aren't kinds are explained.
+    const people = (await run('place_contents', { place: 'DemoTavern', kinds: ['characters'] })).data as any;
+    expect(Object.keys(people)).toContain('NPC_');
+    expect(Object.keys(people)).not.toContain('CONT');
+    const tables = (await run('place_contents', { place: 'DemoTavern', kinds: ['TABLE'] })).data as any;
+    expect(tables.note).toMatch(/"TABLE" isn't a kind of record.*place_object puts items on them/);
     const rec = await run('read_record', { form: 'DemoInnkeeper' });
     expect((rec.data as any).editorId).toBe('DemoInnkeeper');
     expect(rec.link).toMatchObject({ tab: 'records' });

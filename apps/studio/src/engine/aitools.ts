@@ -244,11 +244,16 @@ export function aiTools(host: EngineHost, ctx?: QuestToolContext): AgentTool[] {
       group: 'read',
       writes: false,
       description: "What is placed in a cell: characters, doors (and where they lead), containers, furniture, lights and other objects, grouped by kind, with each object's reference FormKey.",
-      input: z.object({ place: Form, kinds: z.array(z.string()).nullable().optional().describe('Only these base record types, e.g. ["NPC_", "DOOR", "CONT"]') }),
+      input: z.object({ place: Form, kinds: z.array(z.string()).nullable().optional().describe('Only these kinds, in words or record types, e.g. ["character", "door", "container"] or ["NPC_", "DOOR", "CONT"]. To put items on tables, use place_object with where: "table" instead.') }),
       summary: (i) => `Look inside ${i.place}`,
       run: (i) => {
         const key = resolve(i.place, ['CELL']);
-        const refs = host.references(key).filter((r) => !r.deleted && (!i.kinds?.length || (r.baseSig && i.kinds.includes(r.baseSig))));
+        // Kinds in words like search_records; words it doesn't know ("table") are left out rather than matching nothing.
+        const asked = (i.kinds ?? []).map((k: string) => ({ k, sigs: kindSigs(k) }));
+        const unknown = asked.filter((a: { sigs?: string[] }) => !a.sigs).map((a: { k: string }) => a.k);
+        const sigs = new Set(asked.flatMap((a: { sigs?: string[] }) => a.sigs ?? []));
+        const all = host.references(key).filter((r) => !r.deleted);
+        const refs = sigs.size ? all.filter((r) => r.baseSig && sigs.has(r.baseSig)) : all;
         const byKind = new Map<string, unknown[]>();
         for (const r of refs) {
           const k = r.baseSig ?? r.sig;
@@ -256,7 +261,12 @@ export function aiTools(host: EngineHost, ctx?: QuestToolContext): AgentTool[] {
           byKind.get(k)!.push({ ref: r.formKey, base: r.baseEditorId ?? r.base, name: r.baseName, ...(r.teleport ? { leadsTo: label(r.teleport) } : {}), ...(r.disabled ? { disabled: true } : {}) });
         }
         // Statics are many and rarely matter: counted, not listed.
-        const data: Record<string, unknown> = { place: label(key), total: refs.length };
+        const data: Record<string, unknown> = {
+          place: label(key),
+          total: refs.length,
+          ...(unknown.length ? { note: `${unknown.map((k: string) => `"${k}"`).join(', ')} isn't a kind of record, so ${sigs.size ? 'it was left out' : 'everything is listed'}. Tables and shelves are part of the room: place_object puts items on them.` } : {}),
+          ...(!refs.length && sigs.size ? { note: `Nothing of those kinds is placed here (${all.length} objects of other kinds are).` } : {}),
+        };
         for (const [k, list] of byKind) data[k] = k === 'STAT' || k === 'MSTT' ? `${list.length} pieces` : list.slice(0, 60);
         return { data, link: { tab: 'scene', key, label: `${label(key)} in World` } };
       },

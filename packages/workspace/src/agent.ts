@@ -331,6 +331,9 @@ export async function runAgentTurn(
   const failed = new Map<string, string>();
   /** Reading calls already answered this turn: small models also repeat those instead of moving on. */
   const read = new Set<string>();
+  /** Calls not run because they repeated one: a model that keeps doing it is stuck, and the turn ends. */
+  let repeats = 0;
+  let stuck = false;
   let text = '';
   const system = `${AGENT_RULES}`;
   try {
@@ -375,6 +378,11 @@ export async function runAgentTurn(
         }
         const sig = `${call.name} ${JSON.stringify(call.input ?? {})}`;
         const before = failed.get(sig);
+        if ((before !== undefined || read.has(sig)) && ++repeats > 3) {
+          out.push(skipped(call, tool, 'Not run: the turn ended because the same calls kept being repeated.'));
+          stuck = true;
+          continue;
+        }
         if (before !== undefined) {
           out.push(skipped(call, tool, `Not run: you already made exactly this call this turn and it failed:\n${clip(before, 600)}\nDon't repeat it. Change the input, use another tool, or tell the author what's wrong.`));
           continue;
@@ -396,6 +404,10 @@ export async function runAgentTurn(
       session.messages.push({ role: 'tool', results: out });
       session.updated = Date.now();
       if (hooks.signal?.aborted) throw new AgentStopped();
+      if (stuck) {
+        const msg = `${model.name} kept repeating the same calls, so the turn was stopped. Try asking again in other words, or one step at a time.`;
+        return { text: text || msg, changes, results, error: msg, usage };
+      }
     }
     const msg = `Stopped after ${maxRounds} rounds of tool calls. Ask the AI to go on if there's more to do.`;
     return { text: text || msg, changes, results, error: msg, usage };
