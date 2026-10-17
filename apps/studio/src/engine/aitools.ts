@@ -155,7 +155,26 @@ export function aiTools(host: EngineHost, ctx?: QuestToolContext): AgentTool[] {
               },
             };
         }
-        return { data: { ...(note ? { note } : {}), total: hits.length, results: hits.slice(0, limit).map(line), ...(hits.length > limit ? { more: `${hits.length - limit} more; narrow the search` } : {}) } };
+        // Nothing of the kind asked for is called that: what other kinds have the name ("mead" is a potion, not a misc item).
+        const q = i.query.toLowerCase().trim();
+        const named = (s: RecordSummary) => !!q && ((s.name ?? '').toLowerCase().includes(q) || (s.editorId ?? '').toLowerCase() === q);
+        const elsewhere =
+          sigs && words.length && !hits.some((s) => (s.name ?? '').toLowerCase() === q || (s.name ?? '').toLowerCase().startsWith(q))
+            ? ws()
+                .search({ query: words[0]!, limit: 5000 })
+                .items.filter((s) => !s.deleted && !sigs.includes(s.sig) && named(s) && words.every((w) => `${s.editorId ?? ''} ${s.name ?? ''}`.toLowerCase().includes(w)))
+                .sort((a, b) => rank(b, i.query) - rank(a, i.query))
+                .slice(0, 5)
+            : [];
+        return {
+          data: {
+            ...(note ? { note } : {}),
+            total: hits.length,
+            results: hits.slice(0, limit).map(line),
+            ...(hits.length > limit ? { more: `${hits.length - limit} more; narrow the search` } : {}),
+            ...(elsewhere.length ? { alsoOtherKinds: elsewhere.map(line), otherKindsNote: `Records of other kinds are also called "${i.query}"; one of these may be what's meant.` } : {}),
+          },
+        };
       },
     },
     {

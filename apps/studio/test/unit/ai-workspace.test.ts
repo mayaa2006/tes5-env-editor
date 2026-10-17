@@ -1,3 +1,4 @@
+import type { FormKey } from '@tes5/esp';
 import { describe, expect, it } from 'vitest';
 import { MemoryFileSystem, createDemoData, type AgentModel, type AgentReply } from '@tes5/workspace';
 import { DEMO_GAME_DIR } from '../../src/engine/constants';
@@ -43,6 +44,13 @@ describe('the AI workspace tools on the demo data', () => {
     expect(none.total).toBe(0);
     expect(none.note).toMatch(/place_contents/);
     expect(none.otherKinds[0].editorId).toBe('DemoTavern');
+    // The kind asked for has only near misses ("Bottle of Mead" as a misc item): records of other kinds with the name are offered too.
+    host.createPlugin('Extra.esp', {});
+    const potion = host.createBlankRecord('ALCH', 'TestMeadPotion') as FormKey;
+    host.ws!.editRecord(potion, (d: any) => void (d.name = 'Mead'), 'Name it');
+    const near = (await run('search_records', { query: 'mead', kind: 'misc' })).data as any;
+    expect(near.results.map((r: any) => r.editorId)).toEqual(['DemoBottle']);
+    expect(near.alsoOtherKinds.map((r: any) => r.editorId)).toContain('TestMeadPotion');
     // No record has every word: the ones with most of them.
     const some = (await run('search_records', { query: 'mead bottle flagon', kind: 'item' })).data as any;
     expect(some.note).toMatch(/Nothing has all the words/);

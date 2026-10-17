@@ -376,7 +376,8 @@ export async function runAgentTurn(
           out.push(skipped(call, tool, `Not run: this turn has used its ${maxCalls} tool calls. Tell the author what is done and what is left, and they can ask you to go on.`));
           continue;
         }
-        const sig = `${call.name} ${JSON.stringify(call.input ?? {})}`;
+        // Reading the same thing in other capitals ("Mead", "mead") is the same look.
+        const sig = `${call.name} ${tool && !tool.writes ? JSON.stringify(call.input ?? {}).toLowerCase() : JSON.stringify(call.input ?? {})}`;
         const before = failed.get(sig);
         if ((before !== undefined || read.has(sig)) && ++repeats > 3) {
           out.push(skipped(call, tool, 'Not run: the turn ended because the same calls kept being repeated.'));
