@@ -220,6 +220,7 @@ export function terrainTools(host: EngineHost): AgentTool<any>[] {
       name: 'shape_ground',
       group: 'world',
       writes: true,
+      adds: true,
       description:
         'Shape the ground of an outdoor cell: a hill (raise), a hollow (lower), a flat spot (flatten, to a height or the height there), or smooth out bumps. One spot makes a round shape; several points make a ridge, a valley or a flat road through them. The ground of neighbouring cells follows where it reaches them. Placed objects are not moved: drop_to_floor them afterwards.',
       input: z.object({

@@ -38,6 +38,8 @@ export interface AgentTool<I = any> {
   group: AgentToolGroup;
   /** True when it changes the plugin (or files next to it). */
   writes: boolean;
+  /** True when the same call again does more (places another copy, moves further), so a repeat isn't refused. */
+  adds?: boolean;
   input: z.ZodType<I>;
   /** What the call does, in a few plain words ("Add stage 20 to MyQuest"). */
   summary(input: I): string;
@@ -331,6 +333,8 @@ export async function runAgentTurn(
   const failed = new Map<string, string>();
   /** Reading calls already answered this turn: small models also repeat those instead of moving on. */
   const read = new Set<string>();
+  /** Changes already made this turn: making the same one again does nothing. */
+  const wrote = new Set<string>();
   /** Calls not run because they repeated one: a model that keeps doing it is stuck, and the turn ends. */
   let repeats = 0;
   let stuck = false;
@@ -379,13 +383,17 @@ export async function runAgentTurn(
         // Reading the same thing in other capitals ("Mead", "mead") is the same look.
         const sig = `${call.name} ${tool && !tool.writes ? JSON.stringify(call.input ?? {}).toLowerCase() : JSON.stringify(call.input ?? {})}`;
         const before = failed.get(sig);
-        if ((before !== undefined || read.has(sig)) && ++repeats > 3) {
+        if ((before !== undefined || read.has(sig) || (wrote.has(sig) && !tool?.adds)) && ++repeats > 3) {
           out.push(skipped(call, tool, 'Not run: the turn ended because the same calls kept being repeated.'));
           stuck = true;
           continue;
         }
         if (before !== undefined) {
           out.push(skipped(call, tool, `Not run: you already made exactly this call this turn and it failed:\n${clip(before, 600)}\nDon't repeat it. Change the input, use another tool, or tell the author what's wrong.`));
+          continue;
+        }
+        if (wrote.has(sig) && !tool?.adds) {
+          out.push({ id: call.id, name: call.name, content: 'Not run again: this exact change was already made this turn. Go on to the next step, or tell the author what was done.', isError: true, summary: safeSummary(tool, call.input), writes: true, status: 'error' });
           continue;
         }
         if (read.has(sig)) {
@@ -396,7 +404,10 @@ export async function runAgentTurn(
         if (r.status === 'error') failed.set(sig, r.content);
         else if (tool && !tool.writes) read.add(sig);
         // After a change, looking again is worth it.
-        else if (tool?.writes) read.clear();
+        else if (tool?.writes) {
+          read.clear();
+          wrote.add(sig);
+        }
         out.push(r);
         results.push(r);
         if (r.writes && r.status === 'done') changes.push(r.summary);

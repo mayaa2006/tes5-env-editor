@@ -95,6 +95,7 @@ export function worldTools(host: EngineHost): AgentTool<any>[] {
       name: 'place_object',
       group: 'world',
       writes: true,
+      adds: true,
       description:
         "Place objects in a cell: an item (on a table, a shelf, or by what 'where' names), or furniture, a container, a light, a static or a character (on open floor, or next to what 'where' names, e.g. \"by the fire\", \"behind the bar\"). They're dropped onto the surface below.",
       input: z.object({ place: Place, object: z.string().describe('Editor ID or FormKey of the base object to place (search_records)'), where: z.string().nullable().optional().describe('Next to or on what, in words'), count: z.number().int().min(1).max(20).nullable().optional() }),
@@ -127,6 +128,7 @@ export function worldTools(host: EngineHost): AgentTool<any>[] {
       name: 'move_objects',
       group: 'world',
       writes: true,
+      adds: true,
       description: 'Move and/or turn placed objects: by an offset in game units (about 70 units = 1 m; z is up) and a turn in degrees, then drop them onto the surface below unless told not to.',
       input: z.object({ refs: Refs, offset: z.object({ x: z.number(), y: z.number(), z: z.number() }).nullable().optional(), turnDegrees: z.number().nullable().optional(), drop: z.boolean().nullable().optional() }),
       summary: (i) => `Move ${i.refs.length} object${i.refs.length === 1 ? '' : 's'}`,
@@ -155,6 +157,7 @@ export function worldTools(host: EngineHost): AgentTool<any>[] {
       name: 'dress_room',
       group: 'world',
       writes: true,
+      adds: true,
       description: `Fill a room with clutter that fits its use, on its tables and along its floors: ${Object.entries(CLUTTER_THEMES)
         .map(([id, t]) => `${id} (${t.label})`)
         .join(', ')}.`,

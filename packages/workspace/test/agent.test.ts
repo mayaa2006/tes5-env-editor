@@ -106,6 +106,24 @@ describe('the AI workspace loop', () => {
     expect(r.changes).toEqual(['Change to x']);
   });
 
+  it("doesn't make the same change twice in a turn", async () => {
+    log.length = 0;
+    const model = scripted([
+      { text: '', calls: [call('change', { to: 'x' }, 'a')], stop: 'tools' },
+      { text: '', calls: [call('change', { to: 'x' }, 'b'), call('change', { to: 'y' }, 'c')], stop: 'tools' },
+    ]);
+    const s = newAgentSession();
+    await runAgentTurn(model, s, { text: 'x' }, tools);
+    expect(log).toEqual(['change x', 'change y']);
+    expect((s.messages[4] as any).results[0].content).toMatch(/already made this turn/);
+    // A tool where the same call does more (placing another copy) can repeat.
+    log.length = 0;
+    const place: AgentTool = { ...tools[1]!, name: 'place', adds: true };
+    const twice = scripted([{ text: '', calls: [call('place', { to: 'x' }, 'a')], stop: 'tools' }, { text: '', calls: [call('place', { to: 'x' }, 'b')], stop: 'tools' }]);
+    await runAgentTurn(twice, newAgentSession(), { text: 'x' }, [place]);
+    expect(log).toEqual(['change x', 'change x']);
+  });
+
   it('ends a turn that keeps repeating the same calls', async () => {
     const same = () => ({ text: '', calls: [call('look', { what: 'x' }, `c${Math.random()}`)], stop: 'tools' as const });
     const model = scripted([same(), same(), same(), same(), same(), same(), same()], true);
