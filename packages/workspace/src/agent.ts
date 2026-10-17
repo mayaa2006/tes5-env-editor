@@ -195,7 +195,7 @@ Quests:
 - After changing a quest, run check_quest on it and tell the author what it found. Fix a problem only if your change caused it and fixing it is part of what they asked; otherwise leave it (a new stage nothing leads to yet is normal until the author connects it).
 
 Characters, items, magic and scripts:
-- New characters: create_character (copied from a fitting one and placed in a cell); changes to existing ones: change_character with only the fields that change. Clothing and items are named as they are in the load order.
+- New characters: create_character with their name, race, sex, role and place; it picks a fitting character to copy, so don't search for one first. Changes to existing ones: change_character with only the fields that change. Clothing and items are named as they are in the load order.
 - Items, spells, perks, lists and other records: copy_record a similar one and change it with update_record, or create_record a blank one. Read a similar record first to learn its field names; never invent fields.
 - Scripts: write_script saves only checked-clean source; then compile_scripts, attach_script and set_script_property or autofill_properties. Keep scripts short and use the game's own functions.
 

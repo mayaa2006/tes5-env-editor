@@ -101,7 +101,7 @@ export function moreTools(host: EngineHost): AgentTool<any>[] {
       group: 'characters',
       writes: true,
       description:
-        "Create a new character, copied from a fitting existing one (or basedOn), and place them in a cell. Describe what you know: look (hair, beard, eyes, scars, build), outfit (existing clothing by name), inventory, factions, class, level, routine (sandbox/sleep/eat/stay/travel with hours), combat (hostile, skills, spells, perks, style), roles (follower, marriage, merchant, trainer, innkeeper) and relationships. For characters in a quest, plan_quest does this as part of the quest.",
+        "Create a new character, copied from a fitting existing one, and place them in a cell. The one to copy is picked from the race, sex and role you give: there's no need to search for one first (basedOn names one if the author asked). Describe what you know: look (hair, beard, eyes, scars, build), outfit (existing clothing by name), inventory, factions, class, level, routine (sandbox/sleep/eat/stay/travel with hours), combat (hostile, skills, spells, perks, style), roles (follower, marriage, merchant, trainer, innkeeper) and relationships. For characters in a quest, plan_quest does this as part of the quest.",
       input: CharacterFields.extend({ name: z.string().describe('Name shown in game'), place: z.string().nullable().optional().describe('Editor ID of the cell they stand in (an interior from list_places); null to make them without placing them') }),
       summary: (i) => `Create the character ${i.name}`,
       run: async (i) => {
