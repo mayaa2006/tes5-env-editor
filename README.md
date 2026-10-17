@@ -229,7 +229,27 @@ The **AI** tab is a conversation with an AI that works through the editor itself
 - **Conversations are kept** in a list on the left (saved in `TES5EnvEditor/ai-conversations.json` next to your plugins) and can be deleted. **Stop** ends the AI's turn at once.
 - **Claude** works through Anthropic's tool use. **Free AIs** use their own function calling (the built-in AI, Ollama, and services with the OpenAI-style API). A model that can't call tools is given them in words and answers in a small JSON format instead; a call written out as text is still taken. Small models get fewer tool calls per turn and shorter results.
 - **Free AIs see the tools for what you ask.** All the tools' descriptions come to about 20,000 tokens, which is slow to read on a PC without a strong graphics card and too much choice for a small model. So a free AI is shown the few tools it always needs plus the ones for what your message, what you have open and the conversation so far are about (quests, characters, items, scripts, places, triggers, outdoors, checks, projects), about a third of the total; it can ask for any other group. Claude always sees everything.
-- **Forgiving with small models.** Things can be named by in-game name as well as Editor ID or FormKey ("Iron War Axe", "Nord Mead"); a name that doesn't exist gets the closest matches back, so the next try uses a real one. A search for a kind in everyday words ("cell", "npc", "item") works, and a search that finds nothing shows what does match. A chest or character named where a placed one is needed means its placed copy. A dialogue line can be named by its words. A call that already failed, or a look already taken, isn't repeated; the AI is told to use what it has.
+- **Forgiving with small models.** Things can be named by in-game name as well as Editor ID or FormKey ("Iron War Axe", "Nord Mead"); a name that doesn't exist gets the closest matches back, so the next try uses a real one. A search for a kind in everyday words ("cell", "npc", "item") works, and a search that finds nothing shows what does match. A chest or character named where a placed one is needed means its placed copy. A dialogue line can be named by its words. A call that already failed, a look already taken, or a change already made isn't repeated (placing and moving things can be); the AI is told to use what it has, and a turn that keeps repeating itself is stopped.
+
+#### Free AI on your PC
+
+**Settings → AI → Free on this PC → Built in** lists five small open models. Press **Download** on one and it's ready: the app fetches the model from Hugging Face and the program that runs it ([llama.cpp](https://github.com/ggml-org/llama.cpp)) from GitHub, checks the download, and starts it when the AI is first needed. Nothing you write leaves your PC, and it works offline once downloaded. The settings say whether it's running on your graphics card or the processor; **Stop** frees its memory.
+
+Each model was tried on nine real jobs in the AI tab, against Skyrim Special Edition's own data (Skyrim.esm, Update.esm, the three DLCs and their BSAs), on a 4-core processor with no graphics card, which is about as slow as it gets:
+
+| Model | Download | Memory it needs | Jobs done right | Time per job |
+| --- | --- | --- | --- | --- |
+| **Qwen3.5 4B** (recommended) | 2.7 GB | about 6.5 GB | 7 of 9 | about 3 min |
+| Qwen3.5 2B | 1.3 GB | about 3 GB | 6 of 9 | about 2 min |
+| Ministral 3 3B | 2.1 GB | about 7.5 GB | 6 of 9 | about 3 min |
+| Gemma 4 E2B | 2.8 GB | about 4.5 GB | 5 of 9 | about 1 min |
+| LFM2.5 1.2B | 731 MB | about 2 GB | 3 of 9 | under 1 min |
+
+The jobs: say who works at the Bannered Mare and give its cell's Editor ID; add a stage with a journal entry to a quest; make a new war axe from the Iron War Axe with 12 damage; put two bottles of mead on a table in the Bannered Mare; show a message when Hulda's merchant chest is opened; make a quest's lines grumpier without adding any; make a small quest with two stages and an objective; make a new character (Ingrid, a Redguard blacksmith) standing in the inn; raise a hill about 5 metres high in an outdoor cell. Each job ran once per model with a 10-minute limit, and a job counts only if the plugin ended up right, so scores move a little from run to run.
+
+Tried and left out: Qwen3.5 0.8B (3 of 9, and its changes were often wrong), LFM2.5 2.6B (most jobs ran out of time), Phi-4-mini and SmolLM3 (they answered in words and never used the tools), and Granite 4.2 3B (it did the jobs it finished, but at about a word a second; one job took 11 minutes).
+
+With a graphics card (any make: llama.cpp uses Vulkan) the models run several times faster; that hasn't been measured here. For quests and bigger jobs, a free online AI (**Free online**: Gemini, or NVIDIA's free API with large open models) is quicker and makes fewer mistakes, and Claude is best. To try a model yourself, run `SKYRIM_DATA=<your Data folder> npx tsx apps/studio/test/models/model-trial.ts <server address> <model>` against any OpenAI-style server.
 
 ### Your mod: records, cleaning and release
 

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { zipSync, strToU8 } from 'fflate';
 import { LocalAi, deviceOf } from '../src/node';
-import type { LocalAiStatus, LocalModel } from '../src';
+import { LOCAL_MODELS, type LocalAiStatus, type LocalModel } from '../src';
 
 /** A stand-in for llama-server: says what it runs on, then answers /health (or fails like a server out of memory). */
 const FAKE_SERVER = `#!/usr/bin/env node
@@ -115,5 +115,18 @@ describe('the built-in AI', () => {
     expect(deviceOf(['ggml_vulkan: 0 = NVIDIA GeForce RTX 3060 (NVIDIA) | uma: 0 | fp16: 1', 'load_tensors: offloaded 29/29 layers to GPU'])).toBe('NVIDIA GeForce RTX 3060');
     expect(deviceOf(['load_tensors: offloaded 0/29 layers to GPU'])).toBe('processor');
     expect(deviceOf([])).toBe('processor');
+  });
+
+  it('lists models that can be downloaded and checked, with one recommended', () => {
+    expect(LOCAL_MODELS.length).toBeGreaterThan(1);
+    expect(LOCAL_MODELS.filter((m) => m.recommended)).toHaveLength(1);
+    expect(new Set(LOCAL_MODELS.map((m) => m.id)).size).toBe(LOCAL_MODELS.length);
+    for (const m of LOCAL_MODELS) {
+      expect(m.sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(m.file).toMatch(/\.gguf$/);
+      expect(m.size).toBeGreaterThan(1e8);
+      expect(m.memoryGb * 1e9).toBeGreaterThan(m.size);
+      expect(m.about).not.toMatch(/PROVISIONAL/);
+    }
   });
 });

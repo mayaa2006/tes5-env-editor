@@ -38,6 +38,16 @@ export interface LocalModel {
   recommended?: boolean;
 }
 
+/**
+ * Best first. Scores are from one run of nine jobs on Skyrim SE's data (looking
+ * things up, adding a quest stage, a new item, placing an object, a trigger, a
+ * dialogue line, a new quest, a character, raising a hill) on a 4-core
+ * processor with no graphics card; times are per job there. Memory is what the
+ * server used with a 32k context. Tried and left out: Qwen3.5 0.8B (3/9, its
+ * changes were often wrong), LFM2.5 2.6B (most jobs ran out of time),
+ * Phi-4-mini and SmolLM3 (they never used the tools), Granite 4.2 3B (about a
+ * word a second on a processor).
+ */
 export const LOCAL_MODELS: LocalModel[] = [
   {
     id: 'qwen3.5-4b',
@@ -47,8 +57,8 @@ export const LOCAL_MODELS: LocalModel[] = [
     size: 2740937888,
     sha256: '00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4',
     context: 32768,
-    memoryGb: 5,
-    about: 'PROVISIONAL',
+    memoryGb: 6.5,
+    about: 'Did best in our tests on Skyrim\'s data (7 of 9 jobs right). About 3 minutes a job on a processor; a graphics card should be several times quicker.',
     license: 'Apache-2.0',
     recommended: true,
   },
@@ -61,8 +71,44 @@ export const LOCAL_MODELS: LocalModel[] = [
     sha256: 'aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223',
     context: 32768,
     memoryGb: 3,
-    about: 'PROVISIONAL',
+    about: 'Half the size, quicker (about 2 minutes a job) and almost as good (6 of 9 jobs). The one to pick on a PC with 8 GB of memory.',
     license: 'Apache-2.0',
+  },
+  {
+    id: 'ministral-3-3b',
+    label: 'Ministral 3 3B',
+    repo: 'mistralai/Ministral-3-3B-Instruct-2512-GGUF',
+    file: 'Ministral-3-3B-Instruct-2512-Q4_K_M.gguf',
+    size: 2147023008,
+    sha256: '9ed150d4367e68df0ac8e1540f6ddc65b42d0ee26378329d1ecbca60f93fc5f8',
+    context: 32768,
+    memoryGb: 7.5,
+    about: 'From Mistral. As good as Qwen3.5 2B (6 of 9 jobs) but slower, and it needs the most memory of these.',
+    license: 'Apache-2.0',
+  },
+  {
+    id: 'gemma-4-e2b',
+    label: 'Gemma 4 E2B',
+    repo: 'ggml-org/gemma-4-E2B-it-GGUF',
+    file: 'gemma-4-E2B-it-Q4_0.gguf',
+    size: 2841481184,
+    sha256: '8e30dff3ac4c8434c49a7036fa15564bdbb6044e42bf04550bf1a096ad7e6a52',
+    context: 32768,
+    memoryGb: 4.5,
+    about: 'From Google. Quick (about a minute a job) and fine for single changes, but it often stops before a bigger job is finished (5 of 9 jobs).',
+    license: 'Apache-2.0',
+  },
+  {
+    id: 'lfm2.5-1.2b',
+    label: 'LFM2.5 1.2B',
+    repo: 'LiquidAI/LFM2.5-1.2B-Instruct-GGUF',
+    file: 'LFM2.5-1.2B-Instruct-Q4_K_M.gguf',
+    size: 730895168,
+    sha256: 'b1b3de114215d9507409a662a501a631095a479a419584e8a2ded6304b19b4f5',
+    context: 32768,
+    memoryGb: 2,
+    about: 'The smallest and quickest, for older PCs. Manages single changes such as a quest stage or a copied item, but got most jobs wrong (3 of 9).',
+    license: 'LFM Open License v1.0 (free unless your company makes over $10M a year)',
   },
 ];
 
