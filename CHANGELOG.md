@@ -2,6 +2,12 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.34.1
+
+- **Free AIs find the right thing to place.** A search for one kind of item ("mead" as a misc item) also lists items of the other kinds with that name. In Skyrim, Nord Mead is food and drink, and it was never mentioned before. Dialogue topics are no longer offered as "other kinds". Looking for a table, shelf or counter to put something on now gets told that placing an item finds one by itself. Re-run on Skyrim's data, Qwen3.5 4B put two Nord Meads on a table in the Bannered Mare in three steps (it had missed that job in all five earlier runs); Qwen3.5 2B still struggles with it.
+- **Quest plans with the built-in AI, tried.** Qwen3.5 4B planned a short quest from writing on Skyrim's data with no errors, using Hulda and Mikael from the game. It took about 22 minutes on a processor without a graphics card. The README says so.
+- **Fixed:** opening the bigger text box for a dialogue line again straight after saving it could show the old text, and closing it then could put the old text back. This was most likely in the desktop app, where saving takes a moment longer.
+
 ## 0.34.0
 
 - **A free AI that runs on your PC, in one click.** Settings → AI → Free on this PC → Built in: pick a model and press Download. The app downloads it and the program that runs it (llama.cpp), checks the download, and starts it when the AI is first needed. Nothing else to install, no account, and it works offline afterwards. It runs on your graphics card if you have one (NVIDIA, AMD or Intel), otherwise on the processor. Downloads carry on where they stopped if interrupted. Ollama still works too.

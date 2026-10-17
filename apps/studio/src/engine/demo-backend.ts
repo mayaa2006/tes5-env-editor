@@ -20,6 +20,9 @@ export async function createDemoBridge(): Promise<HostBridge> {
   return {
     async invoke(method, args) {
       try {
+        // Browser tests can make the engine answer late, as it does from the desktop app's engine worker.
+        const lag = (globalThis as { __tes5TestEngineDelayMs?: number }).__tes5TestEngineDelayMs;
+        if (lag) await new Promise((r) => setTimeout(r, lag));
         const fn = (host as unknown as Record<string, (...a: unknown[]) => unknown>)[method];
         if (typeof fn !== 'function' || method.startsWith('_')) throw new Error(`Unknown engine method ${method}`);
         // Clone like Electron IPC would, so the UI never shares mutable state with the engine.

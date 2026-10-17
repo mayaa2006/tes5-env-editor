@@ -97,7 +97,7 @@ export function worldTools(host: EngineHost): AgentTool<any>[] {
       writes: true,
       adds: true,
       description:
-        "Place objects in a cell: an item (on a table, a shelf, or by what 'where' names), or furniture, a container, a light, a static or a character (on open floor, or next to what 'where' names, e.g. \"by the fire\", \"behind the bar\"). They're dropped onto the surface below.",
+        "Place objects in a cell. An item goes on a table or shelf in the cell by itself, so there's no need to find the table first ('where' can name one in words, e.g. \"on the bar\"); furniture, a container, a light, a static or a character goes on open floor, or next to what 'where' names (\"by the fire\", \"behind the bar\"). They're dropped onto the surface below.",
       input: z.object({ place: Place, object: z.string().describe('Editor ID or FormKey of the base object to place (search_records)'), where: z.string().nullable().optional().describe('Next to or on what, in words'), count: z.number().int().min(1).max(20).nullable().optional() }),
       summary: (i) => `Place ${i.count && i.count > 1 ? `${i.count} × ` : ''}${i.object} in ${i.place}`,
       run: async (i) => {

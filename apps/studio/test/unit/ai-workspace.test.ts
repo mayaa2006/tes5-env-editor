@@ -51,6 +51,21 @@ describe('the AI workspace tools on the demo data', () => {
     const near = (await run('search_records', { query: 'mead', kind: 'misc' })).data as any;
     expect(near.results.map((r: any) => r.editorId)).toEqual(['DemoBottle']);
     expect(near.alsoOtherKinds.map((r: any) => r.editorId)).toContain('TestMeadPotion');
+    // Even when a misc item's name starts with the word ("Mead Barrel"), items of other kinds are offered; dialogue isn't.
+    const barrel = host.createBlankRecord('MISC', 'TestMeadBarrel') as FormKey;
+    host.ws!.editRecord(barrel, (d: any) => void (d.name = 'Mead Barrel'), 'Name it');
+    const dial = host.ws!.search({ sigs: ['DIAL'], query: '', limit: 1 }).items[0]!;
+    const topic = host.duplicateRecord(dial.formKey, 'TestMeadTopic') as FormKey;
+    host.ws!.editRecord(topic, (d: any) => void (d.name = 'Any mead left?'), 'Name it');
+    expect(host.ws!.summary(topic)?.name).toBe('Any mead left?');
+    const items = (await run('search_records', { query: 'mead', kind: 'misc' })).data as any;
+    expect(items.results.map((r: any) => r.editorId)).toContain('TestMeadBarrel');
+    expect(items.alsoOtherKinds.map((r: any) => r.editorId)).toEqual(['TestMeadPotion']);
+    const chest = host.createBlankRecord('CONT', 'TestOldMeadChest') as FormKey;
+    host.ws!.editRecord(chest, (d: any) => void (d.name = 'Old Mead Chest'), 'Name it');
+    const chests = (await run('search_records', { query: 'mead', kind: 'container' })).data as any;
+    expect(chests.alsoOtherKinds.map((r: any) => r.editorId)).toEqual(expect.arrayContaining(['TestMeadPotion', 'TestMeadBarrel']));
+    expect(JSON.stringify(chests)).not.toContain('TestMeadTopic');
     // No record has every word: the ones with most of them.
     const some = (await run('search_records', { query: 'mead bottle flagon', kind: 'item' })).data as any;
     expect(some.note).toMatch(/Nothing has all the words/);
@@ -60,7 +75,11 @@ describe('the AI workspace tools on the demo data', () => {
     expect(Object.keys(people)).toContain('NPC_');
     expect(Object.keys(people)).not.toContain('CONT');
     const tables = (await run('place_contents', { place: 'DemoTavern', kinds: ['TABLE'] })).data as any;
-    expect(tables.note).toMatch(/"TABLE" isn't a kind of record.*place_object puts items on them/);
+    expect(tables.note).toMatch(/"TABLE" isn't a kind of record/);
+    expect(tables.tip).toMatch(/place_object puts an item on one by itself/);
+    // Looking for a table as a record gets the same tip.
+    expect(((await run('search_records', { query: 'table', kind: 'furniture' })).data as any).tip).toMatch(/place_object/);
+    expect(((await run('search_records', { query: 'tankard', kind: 'item' })).data as any).tip).toBeUndefined();
     const rec = await run('read_record', { form: 'DemoInnkeeper' });
     expect((rec.data as any).editorId).toBe('DemoInnkeeper');
     expect(rec.link).toMatchObject({ tab: 'records' });

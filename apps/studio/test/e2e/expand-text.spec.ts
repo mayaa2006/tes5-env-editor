@@ -32,8 +32,16 @@ for (const size of [
     await expect(page.getByTestId('expanded-text')).toHaveValue('A much longer line\nthat spans two rows of text.');
 
     // Escape also keeps what you typed, and it can be undone like any edit.
+    // Saving goes through the engine, which can answer late (the desktop app's engine runs in a worker): reopening
+    // straight away shows what was just saved, and closing it again doesn't put the old text back.
+    await page.evaluate(() => ((globalThis as { __tes5TestEngineDelayMs?: number }).__tes5TestEngineDelayMs = 500));
     await page.getByTestId('expanded-text').fill('Second edit');
     await page.keyboard.press('Escape');
+    await page.getByTestId('expand-text').first().click();
+    await expect(page.getByTestId('expanded-text')).toHaveValue('Second edit');
+    await page.getByRole('button', { name: 'Done' }).click();
+    await page.evaluate(() => ((globalThis as { __tes5TestEngineDelayMs?: number }).__tes5TestEngineDelayMs = 0));
+    await page.waitForTimeout(1200);
     await page.getByTestId('expand-text').first().click();
     await expect(page.getByTestId('expanded-text')).toHaveValue('Second edit');
     await page.getByRole('button', { name: 'Done' }).click();
