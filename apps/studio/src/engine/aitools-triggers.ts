@@ -56,7 +56,16 @@ export function triggerTools(host: EngineHost): AgentTool<any>[] {
   const label = (k: FormKey) => ws().summary(k)?.editorId || ws().summary(k)?.name || k;
 
   /** The object or alias a tool is about, from its object / quest + alias fields. */
-  const target = (i: { object?: string | null; quest?: string | null; alias?: string | null }): { host: TriggerHost; name: string; link: { tab: 'scene' | 'quest'; key: FormKey; label: string } } => {
+  type Target = { host: TriggerHost; name: string; link: { tab: 'scene' | 'quest'; key: FormKey; label: string } };
+  /** What was looked at last in this turn (the tools are made for each turn): a change without one is about it. */
+  let last: Target | undefined;
+  const target = (i: { object?: string | null; quest?: string | null; alias?: string | null }): Target => {
+    const t = findTarget(i);
+    last = t;
+    return t;
+  };
+  const findTarget = (i: { object?: string | null; quest?: string | null; alias?: string | null }): Target => {
+    if (!i.object && !(i.quest && i.alias) && last) return last;
     if (i.object) {
       const named = form(i.object, 'placed object');
       const sig0 = ws().summary(named)!.sig;
