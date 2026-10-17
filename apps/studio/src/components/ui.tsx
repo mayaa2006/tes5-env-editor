@@ -222,9 +222,17 @@ export function TextInput({ value, onCommit, placeholder, multiline, mono, disab
 export function ExpandableText({ value, onCommit, multiline, placeholder, title = 'Edit text' }: { value: string; onCommit: (v: string) => void; multiline?: boolean; placeholder?: string; title?: string }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(value);
+  // What was just saved, until the new value comes back from the engine: reopening the box straight away shows it,
+  // and closing the box again doesn't save the old text over it.
+  const [saved, setSaved] = useState<string | null>(null);
+  useEffect(() => setSaved(null), [value]);
+  const current = saved ?? value;
   const finish = () => {
     setOpen(false);
-    if (draft !== value) onCommit(draft);
+    if (draft !== current) {
+      setSaved(draft);
+      onCommit(draft);
+    }
   };
   return (
     <div className="row" style={{ gap: 4, alignItems: 'flex-start' }}>
@@ -237,7 +245,7 @@ export function ExpandableText({ value, onCommit, multiline, placeholder, title 
         aria-label={`${title} in a bigger box`}
         data-testid="expand-text"
         onClick={() => {
-          setDraft(value);
+          setDraft(current);
           setOpen(true);
         }}
       >
