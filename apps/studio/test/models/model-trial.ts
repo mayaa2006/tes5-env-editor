@@ -114,7 +114,8 @@ const TASKS: Task[] = [
       for (const r of mareRefs(h)) {
         if (r.baseSig !== 'CONT') continue;
         const t = await h.triggersOf({ kind: 'ref', ref: r.formKey });
-        if (t.specs.some((s) => s.actions.some((a) => (a.kind === 'notification' || a.kind === 'messageBox') && /cheese/i.test(a.text)))) return true;
+        // Opening a chest is activating it.
+        if (t.specs.some((s) => s.event.kind === 'activate' && s.actions.some((a) => (a.kind === 'notification' || a.kind === 'messageBox') && /cheese/i.test(a.text)))) return true;
       }
       return false;
     },
@@ -163,11 +164,16 @@ for (const task of TASKS) {
   const t0 = Date.now();
   let r;
   let error: string | null = null;
+  // Ten minutes for a task: longer than that is no use to an author, whatever the result.
+  let timedOut = false;
+  const limit = setTimeout(() => ((timedOut = true), host.aiStop(s.id)), Number(flag('--minutes') ?? 10) * 60_000);
   try {
     r = await host.aiSend(s.id, task.text, ai, {});
-    error = r.error ?? null;
+    error = timedOut ? 'timed out' : (r.error ?? null);
   } catch (e) {
-    error = (e as Error).message;
+    error = timedOut ? 'timed out' : (e as Error).message;
+  } finally {
+    clearTimeout(limit);
   }
   const session = r?.session;
   const results = (session?.messages ?? []).filter((m: any) => m.role === 'tool').flatMap((m: any) => m.results) as { name: string; status: string; content: string }[];

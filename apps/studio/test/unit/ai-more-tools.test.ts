@@ -63,6 +63,10 @@ describe('the AI workspace character, record and script tools', () => {
     const copy = await run('copy_record', { form: 'AiBlade', editorId: 'AiBlade2', name: 'Second Blade' });
     const k2 = (copy.data as any).formKey;
     expect(host.ws!.summary(k2)).toMatchObject({ editorId: 'AiBlade2', name: 'Second Blade' });
+    // A taken Editor ID and a copy that keeps the original's name are pointed out.
+    const dup = await run('copy_record', { form: 'AiBlade', editorId: 'AiBlade2' });
+    expect((dup.data as any).editorId).not.toBe('AiBlade2');
+    expect((dup.data as any).note).toMatch(/AiBlade2 was already used, so the copy is .*still called "Ai Blade" in game/);
     const value = (host.view(k2)!.data as any).data?.value;
     const upd = await run('update_record', { form: 'AiBlade2', changes: { data: { value: (value ?? 0) + 250 } } });
     expect((host.view(k2)!.data as any).data.value).toBe((value ?? 0) + 250);

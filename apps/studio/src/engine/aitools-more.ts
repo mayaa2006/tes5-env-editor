@@ -160,9 +160,16 @@ export function moreTools(host: EngineHost): AgentTool<any>[] {
       input: z.object({ form: Form, editorId: z.string().regex(/^[A-Za-z][A-Za-z0-9_]*$/), name: z.string().nullable().optional() }),
       summary: (i) => `Copy ${i.form} as ${i.editorId}`,
       run: (i) => {
-        const key = host.duplicateRecord(resolve(i.form), ws().uniqueEditorId(i.editorId)) as unknown as FormKey;
+        const source = resolve(i.form);
+        const editorId = ws().uniqueEditorId(i.editorId);
+        const key = host.duplicateRecord(source, editorId) as unknown as FormKey;
         if (i.name) ws().editRecord(key, (d) => void (d.name = i.name), 'Name the copy');
-        return { data: { formKey: key, editorId: ws().summary(key)?.editorId }, link: { tab: 'records', key, label: `${label(key)} in Records` } };
+        // Say what small models often miss: the Editor ID was taken, or the copy still has the original's name.
+        const notes = [
+          ...(editorId !== i.editorId ? [`${i.editorId} was already used, so the copy is ${editorId}.`] : []),
+          ...(!i.name && ws().summary(source)?.name ? [`The copy is still called "${ws().summary(source)!.name}" in game; give name to rename it (or update_record with {"name": …}).`] : []),
+        ];
+        return { data: { formKey: key, editorId, name: ws().summary(key)?.name, ...(notes.length ? { note: notes.join(' ') } : {}) }, link: { tab: 'records', key, label: `${label(key)} in Records` } };
       },
     },
     {
