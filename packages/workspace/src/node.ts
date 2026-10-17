@@ -9,6 +9,8 @@ import * as fsp from 'node:fs/promises';
 import type { DirEntry, FileStat, FileSystem, RandomAccessFile } from './fs';
 import type { ProcessRunner } from './scripts';
 
+let tmpSeq = 0;
+
 export class NodeFileSystem implements FileSystem {
   async readFile(path: string): Promise<Uint8Array> {
     const b = await fsp.readFile(path);
@@ -16,7 +18,8 @@ export class NodeFileSystem implements FileSystem {
   }
   async writeFile(path: string, data: Uint8Array): Promise<void> {
     // Write to a temp file then rename, so a crash never leaves a half-written plugin.
-    const tmp = `${path}.tmp-${process.pid}`;
+    // Each write has its own temp file: two writes of one file at once must not share one.
+    const tmp = `${path}.tmp-${process.pid}-${++tmpSeq}`;
     await fsp.writeFile(tmp, data);
     await fsp.rename(tmp, path);
   }

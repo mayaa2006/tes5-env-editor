@@ -162,9 +162,15 @@ export class Workspace {
   /** File writes from undo/redo still in flight (save waits for them). */
   private io: Promise<unknown> = Promise.resolve();
 
-  /** Wait for files restored by undo/redo to reach the disk. */
+  /** A file undo/redo couldn't write, until it's reported. */
+  private ioError: Error | undefined;
+
+  /** Wait for files restored by undo/redo to reach the disk (and hear about one that couldn't be written). */
   async filesSettled(): Promise<void> {
     await this.io;
+    const e = this.ioError;
+    this.ioError = undefined;
+    if (e) throw new WorkspaceError(`A script file couldn't be restored by undo/redo: ${e.message}`);
   }
   private dirty = false;
   private listeners = new Set<(e: WorkspaceEvent) => void>();
@@ -894,12 +900,19 @@ export class Workspace {
   }
 
   private applyFiles(files: FileChange[], which: 'before' | 'after'): void {
-    const list = (which === 'before' ? [...files].reverse() : files).map((f) => ({ path: f.path, data: f[which] }));
+    const ordered = (which === 'before' ? [...files].reverse() : files).map((f) => ({ path: f.path, data: f[which] }));
+    // A file changed by several merged steps appears more than once: the last one in this order is what it ends up as.
+    // (Written at once, the copies would race and leave whichever finished last.)
+    const last = new Map(ordered.map((f) => [f.path.toLowerCase(), f]));
+    const list = ordered.filter((f) => last.get(f.path.toLowerCase()) === f);
     // Listeners (the script service) update their caches right away; disk follows.
     this.emit({ type: 'filesRestored', files: list });
-    this.io = this.io.then(() =>
-      Promise.all(list.map((f) => (f.data ? this.fs.writeFile(f.path, f.data) : this.fs.remove(f.path).catch(() => undefined)))),
-    );
+    this.io = this.io
+      .then(() => Promise.all(list.map((f) => (f.data ? this.fs.writeFile(f.path, f.data) : this.fs.remove(f.path).catch(() => undefined)))))
+      // A failed write (disk full, file locked) must not crash the engine: it's reported when files are next awaited (saving).
+      .catch((e: unknown) => {
+        this.ioError = e instanceof Error ? e : new Error(String(e));
+      });
   }
 
   private restore(bytes: Uint8Array): void {
@@ -1296,7 +1309,7 @@ export class Workspace {
 
   /** Bytes of the active plugin as it would be saved (after automations). */
   async save(opts: SaveOptions = {}): Promise<SaveResult> {
-    await this.io;
+    await this.filesSettled();
     const a = this.requireActive();
     const warnings: string[] = [];
     const extraFiles: string[] = [];

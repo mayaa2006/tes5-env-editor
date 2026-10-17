@@ -5,10 +5,11 @@
  * tool, and is checked by looking at the records afterwards, not at what the
  * model says.
  *
- *   SKYRIM_DATA=<Data folder> npx tsx apps/studio/test/models/model-trial.ts <base url> <model> [--only id,id] [--plan] [--key KEY]
+ *   SKYRIM_DATA=<Data folder> npx tsx apps/studio/test/models/model-trial.ts <base url> <model> [--only id,id] [--plan] [--key KEY] [--done results.jsonl]
  *
  * Prints one JSON line per task. Nothing is saved: the plugin stays in memory.
  */
+import { existsSync, readFileSync } from 'node:fs';
 import { NodeFileSystem, NodeProcessRunner } from '@tes5/workspace/node';
 import type { AiProvider } from '@tes5/workspace';
 import type { FormKey } from '@tes5/esp';
@@ -24,6 +25,18 @@ const flag = (name: string) => {
   return i >= 0 ? args[i + 1] : undefined;
 };
 const only = flag('--only')?.split(',');
+/** With --done FILE: tasks already in that results file for this model are skipped, so a cut-off run carries on. */
+const doneFile = flag('--done');
+const done = new Set<string>(
+  doneFile && existsSync(doneFile)
+    ? readFileSync(doneFile, 'utf8')
+        .split('\n')
+        .filter((l) => l.startsWith('{'))
+        .map((l) => JSON.parse(l) as { model: string; task: string })
+        .filter((r) => r.model === model)
+        .map((r) => r.task)
+    : [],
+);
 const ai: AiProvider = { kind: 'openai', url, model, ...(flag('--key') ? { apiKey: flag('--key') } : {}) };
 const ESMS = ['Skyrim.esm', 'Update.esm', 'Dawnguard.esm', 'HearthFires.esm', 'Dragonborn.esm'];
 
@@ -143,7 +156,7 @@ const TASKS: Task[] = [
 ];
 
 for (const task of TASKS) {
-  if (only && !only.includes(task.id)) continue;
+  if ((only && !only.includes(task.id)) || done.has(task.id)) continue;
   const host = await game();
   const before = await task.before?.(host);
   const s = await host.aiNewSession();
@@ -183,7 +196,7 @@ for (const task of TASKS) {
   );
 }
 
-if (args.includes('--plan')) {
+if (args.includes('--plan') && !done.has('plan')) {
   const host = await game();
   const doc = `The Innkeeper's Ring
 

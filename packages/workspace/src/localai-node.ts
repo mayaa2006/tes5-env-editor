@@ -181,7 +181,7 @@ export class LocalAi {
         } catch {
           // Not listening yet.
         }
-        if (Date.now() - started > (this.opts.startTimeoutMs ?? 180_000)) fail(`${m.label} took too long to load. ${explain(log)}`);
+        if (Date.now() - started > (this.opts.startTimeoutMs ?? 300_000)) fail(`${m.label} took too long to load. ${explain(log)}`);
         else setTimeout(poll, 300);
       };
       void poll();
