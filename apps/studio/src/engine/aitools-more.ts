@@ -156,18 +156,22 @@ export function moreTools(host: EngineHost): AgentTool<any>[] {
       name: 'copy_record',
       group: 'items',
       writes: true,
-      description: 'Make a copy of a record (an item, spell, character, list…) with a new Editor ID, to change it with update_record.',
-      input: z.object({ form: Form, editorId: z.string().regex(/^[A-Za-z][A-Za-z0-9_]*$/), name: z.string().nullable().optional() }),
-      summary: (i) => `Copy ${i.form} as ${i.editorId}`,
+      description: 'Make a copy of a record (an item, spell, character, list…) under a new Editor ID and name, to change it with update_record.',
+      input: z.object({
+        form: Form.describe('The record to copy: its Editor ID (e.g. "IronWarAxe") or FormKey'),
+        newEditorId: z.string().regex(/^[A-Za-z][A-Za-z0-9_]*$/).describe('The Editor ID for the copy: a new one, not the original\'s (letters, digits and _)'),
+        newName: z.string().nullable().optional().describe('The in-game name for the copy'),
+      }),
+      summary: (i) => `Copy ${i.form} as ${i.newEditorId}`,
       run: (i) => {
         const source = resolve(i.form);
-        const editorId = ws().uniqueEditorId(i.editorId);
+        const editorId = ws().uniqueEditorId(i.newEditorId);
         const key = host.duplicateRecord(source, editorId) as unknown as FormKey;
-        if (i.name) ws().editRecord(key, (d) => void (d.name = i.name), 'Name the copy');
+        if (i.newName) ws().editRecord(key, (d) => void (d.name = i.newName), 'Name the copy');
         // Say what small models often miss: the Editor ID was taken, or the copy still has the original's name.
         const notes = [
-          ...(editorId !== i.editorId ? [`${i.editorId} was already used, so the copy is ${editorId}.`] : []),
-          ...(!i.name && ws().summary(source)?.name ? [`The copy is still called "${ws().summary(source)!.name}" in game; give name to rename it (or update_record with {"name": …}).`] : []),
+          ...(editorId !== i.newEditorId ? [`${i.newEditorId} was already used, so the copy is ${editorId}.`] : []),
+          ...(!i.newName && ws().summary(source)?.name ? [`The copy is still called "${ws().summary(source)!.name}" in game; rename it with update_record {"name": …}.`] : []),
         ];
         return { data: { formKey: key, editorId, name: ws().summary(key)?.name, ...(notes.length ? { note: notes.join(' ') } : {}) }, link: { tab: 'records', key, label: `${label(key)} in Records` } };
       },
