@@ -85,6 +85,7 @@ const ICONS: Record<string, string> = {
   send: 'M4 12l16-8-6 16-2-6zM12 14l8-10',
   flag: 'M5 21V4M5 4h11l-2 4 2 4H5',
   route: 'M6 19a2 2 0 100-4 2 2 0 000 4zM18 9a2 2 0 100-4 2 2 0 000 4zM6 15V9a4 4 0 014-4h6M18 9v6a4 4 0 01-4 4H8',
+  download: 'M12 4v11M7 10l5 5 5-5M5 20h14',
 };
 
 export function Icon({ name, size = 15, className }: { name: keyof typeof ICONS | string; size?: number; className?: string }) {

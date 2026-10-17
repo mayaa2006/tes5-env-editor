@@ -70,8 +70,10 @@ export interface Settings {
   mo2Exe: string;
   /** Anthropic API key for planning quests with Claude (kept on this computer). */
   anthropicApiKey: string;
-  /** Which AI plans quests and writes journals: Claude, Ollama on this computer, or an OpenAI-style service. */
-  aiKind: 'claude' | 'ollama' | 'openai';
+  /** Which AI plans quests and writes journals: Claude, the built-in one or Ollama on this computer, or an OpenAI-style service. */
+  aiKind: 'claude' | 'local' | 'ollama' | 'openai';
+  /** The built-in AI's model (an id from LOCAL_MODELS). */
+  localModel: string;
   ollamaUrl: string;
   ollamaModel: string;
   openaiUrl: string;
@@ -106,6 +108,7 @@ const DEFAULT_SETTINGS: Settings = {
   mo2Exe: '',
   anthropicApiKey: '',
   aiKind: 'claude',
+  localModel: '',
   ollamaUrl: 'http://localhost:11434',
   ollamaModel: '',
   openaiUrl: '',

@@ -34,34 +34,36 @@ describe('the AI workspace outdoor tools', () => {
     await expect(run('ground_info', { place: 'DemoTavern' })).rejects.toThrow(/interior/);
   });
 
-  it('makes a hill as high as asked, a hollow, a flat spot and a ridge, each one undo step', async () => {
+  it('makes a hill as high as asked, a hollow, a flat spot and a ridge, in metres, each one undo step', async () => {
     const { host, run } = await demo();
-    const hill = (await run('shape_ground', { place: 'DemoValley1_0', shape: 'hill', height: 400, width: 800 })).data;
+    const hill = (await run('shape_ground', { place: 'DemoValley1_0', shape: 'hill', height: 6, width: 11 })).data;
     expect(hill.cellsChanged).toBeGreaterThan(0);
-    const rise = hill.heightAtShapeAfter - hill.heightAtShapeBefore;
-    expect(rise).toBeGreaterThan(300);
-    expect(rise).toBeLessThan(500);
-    const ridge = (await run('shape_ground', { place: 'DemoValley1_0', shape: 'hill', height: 200, points: [{ x: 500, y: 500 }, { x: 3500, y: 3500 }] })).data;
-    const ridgeRise = ridge.heightAtShapeAfter - ridge.heightAtShapeBefore;
-    expect(ridgeRise).toBeGreaterThan(120);
-    expect(ridgeRise).toBeLessThan(320);
-    const flat = (await run('shape_ground', { place: 'DemoValley1_0', shape: 'flatten', at: 'south', height: 0, width: 500 })).data;
-    expect(Math.abs(flat.heightAtShapeAfter)).toBeLessThan(40);
-    const hollow = (await run('shape_ground', { place: 'DemoValley1_0', shape: 'hollow', at: 'north', height: 150 })).data;
-    expect(hollow.heightAtShapeAfter).toBeLessThan(hollow.heightAtShapeBefore);
+    const rise = hill.metresThereAfter - hill.metresThereBefore;
+    expect(rise).toBeGreaterThan(4.3);
+    expect(rise).toBeLessThan(7.2);
+    const ridge = (await run('shape_ground', { place: 'DemoValley1_0', shape: 'hill', height: 3, points: [{ x: 7, y: 7 }, { x: 50, y: 50 }] })).data;
+    const ridgeRise = ridge.metresThereAfter - ridge.metresThereBefore;
+    expect(ridgeRise).toBeGreaterThan(1.7);
+    expect(ridgeRise).toBeLessThan(4.6);
+    const flat = (await run('shape_ground', { place: 'DemoValley1_0', shape: 'flatten', at: 'south', height: 0, width: 7 })).data;
+    expect(Math.abs(flat.metresThereAfter)).toBeLessThan(0.6);
+    // A spot as "x,y" in metres works as well as a compass name.
+    const hollow = (await run('shape_ground', { place: 'DemoValley1_0', shape: 'hollow', at: '29, 47', height: 2 })).data;
+    expect(hollow.metresThereAfter).toBeLessThan(hollow.metresThereBefore);
+    await expect(run('shape_ground', { place: 'DemoValley1_0', shape: 'hill', at: 'behind the inn' })).rejects.toThrow(/isn't a spot in the cell.*metres from the south-west corner/);
     // Each shape is its own step.
     expect(host.session().undoLabel).toBe('AI: shape_ground');
     host.undo();
     host.undo();
     host.undo();
     host.undo();
-    expect((await run('ground_info', { place: 'DemoValley1_0' })).data.ground.middle).toBe(hill.heightAtShapeBefore);
+    expect((await run('ground_info', { place: 'DemoValley1_0' })).data.ground.middle).toBe(hill.metresThereBefore);
   });
 
   it('paints the ground, makes a worldspace and adds cells next to others', async () => {
     const { host, run } = await demo();
     expect((await run('paint_ground', { place: 'DemoValley1_0', texture: 'DemoLandRock', whole: true })).data.cellsChanged).toBeGreaterThan(0);
-    expect((await run('paint_ground', { place: 'DemoValley1_0', texture: 'DemoLandDirt', points: [{ x: 0, y: 2048 }, { x: 4096, y: 2048 }], width: 200 })).data.cellsChanged).toBeGreaterThan(0);
+    expect((await run('paint_ground', { place: 'DemoValley1_0', texture: 'DemoLandDirt', points: [{ x: 0, y: 29 }, { x: 58, y: 29 }], width: 3 })).data.cellsChanged).toBeGreaterThan(0);
     await expect(run('paint_ground', { place: 'DemoValley1_0', texture: 'DemoTavern' })).rejects.toThrow(/list_ground_textures/);
 
     const w = (await run('create_worldspace', { editorId: 'AshValley', name: 'Ash Valley', size: 3, texture: 'DemoLandGrass', like: 'DemoWorld' })).data;

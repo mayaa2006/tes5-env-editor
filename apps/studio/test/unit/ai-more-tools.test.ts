@@ -35,6 +35,9 @@ describe('the AI workspace character, record and script tools', () => {
     expect(r.link).toMatchObject({ tab: 'npc', key });
     // Placed in the tavern.
     expect(host.references(host.ws!.byEditorId('DemoTavern')!).some((x) => x.base === key)).toBe(true);
+    // A routine with "stage -1" (a small model's way of saying none) works: on their own, characters have no stages.
+    const r2 = await run('create_character', { name: 'Sven', sex: 'male', place: 'DemoTavern', routine: [{ activity: 'sleep', where: null, hours: { from: 22, to: 6 }, fromStage: -1, untilStage: 0, line: null }] });
+    expect(host.ws!.summary((r2.data as any).character)!.name).toBe('Sven');
   });
 
   it('changes only what it is told about an existing character, as an override', async () => {
@@ -57,12 +60,22 @@ describe('the AI workspace character, record and script tools', () => {
     const key = (made.data as any).formKey;
     expect(host.ws!.summary(key)).toMatchObject({ editorId: 'AiBlade', name: 'Ai Blade', sig: 'WEAP' });
     expect(made.link).toMatchObject({ tab: 'items', key });
-    const copy = await run('copy_record', { form: 'AiBlade', editorId: 'AiBlade2', name: 'Second Blade' });
+    const copy = await run('copy_record', { form: 'AiBlade', newEditorId: 'AiBlade2', newName: 'Second Blade' });
     const k2 = (copy.data as any).formKey;
     expect(host.ws!.summary(k2)).toMatchObject({ editorId: 'AiBlade2', name: 'Second Blade' });
+    // A taken Editor ID and a copy that keeps the original's name are pointed out.
+    const dup = await run('copy_record', { form: 'AiBlade', newEditorId: 'AiBlade2' });
+    expect((dup.data as any).editorId).not.toBe('AiBlade2');
+    expect((dup.data as any).note).toMatch(/AiBlade2 was already used, so the copy is .*still called "Ai Blade" in game/);
     const value = (host.view(k2)!.data as any).data?.value;
-    await run('update_record', { form: 'AiBlade2', changes: { data: { value: (value ?? 0) + 250 } } });
+    const upd = await run('update_record', { form: 'AiBlade2', changes: { data: { value: (value ?? 0) + 250 } } });
     expect((host.view(k2)!.data as any).data.value).toBe((value ?? 0) + 250);
+    // What changed is reported field by field; a field the record didn't have is pointed out.
+    expect((upd.data as any).changed[0]).toMatch(/^data(\.value)?: .* → .*250/);
+    const again = await run('update_record', { form: 'AiBlade2', changes: { data: { value: 300 } } });
+    expect((again.data as any).changed).toEqual([`data.value: ${(value ?? 0) + 250} → 300`]);
+    const odd = await run('update_record', { form: 'AiBlade2', changes: { data: { sharpness: 3 } } });
+    expect((odd.data as any).note).toMatch(/had no data\.sharpness before/);
     // Other fields of the merged object are kept.
     expect(Object.keys((host.view(k2)!.data as any).data).length).toBeGreaterThan(1);
     expect((await run('delete_record', { form: 'AiBlade2' })).data).toMatch(/removed/);

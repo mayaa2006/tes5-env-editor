@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { isFormKey, type FormKey, type VmadProperty } from '@tes5/esp';
 import { PlanCharacterSchema, WorkspaceError, catalogCategory, emptyPlan, isCreatable, validatePlan, type AgentTool, type PlanCharacter, type QuestBuildReport } from '@tes5/workspace';
 import type { EngineHost } from './host';
+import { lookup } from './aitools-lookup';
 
 const Form = z.string().describe('Editor ID or FormKey');
 
@@ -50,17 +51,26 @@ export function mergeChanges(data: Record<string, unknown>, changes: Record<stri
   return data;
 }
 
+/** The leaf fields a change sets, with their values before and after. */
+export function changedFields(before: Record<string, unknown>, changes: Record<string, unknown>, prefix = ''): { path: string; was: unknown; now: unknown }[] {
+  const out: { path: string; was: unknown; now: unknown }[] = [];
+  for (const [k, v] of Object.entries(changes)) {
+    const path = prefix ? `${prefix}.${k}` : k;
+    const was = before?.[k];
+    if (v && typeof v === 'object' && !Array.isArray(v) && was && typeof was === 'object' && !Array.isArray(was) && !(was instanceof Uint8Array)) out.push(...changedFields(was as Record<string, unknown>, v as Record<string, unknown>, path));
+    else out.push({ path, was, now: v });
+  }
+  return out;
+}
+
+const short = (v: unknown) => (v === undefined ? '(none)' : JSON.stringify(v).slice(0, 80));
+
 export function moreTools(host: EngineHost): AgentTool<any>[] {
   const ws = () => {
     if (!host.ws) throw new WorkspaceError('No game data is open');
     return host.ws;
   };
-  const resolve = (ref: string, what = 'record'): FormKey => {
-    const r = ref.trim();
-    const key = (isFormKey(r) ? r : ws().byEditorId(r)) as FormKey | undefined;
-    if (!key || !ws().summary(key)) throw new WorkspaceError(`There's no ${what} "${r}". Search for it first and use its Editor ID or FormKey.`);
-    return key;
-  };
+  const resolve = (ref: string, what = 'record'): FormKey => lookup(ws(), ref, { what });
   const label = (k: FormKey) => {
     const s = ws().summary(k);
     return s?.name || s?.editorId || k;
@@ -71,6 +81,8 @@ export function moreTools(host: EngineHost): AgentTool<any>[] {
     plan.title = c.name;
     plan.editorId = `${c.name.replace(/[^A-Za-z0-9]/g, '') || 'Character'}Changes`;
     plan.stages = [];
+    // On their own a character has no quest stages: routine entries apply all the time (small models fill in -1 or 0 for "none").
+    for (const r of c.routine ?? []) Object.assign(r, { fromStage: null, untilStage: null });
     plan.characters = [c];
     if (place) {
       const cell = resolve(place, 'place');
@@ -89,7 +101,7 @@ export function moreTools(host: EngineHost): AgentTool<any>[] {
       group: 'characters',
       writes: true,
       description:
-        "Create a new character, copied from a fitting existing one (or basedOn), and place them in a cell. Describe what you know: look (hair, beard, eyes, scars, build), outfit (existing clothing by name), inventory, factions, class, level, routine (sandbox/sleep/eat/stay/travel with hours), combat (hostile, skills, spells, perks, style), roles (follower, marriage, merchant, trainer, innkeeper) and relationships. For characters in a quest, plan_quest does this as part of the quest.",
+        "Create a new character, copied from a fitting existing one, and place them in a cell. The one to copy is picked from the race, sex and role you give: there's no need to search for one first (basedOn names one if the author asked). Describe what you know: look (hair, beard, eyes, scars, build), outfit (existing clothing by name), inventory, factions, class, level, routine (sandbox/sleep/eat/stay/travel with hours), combat (hostile, skills, spells, perks, style), roles (follower, marriage, merchant, trainer, innkeeper) and relationships. For characters in a quest, plan_quest does this as part of the quest.",
       input: CharacterFields.extend({ name: z.string().describe('Name shown in game'), place: z.string().nullable().optional().describe('Editor ID of the cell they stand in (an interior from list_places); null to make them without placing them') }),
       summary: (i) => `Create the character ${i.name}`,
       run: async (i) => {
@@ -144,13 +156,24 @@ export function moreTools(host: EngineHost): AgentTool<any>[] {
       name: 'copy_record',
       group: 'items',
       writes: true,
-      description: 'Make a copy of a record (an item, spell, character, list…) with a new Editor ID, to change it with update_record.',
-      input: z.object({ form: Form, editorId: z.string().regex(/^[A-Za-z][A-Za-z0-9_]*$/), name: z.string().nullable().optional() }),
-      summary: (i) => `Copy ${i.form} as ${i.editorId}`,
+      description: 'Make a copy of a record (an item, spell, character, list…) under a new Editor ID and name, to change it with update_record.',
+      input: z.object({
+        form: Form.describe('The record to copy: its Editor ID (e.g. "IronWarAxe") or FormKey'),
+        newEditorId: z.string().regex(/^[A-Za-z][A-Za-z0-9_]*$/).describe('The Editor ID for the copy: a new one, not the original\'s (letters, digits and _)'),
+        newName: z.string().nullable().optional().describe('The in-game name for the copy'),
+      }),
+      summary: (i) => `Copy ${i.form} as ${i.newEditorId}`,
       run: (i) => {
-        const key = host.duplicateRecord(resolve(i.form), ws().uniqueEditorId(i.editorId)) as unknown as FormKey;
-        if (i.name) ws().editRecord(key, (d) => void (d.name = i.name), 'Name the copy');
-        return { data: { formKey: key, editorId: ws().summary(key)?.editorId }, link: { tab: 'records', key, label: `${label(key)} in Records` } };
+        const source = resolve(i.form);
+        const editorId = ws().uniqueEditorId(i.newEditorId);
+        const key = host.duplicateRecord(source, editorId) as unknown as FormKey;
+        if (i.newName) ws().editRecord(key, (d) => void (d.name = i.newName), 'Name the copy');
+        // Say what small models often miss: the Editor ID was taken, or the copy still has the original's name.
+        const notes = [
+          ...(editorId !== i.newEditorId ? [`${i.newEditorId} was already used, so the copy is ${editorId}.`] : []),
+          ...(!i.newName && ws().summary(source)?.name ? [`The copy is still called "${ws().summary(source)!.name}" in game; rename it with update_record {"name": …}.`] : []),
+        ];
+        return { data: { formKey: key, editorId, name: ws().summary(key)?.name, ...(notes.length ? { note: notes.join(' ') } : {}) }, link: { tab: 'records', key, label: `${label(key)} in Records` } };
       },
     },
     {
@@ -159,12 +182,25 @@ export function moreTools(host: EngineHost): AgentTool<any>[] {
       writes: true,
       description:
         "Change fields of a record: 'changes' is merged into the record's data as read_record shows it (objects merge, lists and values are replaced; FormKeys as strings). Read the record first. Records from other plugins are overridden in the plugin being edited. Works for any record with a typed form.",
-      input: z.object({ form: Form, changes: z.record(z.string(), z.unknown()).describe('Fields to change, e.g. {"name": "Ebony Dagger of Fire", "data": {"value": 500}}') }),
+      input: z.object({ form: Form, changes: z.record(z.string(), z.unknown()).describe('Fields to change, with the names read_record shows. For a weapon, {"data": {"damage": 12}} sets its damage and {"data": {"value": 500}} its price; {"name": "Ebony Dagger of Fire"} renames it') }),
       summary: (i) => `Change ${i.form} (${Object.keys(i.changes).join(', ')})`,
       run: (i) => {
         const key = resolve(i.form);
+        const before = structuredClone(ws().view(key)?.data ?? {}) as Record<string, unknown>;
         const v = ws().editRecord(key, (d) => mergeChanges(d, structuredClone(i.changes)), `Edit ${label(key)}`);
-        return { data: { formKey: key, editorId: v.editorId, name: v.name, fields: v.data }, link: { tab: 'records', key, label: `${label(key)} in Records` } };
+        // What changed, field by field, so a wrong field name shows ("data.value: 30 → 12" when damage was meant).
+        const changed = changedFields(before, i.changes);
+        const added = changed.filter((c) => c.was === undefined).map((c) => c.path);
+        return {
+          data: {
+            formKey: key,
+            editorId: v.editorId,
+            name: v.name,
+            changed: changed.map((c) => `${c.path}: ${short(c.was)} → ${short(c.now)}`),
+            ...(added.length ? { note: `The record had no ${added.join(', ')} before, so ${added.length === 1 ? 'it was' : 'they were'} added. If that wasn't meant, check the field names with read_record.` } : {}),
+          },
+          link: { tab: 'records', key, label: `${label(key)} in Records` },
+        };
       },
     },
     {

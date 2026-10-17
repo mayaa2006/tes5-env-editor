@@ -7,12 +7,15 @@ import { useEffect, useState } from 'react';
 import { OLLAMA_URL, OPENAI_PRESETS, aiName, aiReady, pickModel, type AiProvider } from '@tes5/workspace';
 import { useStore } from '../state/store';
 import { Field, Help, Icon } from './ui';
+import { LocalAiFields } from './LocalAiFields';
 
 /** The chosen AI, whether it's set up, and what to call it. */
 export function useAi(): { ai: AiProvider; ready: boolean; name: string } {
   const s = useStore((st) => st.settings);
   const ai: AiProvider =
-    s.aiKind === 'ollama'
+    s.aiKind === 'local'
+      ? { kind: 'local', model: s.localModel }
+      : s.aiKind === 'ollama'
       ? { kind: 'ollama', url: s.ollamaUrl || OLLAMA_URL, model: s.ollamaModel }
       : s.aiKind === 'openai'
         ? { kind: 'openai', url: s.openaiUrl, apiKey: s.openaiKey || undefined, model: s.openaiModel }
@@ -21,9 +24,9 @@ export function useAi(): { ai: AiProvider; ready: boolean; name: string } {
 }
 
 const KINDS = [
-  { id: 'claude', label: 'Claude', title: "Anthropic's Claude: the best plans. Needs your own Anthropic API key (paid)." },
-  { id: 'ollama', label: 'Free on this PC', title: 'An open model running on your own computer through Ollama: free, private, works offline. Needs a fairly strong PC.' },
-  { id: 'openai', label: 'Free online', title: 'A free online service with the OpenAI-style API (Google Gemini, Groq, OpenRouter…), or LM Studio on this computer.' },
+  { id: 'claude', label: 'Claude', title: "Anthropic's Claude: the best results by far. Needs your own Anthropic API key (paid)." },
+  { id: 'local', label: 'Free on this PC', title: 'A small open model that runs on your own computer: the app downloads it for you (or use Ollama). Free, private, works offline. Slower and less capable than Claude.' },
+  { id: 'openai', label: 'Free online', title: 'A free online service with the OpenAI-style API (Google Gemini, Groq, NVIDIA, Mistral, OpenRouter…), or LM Studio on this computer. Needs a free account and key.' },
 ] as const;
 
 /** A one-line summary with a Change button, or the full settings while choosing. */
@@ -52,11 +55,15 @@ export function AiSettings({ onDone }: { onDone?: () => void }) {
     <div className="col" style={{ gap: 8 }} data-testid="ai-settings">
       <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
         <span className="small dim">AI to use:</span>
-        {KINDS.map((k) => (
-          <button key={k.id} className={`btn small ${s.aiKind === k.id ? 'active' : 'ghost'}`} aria-pressed={s.aiKind === k.id} title={k.title} onClick={() => update({ aiKind: k.id })} data-testid={`ai-kind-${k.id}`}>
-            {k.label}
-          </button>
-        ))}
+        {KINDS.map((k) => {
+          // "Free on this PC" covers the built-in AI and Ollama.
+          const on = s.aiKind === k.id || (k.id === 'local' && s.aiKind === 'ollama');
+          return (
+            <button key={k.id} className={`btn small ${on ? 'active' : 'ghost'}`} aria-pressed={on} title={k.title} onClick={() => !on && update({ aiKind: k.id })} data-testid={`ai-kind-${k.id}`}>
+              {k.label}
+            </button>
+          );
+        })}
         <span className="grow" />
         {onDone && ready && (
           <button className="btn small" onClick={onDone} data-testid="ai-done">
@@ -65,6 +72,18 @@ export function AiSettings({ onDone }: { onDone?: () => void }) {
         )}
       </div>
       {s.aiKind === 'claude' && <ClaudeFields />}
+      {(s.aiKind === 'local' || s.aiKind === 'ollama') && (
+        <div className="row" style={{ gap: 6 }}>
+          <span className="small dim">Run it with:</span>
+          <button className={`btn small ${s.aiKind === 'local' ? 'active' : 'ghost'}`} aria-pressed={s.aiKind === 'local'} onClick={() => update({ aiKind: 'local' })} title="The app downloads a small AI and the program that runs it, and starts it when needed. Nothing else to install." data-testid="local-kind-builtin">
+            Built in
+          </button>
+          <button className={`btn small ${s.aiKind === 'ollama' ? 'active' : 'ghost'}`} aria-pressed={s.aiKind === 'ollama'} onClick={() => update({ aiKind: 'ollama' })} title="Use Ollama, if you already have it installed, with any model you've pulled" data-testid="local-kind-ollama">
+            Ollama
+          </button>
+        </div>
+      )}
+      {s.aiKind === 'local' && <LocalAiFields />}
       {s.aiKind === 'ollama' && <OllamaFields />}
       {s.aiKind === 'openai' && <OpenAiFields />}
     </div>

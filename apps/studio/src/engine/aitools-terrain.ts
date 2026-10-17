@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { isFormKey, type FormKey } from '@tes5/esp';
 import { WorkspaceError, type AgentTool } from '@tes5/workspace';
 import type { EngineHost } from './host';
+import { formKeyOf } from './aitools-lookup';
 
 /** Game units along a side of an outdoor cell. */
 const CELL = 4096;
@@ -31,26 +32,38 @@ const SPOT_NAMES = Object.keys(SPOTS) as [Spot, ...Spot[]];
 
 const DIRS: Record<string, [number, number]> = { north: [0, 1], south: [0, -1], east: [1, 0], west: [-1, 0], northeast: [1, 1], northwest: [-1, 1], southeast: [1, -1], southwest: [-1, -1] };
 
+/** Game units in a metre: what the AI is told in, since that's how people (and models) think of sizes. */
+const M = 70;
+/** A cell's side in metres (about 58.5). */
+const CELL_M = Math.round((CELL / M) * 10) / 10;
+const metres = (units: number | null) => (units === null ? null : Math.round((units / M) * 10) / 10);
+
 const Where = {
-  at: z.enum(SPOT_NAMES).nullable().optional().describe('Where in the cell (default the middle)'),
+  at: z.string().nullable().optional().describe(`Where in the cell: ${SPOT_NAMES.join(', ')} (default the middle), or "x,y" in metres from its south-west corner`),
   points: z
-    .array(z.object({ x: z.number().min(0).max(CELL), y: z.number().min(0).max(CELL) }))
+    .array(z.object({ x: z.number().min(0).max(CELL_M), y: z.number().min(0).max(CELL_M) }))
     .min(1)
     .max(20)
     .nullable()
     .optional()
-    .describe(`Exact spots in the cell instead of at: game units from its south-west corner (x east, y north, 0–${CELL}; the middle is ${CELL / 2}, ${CELL / 2}). Several points make a line through them (a ridge, a valley, a road).`),
+    .describe(`Exact spots in the cell instead of at: metres from its south-west corner (x east, y north, 0–${CELL_M}; the middle is ${CELL_M / 2}, ${CELL_M / 2}). Several points make a line through them (a ridge, a valley, a road).`),
 };
+
+/** A spot in a cell, in game units from its corner: a compass name or "x,y" in metres. */
+function spotOf(at: string | null | undefined): { x: number; y: number } {
+  const a = (at ?? 'middle').trim().toLowerCase().replace(/[\s-]+/g, '');
+  if (a in SPOTS) return { x: SPOTS[a as Spot][0] * CELL, y: SPOTS[a as Spot][1] * CELL };
+  const m = /^\(?(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)\)?$/.exec(a);
+  if (m) return { x: Math.max(0, Math.min(CELL, Number(m[1]) * M)), y: Math.max(0, Math.min(CELL, Number(m[2]) * M)) };
+  throw new WorkspaceError(`"${at}" isn't a spot in the cell. Use ${SPOT_NAMES.join(', ')}, or "x,y" in metres from the south-west corner (0–${CELL_M}).`);
+}
 
 export function terrainTools(host: EngineHost): AgentTool<any>[] {
   const ws = () => {
     if (!host.ws) throw new WorkspaceError('No game data is open');
     return host.ws;
   };
-  const key = (ref: string) => {
-    const r = ref.trim();
-    return (isFormKey(r) ? r : ws().byEditorId(r)) as FormKey | undefined;
-  };
+  const key = (ref: string) => formKeyOf(ws(), ref);
   const worldspace = (ref: string): FormKey => {
     const k = key(ref);
     if (!k || ws().summary(k)?.sig !== 'WRLD') throw new WorkspaceError(`There's no worldspace "${ref}". list_worldspaces shows them.`);
@@ -72,8 +85,8 @@ export function terrainTools(host: EngineHost): AgentTool<any>[] {
   const scene = (cell: FormKey, label: string) => ({ tab: 'scene' as const, key: cell, label: `${label} in World` });
 
   /** The brush stroke for a spot or a line, in world coordinates, with dabs close enough to blend. */
-  const stroke = (c: { grid: { x: number; y: number } }, i: { at?: Spot | null; points?: { x: number; y: number }[] | null }, radius: number) => {
-    const local = i.points?.length ? i.points : [{ x: SPOTS[i.at ?? 'middle'][0] * CELL, y: SPOTS[i.at ?? 'middle'][1] * CELL }];
+  const stroke = (c: { grid: { x: number; y: number } }, i: { at?: string | null; points?: { x: number; y: number }[] | null }, radius: number) => {
+    const local = i.points?.length ? i.points.map((p) => ({ x: p.x * M, y: p.y * M })) : [spotOf(i.at)];
     const world = local.map((p) => ({ x: c.grid.x * CELL + p.x, y: c.grid.y * CELL + p.y }));
     const out = [world[0]!];
     const step = Math.max(32, radius / 3);
@@ -103,7 +116,7 @@ export function terrainTools(host: EngineHost): AgentTool<any>[] {
     let lo = Infinity;
     let hi = -Infinity;
     for (const h of t.heights) (lo = Math.min(lo, h)), (hi = Math.max(hi, h));
-    return { lowest: Math.round(lo), highest: Math.round(hi), middle: Math.round(t.heights[16 * 33 + 16]!) };
+    return { lowest: metres(lo), highest: metres(hi), middle: metres(t.heights[16 * 33 + 16]!) };
   };
 
   return [
@@ -122,7 +135,7 @@ export function terrainTools(host: EngineHost): AgentTool<any>[] {
       name: 'ground_info',
       group: 'read',
       writes: false,
-      description: 'An outdoor cell: its worldspace and grid position, how high its ground is (lowest, highest, in the middle; game units, about 70 = 1 m) and which cells around it exist.',
+      description: `An outdoor cell (about ${CELL_M} m square): its worldspace and grid position, how high its ground is (lowest, highest, in the middle; metres above the game's zero) and which cells around it exist.`,
       input: z.object({ place: z.string().describe('Editor ID or FormKey of an outdoor cell') }),
       summary: (i) => `Look at the ground of ${i.place}`,
       run: (i) => {
@@ -207,19 +220,20 @@ export function terrainTools(host: EngineHost): AgentTool<any>[] {
       name: 'shape_ground',
       group: 'world',
       writes: true,
+      adds: true,
       description:
         'Shape the ground of an outdoor cell: a hill (raise), a hollow (lower), a flat spot (flatten, to a height or the height there), or smooth out bumps. One spot makes a round shape; several points make a ridge, a valley or a flat road through them. The ground of neighbouring cells follows where it reaches them. Placed objects are not moved: drop_to_floor them afterwards.',
       input: z.object({
         place: z.string().describe('Editor ID or FormKey of an outdoor cell'),
         shape: z.enum(['hill', 'hollow', 'flatten', 'smooth']),
         ...Where,
-        width: z.number().min(64).max(4096).nullable().optional().describe('Radius in game units (default 600; about 70 = 1 m)'),
-        height: z.number().nullable().optional().describe('hill/hollow: how much higher or lower in game units (default 300, at most 3000). flatten: the height to level to'),
+        width: z.number().min(1).max(58).nullable().optional().describe('Radius in metres (default 9; a house is about 10 m across)'),
+        height: z.number().nullable().optional().describe('hill/hollow: how much higher or lower, in metres (default 4, at most 40). flatten: the ground height to level to, in metres as ground_info gives it (default: the height there)'),
       }),
       summary: (i) => `Make a ${i.shape === 'flatten' ? 'flat spot' : i.shape === 'smooth' ? 'smoother ground' : i.shape} in ${i.place}`,
       run: (i) => {
         const c = outdoor(i.place);
-        const radius = i.width ?? 600;
+        const radius = (i.width ?? 9) * M;
         const line = stroke(c, i, radius);
         const before = heights(c.cell);
         const mid = line[Math.floor(line.length / 2)]!;
@@ -227,17 +241,17 @@ export function terrainTools(host: EngineHost): AgentTool<any>[] {
         const changed = new Set<FormKey>();
         const sculpt = (points: { x: number; y: number }[], opts: Parameters<EngineHost['sculptTerrain']>[2]) => host.sculptTerrain(c.cell, points, opts).forEach((k) => changed.add(k));
         if (i.shape === 'hill' || i.shape === 'hollow') {
-          const amount = Math.min(3000, Math.abs(i.height ?? 300));
+          const amount = Math.min(40, Math.abs(i.height ?? 4)) * M;
           const opts = { mode: i.shape === 'hill' ? ('raise' as const) : ('lower' as const), radius, strength: Math.min(1, amount / DAB) };
           // One pass, then as many more as it takes to reach the height asked for (dabs along a line overlap, so measure rather than guess).
           sculpt(line, opts);
           const step = Math.abs((heightAt(c.worldspace, mid) ?? 0) - (at0 ?? 0));
           const more = step > 0 ? Math.min(60, Math.round((amount - step) / step)) : 0;
           if (more > 0) sculpt(Array.from({ length: more }, () => line).flat(), opts);
-        } else if (i.shape === 'flatten') sculpt([...line, ...line, ...line], { mode: 'flatten', radius, strength: 1, ...(typeof i.height === 'number' ? { flattenTo: i.height } : {}) });
+        } else if (i.shape === 'flatten') sculpt([...line, ...line, ...line], { mode: 'flatten', radius, strength: 1, ...(typeof i.height === 'number' ? { flattenTo: i.height * M } : {}) });
         else sculpt([...line, ...line], { mode: 'smooth', radius, strength: 1 });
         const at1 = heightAt(c.worldspace, mid);
-        return { data: { cellsChanged: changed.size, heightAtShapeBefore: at0, heightAtShapeAfter: at1, cellBefore: before, cellAfter: heights(c.cell) }, link: scene(c.cell, c.label) };
+        return { data: { cellsChanged: changed.size, metresThereBefore: metres(at0), metresThereAfter: metres(at1), cellBefore: before, cellAfter: heights(c.cell) }, link: scene(c.cell, c.label) };
       },
     },
     {
@@ -250,13 +264,13 @@ export function terrainTools(host: EngineHost): AgentTool<any>[] {
         texture: z.string(),
         whole: z.boolean().nullable().optional().describe('Paint the whole cell'),
         ...Where,
-        width: z.number().min(64).max(4096).nullable().optional().describe('Radius in game units (default 400)'),
+        width: z.number().min(1).max(58).nullable().optional().describe('Radius in metres (default 6; a road is about 3)'),
       }),
       summary: (i) => `Paint ${i.whole ? 'all of ' : ''}${i.place} with ${i.texture}`,
       run: (i) => {
         const c = outdoor(i.place);
         const tex = texture(i.texture);
-        const radius = i.whole ? 400 : (i.width ?? 400);
+        const radius = i.whole ? 400 : (i.width ?? 6) * M;
         let points: { x: number; y: number }[];
         if (i.whole) {
           points = [];

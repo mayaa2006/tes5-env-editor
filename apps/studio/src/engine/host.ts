@@ -110,13 +110,17 @@ import {
   type AgentModel,
   type AgentSession,
   agentModel,
+  aiName,
   newAgentSession,
   projectSummary,
   projectTools,
   runAgentTurn,
   sessionTitle,
+  type LocalAiControl,
+  type LocalAiStatus,
 } from '@tes5/workspace';
 import { aiTools } from './aitools';
+import { offerTools } from './aitools-topics';
 import { questProblems, type QuestToolContext } from './aitools-quest';
 import type { CleanOptions } from '@tes5/cleaner';
 
@@ -171,7 +175,7 @@ export interface OpenOptions {
 }
 
 /** Workspace events, and the AI workspace's progress while a turn runs. */
-export type HostEvent = WorkspaceEvent | { type: 'ai'; event: AgentEvent };
+export type HostEvent = WorkspaceEvent | { type: 'ai'; event: AgentEvent } | { type: 'localAi'; status: LocalAiStatus };
 
 type Listener = (e: HostEvent) => void;
 
@@ -217,6 +221,9 @@ export class EngineHost {
     /** Caprica.exe shipped with the desktop app. */
     readonly bundledCaprica?: string,
   ) {}
+
+  /** The built-in free AI's downloads and server (set by the desktop app; the browser demo has none). */
+  localAi?: LocalAiControl;
 
   onEvent(fn: Listener): () => void {
     this.listeners.add(fn);
@@ -1101,7 +1108,53 @@ export class EngineHost {
 
   /** The AI (Claude or a free one) writes the drafts instead of the templates. */
   async journalDraftWithClaude(quest: FormKey, ai: AiProvider | string, overwrite = false) {
-    return new QuestPlanner({ ai: asAi(ai) }).writeJournal(await this.journalContext(quest), { overwrite });
+    return new QuestPlanner({ ai: await this.resolveAi(ai) }).writeJournal(await this.journalContext(quest), { overwrite });
+  }
+
+  /**
+   * The AI to send requests to: the built-in one is started first (on this
+   * computer, as an OpenAI-style service); the others are used as they are.
+   */
+  async resolveAi(ai: AiProvider | string): Promise<Exclude<AiProvider, { kind: 'local' }>> {
+    const a = asAi(ai);
+    if (a.kind !== 'local') return a;
+    if (!this.localAi?.status().supported) throw new Error('The built-in AI runs in the Windows app. Here, pick another AI in Settings → AI.');
+    const url = await this.localAi.ensure(a.model);
+    return { kind: 'openai', url, model: a.model, label: aiName(a) };
+  }
+
+  // ---------------------------------------------------------------- the built-in AI
+
+  localAiStatus(): LocalAiStatus {
+    return this.localAi?.status() ?? NO_LOCAL_AI;
+  }
+
+  /** Download a model (and the AI runner, the first time). Progress comes as localAi events. */
+  async localAiInstall(id: string) {
+    if (!this.localAi) throw new Error('The built-in AI runs in the Windows app');
+    return this.localAi.install(id);
+  }
+
+  localAiCancel() {
+    this.localAi?.cancel();
+    return true;
+  }
+
+  async localAiRemove(id: string) {
+    if (!this.localAi) throw new Error('The built-in AI runs in the Windows app');
+    return this.localAi.remove(id);
+  }
+
+  /** Start the model now (so the first message doesn't wait for it to load). */
+  async localAiStart(id: string) {
+    if (!this.localAi) throw new Error('The built-in AI runs in the Windows app');
+    await this.localAi.ensure(id);
+    return this.localAi.status();
+  }
+
+  async localAiStop() {
+    await this.localAi?.stop();
+    return this.localAiStatus();
   }
 
   /** Models installed in Ollama on this computer. */
@@ -1143,7 +1196,7 @@ export class EngineHost {
   /** The writer on a plan: fill in the missing journal entries and objectives (templates, or Claude with a key). */
   async planJournal(plan: QuestPlan, ai?: AiProvider | string) {
     const ctx = journalContextFromPlan(plan);
-    const draft = ai ? await new QuestPlanner({ ai: asAi(ai) }).writeJournal(ctx) : draftJournal(ctx);
+    const draft = ai ? await new QuestPlanner({ ai: await this.resolveAi(ai) }).writeJournal(ctx) : draftJournal(ctx);
     const next = applyJournalToPlan(plan, draft);
     return { plan: next, ...this.reviewQuestPlan(next) };
   }
@@ -1162,14 +1215,14 @@ export class EngineHost {
 
   /** Claude plans a quest from a design document or a conversation. */
   async planQuest(source: string, mode: PlannerMode, ai: AiProvider | string) {
-    const a = asAi(ai);
+    const a = await this.resolveAi(ai);
     const plan = await new QuestPlanner({ ai: a }).plan(source, mode, planCatalog(this.requireWs(), { text: source, limit: catalogLimit(a) }));
     return { plan, ...this.reviewQuestPlan(plan) };
   }
 
   /** Claude changes a plan as described. */
   async reviseQuestPlan(plan: QuestPlan, feedback: string, ai: AiProvider | string, source?: string) {
-    const a = asAi(ai);
+    const a = await this.resolveAi(ai);
     const text = `${source ?? ''}\n${feedback}\n${plan.characters.map((c) => `${c.name} ${c.existing ?? ''}`).join('\n')}\n${plan.locations.map((l) => `${l.name} ${l.existing ?? ''}`).join('\n')}`;
     const next = await new QuestPlanner({ ai: a }).revise(plan, feedback, planCatalog(this.requireWs(), { text, limit: catalogLimit(a) }), source);
     return { plan: next, ...this.reviewQuestPlan(next) };
@@ -1643,7 +1696,8 @@ export class EngineHost {
     if (!session) throw new Error('That conversation no longer exists');
     if (this.aiRuns.has(id)) throw new Error('The AI is still working on this conversation. Wait, or press Stop.');
     if (!text.trim()) throw new Error('Write something to send');
-    const model = this.aiModel(asAi(ai));
+    const resolved = await this.resolveAi(ai);
+    const model = this.aiModel(resolved);
     if (!session.messages.length) session.title = sessionTitle(text);
     const run = { abort: new AbortController(), approvals: new Map<string, (ok: boolean) => void>() };
     this.aiRuns.set(id, run);
@@ -1651,11 +1705,14 @@ export class EngineHost {
     const at = session.messages.length;
     // Plans made earlier in the conversation (saved with it) can be revised and built in later turns.
     const plans: QuestToolContext['plans'] = new Map(Object.entries(session.plans ?? {}) as [string, { plan: QuestPlan; source?: string; quest?: FormKey }][]);
-    const ctx: QuestToolContext = { ai: asAi(ai), plans, touched: new Set() };
+    const ctx: QuestToolContext = { ai: resolved, plans, touched: new Set() };
     try {
       // The project's to-do goes with every message, so the AI always works from the current list.
       const context = [opts.context, projectSummary(session.project)].filter(Boolean).join('\n\n') || undefined;
-      const res = await runAgentTurn(model, session, { text: text.trim(), context }, [...aiTools(this, ctx), ...projectTools(session)], {
+      const tools = [...aiTools(this, ctx), ...projectTools(session)];
+      const res = await runAgentTurn(model, session, { text: text.trim(), context }, tools, {
+        // Free AIs see the tools for what's asked (with every tool it's about 20,000 tokens a message).
+        ...(model.free ? { offer: offerTools(tools, session, text, opts.context) } : {}),
         signal: run.abort.signal,
         onEvent: (event) => this.emitHost({ type: 'ai', event }),
         transaction: async (label, fn) => {
@@ -1755,3 +1812,5 @@ function catalogLimit(ai: AiProvider): number {
 function asAi(ai: AiProvider | string): AiProvider {
   return typeof ai === 'string' ? { kind: 'claude', apiKey: ai } : ai;
 }
+
+const NO_LOCAL_AI: LocalAiStatus = { supported: false, folder: '', runtimeInstalled: false, installed: [], server: { state: 'stopped' } };

@@ -41,7 +41,7 @@ describe('the AI workspace world tools', () => {
     expect((await run('drop_to_floor', { refs: placed })).data).toBeDefined();
     await run('remove_objects', { refs: [placed[1]] });
     expect(host.references(tavern).some((x) => x.formKey === placed[1])).toBe(false);
-    await expect(run('place_object', { place: 'NoSuchCell', object: misc.formKey })).rejects.toThrow(/list_places/);
+    await expect(run('place_object', { place: 'NoSuchCell', object: misc.formKey })).rejects.toThrow(/There's no place "NoSuchCell"/);
   });
 
   it('dresses and lights a room, and makes its navmesh', async () => {

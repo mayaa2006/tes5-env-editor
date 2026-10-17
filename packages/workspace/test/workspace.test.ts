@@ -518,3 +518,42 @@ describe('damaged load orders', () => {
     expect(ws.search({ sigs: ['STAT'] }).total).toBeGreaterThan(5);
   });
 });
+
+describe('generated files and undo', () => {
+  it('undoes and redoes merged steps that wrote one file twice to the right content, however the disk orders the writes', async () => {
+    const { fs, ws } = await openDemo();
+    const path = `${ws.options.outputDir}/Source/Scripts/QF_Test.psc`;
+    const enc = (t: string) => new TextEncoder().encode(t);
+    // A busy disk: each write takes less time than the one before, so they finish in reverse order.
+    const write = fs.writeFile.bind(fs);
+    let delay = 40;
+    fs.writeFile = async (p: string, d: Uint8Array) => {
+      await new Promise((r) => setTimeout(r, (delay = Math.max(0, delay - 10))));
+      return write(p, d);
+    };
+    const depth = ws.undoDepth;
+    ws.transaction('First', () => ws.trackFileChange({ path, before: null, after: enc('one') }));
+    ws.transaction('Second', () => ws.trackFileChange({ path, before: enc('one'), after: enc('two') }));
+    await write(path, enc('two'));
+    expect(ws.squashUndo(depth, 'Both')).toBe(true);
+    ws.undo();
+    await ws.filesSettled();
+    expect(await fs.exists(path)).toBe(false);
+    ws.redo();
+    await ws.filesSettled();
+    expect(new TextDecoder().decode(await fs.readFile(path))).toBe('two');
+  });
+
+  it("reports a file undo couldn't write when saving, instead of crashing", async () => {
+    const { fs, ws } = await openDemo();
+    const path = `${ws.options.outputDir}/Source/Scripts/QF_Locked.psc`;
+    ws.transaction('Write', () => ws.trackFileChange({ path, before: new TextEncoder().encode('old'), after: new TextEncoder().encode('new') }));
+    fs.writeFile = async () => {
+      throw new Error('the file is locked');
+    };
+    ws.undo();
+    await expect(ws.save()).rejects.toThrow(/couldn't be restored by undo\/redo: the file is locked/);
+    // Reported once; the editor carries on.
+    await expect(ws.filesSettled()).resolves.toBeUndefined();
+  });
+});

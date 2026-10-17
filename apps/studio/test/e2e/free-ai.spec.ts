@@ -31,8 +31,15 @@ for (const size of [
     const dlg = page.getByRole('dialog');
     await dlg.getByTestId('plan-source').fill('Brynja the innkeeper lost her ring. The player finds it in the cellar.');
 
+    // "Free on this PC" offers the built-in AI first; it runs in the Windows app, so the browser demo says so.
+    await dlg.getByTestId('ai-kind-local').click();
+    await expect(dlg.getByTestId('local-kind-builtin')).toHaveAttribute('aria-pressed', 'true');
+    await expect(dlg.getByTestId('local-unsupported')).toContainText('runs in the Windows app');
+    await expect(dlg.getByTestId('plan-quest')).toBeDisabled();
+
     // Ollama not running yet: the steps to set it up are shown.
-    await dlg.getByTestId('ai-kind-ollama').click();
+    await dlg.getByTestId('local-kind-ollama').click();
+    await expect(dlg.getByTestId('ai-kind-local')).toHaveAttribute('aria-pressed', 'true');
     await expect(dlg.getByTestId('ollama-help')).toContainText("Couldn't reach Ollama");
     await expect(dlg.getByTestId('ollama-help')).toContainText('ollama pull');
     await expect(dlg.getByTestId('plan-quest')).toBeDisabled();
@@ -72,11 +79,11 @@ test('plan with a free online service: key link, live model list (1280×800)', a
   page.on('pageerror', (e) => errors.push(e.message));
   const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'authorization, content-type', 'content-type': 'application/json' };
   const chats: any[] = [];
-  await page.route('https://api.groq.com/openai/v1/**', async (route) => {
+  await page.route('https://integrate.api.nvidia.com/v1/**', async (route) => {
     const req = route.request();
     if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
-    if (req.headers().authorization !== 'Bearer gsk_good') return route.fulfill({ status: 401, headers: cors, body: '{"error":"bad key"}' });
-    if (req.url().endsWith('/models')) return route.fulfill({ status: 200, headers: cors, body: JSON.stringify({ data: [{ id: 'openai/gpt-oss-120b' }, { id: 'llama-3.3-70b-versatile' }, { id: 'whisper-large-v3' }] }) });
+    if (req.headers().authorization !== 'Bearer nvapi-good') return route.fulfill({ status: 401, headers: cors, body: '{"error":"bad key"}' });
+    if (req.url().endsWith('/models')) return route.fulfill({ status: 200, headers: cors, body: JSON.stringify({ data: [{ id: 'meta/llama2-70b' }, { id: 'deepseek-ai/deepseek-v4.1-flash' }, { id: 'nvidia/nv-embedqa-mistral-7b-v2' }, { id: 'nvidia/vila' }] }) });
     chats.push(req.postDataJSON());
     return route.fulfill({ status: 200, headers: cors, body: JSON.stringify({ choices: [{ message: { content: JSON.stringify(exampleQuestPlan()) }, finish_reason: 'stop' }] }) });
   });
@@ -88,22 +95,22 @@ test('plan with a free online service: key link, live model list (1280×800)', a
   const dlg = page.getByRole('dialog');
   await dlg.getByTestId('plan-source').fill('Brynja the innkeeper lost her ring.');
   await dlg.getByTestId('ai-kind-openai').click();
-  await dlg.getByTestId('openai-preset').selectOption('groq');
+  await dlg.getByTestId('openai-preset').selectOption('nvidia');
   // The key page is a real link; the API address is explained as not a web page.
-  await expect(dlg.getByTestId('openai-key-link')).toHaveAttribute('href', 'https://console.groq.com/keys');
+  await expect(dlg.getByTestId('openai-key-link')).toHaveAttribute('href', 'https://build.nvidia.com/settings/api-keys');
   await expect(dlg.getByTestId('ai-settings')).toContainText('not a web page');
   // A wrong key is caught before planning.
-  await dlg.getByTestId('openai-key').fill('gsk_bad');
+  await dlg.getByTestId('openai-key').fill('nvapi-bad');
   await dlg.getByTestId('openai-key').blur();
   await expect(dlg.getByTestId('openai-error')).toContainText('rejected the API key');
-  // The right key lists the service's current models (speech models left out).
-  await dlg.getByTestId('openai-key').fill('gsk_good');
+  // The right key lists the service's current models (embedding and vision models left out).
+  await dlg.getByTestId('openai-key').fill('nvapi-good');
   await dlg.getByTestId('openai-key').blur();
   await expect(dlg.getByTestId('openai-found')).toContainText('Key works: 2 model(s)');
-  await expect(dlg.getByTestId('openai-model')).toHaveValue('llama-3.3-70b-versatile');
+  await expect(dlg.getByTestId('openai-model')).toHaveValue('deepseek-ai/deepseek-v4.1-flash');
   if (process.env.SCREENSHOT_DIR) await dlg.screenshot({ path: `${process.env.SCREENSHOT_DIR}/free-online-1280.png` });
   await dlg.getByTestId('plan-quest').click();
   await expect(dlg.getByTestId('plan-review')).toBeVisible();
-  expect(chats[0].model).toBe('llama-3.3-70b-versatile');
+  expect(chats[0].model).toBe('deepseek-ai/deepseek-v4.1-flash');
   expect(errors).toEqual([]);
 });

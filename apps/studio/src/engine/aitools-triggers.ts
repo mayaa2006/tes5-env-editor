@@ -8,6 +8,8 @@ import { z } from 'zod';
 import { isFormKey, type FormKey } from '@tes5/esp';
 import { TRIGGER_EVENTS, WorkspaceError, newTriggerId, type AgentTool, type TriggerAction, type TriggerCondition, type TriggerHost, type TriggerSpec } from '@tes5/workspace';
 import type { EngineHost } from './host';
+import { placedCopy } from './aitools-world';
+import { lookup } from './aitools-lookup';
 
 const Form = (what: string) => z.string().describe(`Editor ID or FormKey of ${what}`);
 const Stage = z.number().int().min(0);
@@ -50,20 +52,26 @@ export function triggerTools(host: EngineHost): AgentTool<any>[] {
     if (!host.ws) throw new WorkspaceError('No game data is open');
     return host.ws;
   };
-  const form = (ref: string, what: string): FormKey => {
-    const r = ref.trim();
-    const key = (isFormKey(r) ? r : ws().byEditorId(r)) as FormKey | undefined;
-    if (!key || !ws().summary(key)) throw new WorkspaceError(`There's no ${what} "${r}". Find it with search_records or place_contents first.`);
-    return key;
-  };
+  const form = (ref: string, what: string): FormKey => lookup(ws(), ref, { what });
   const label = (k: FormKey) => ws().summary(k)?.editorId || ws().summary(k)?.name || k;
 
   /** The object or alias a tool is about, from its object / quest + alias fields. */
-  const target = (i: { object?: string | null; quest?: string | null; alias?: string | null }): { host: TriggerHost; name: string; link: { tab: 'scene' | 'quest'; key: FormKey; label: string } } => {
+  type Target = { host: TriggerHost; name: string; link: { tab: 'scene' | 'quest'; key: FormKey; label: string } };
+  /** What was looked at last in this turn (the tools are made for each turn): a change without one is about it. */
+  let last: Target | undefined;
+  const target = (i: { object?: string | null; quest?: string | null; alias?: string | null }): Target => {
+    const t = findTarget(i);
+    last = t;
+    return t;
+  };
+  const findTarget = (i: { object?: string | null; quest?: string | null; alias?: string | null }): Target => {
+    if (!i.object && !(i.quest && i.alias) && last) return last;
     if (i.object) {
-      const ref = form(i.object, 'placed object');
-      const sig = ws().summary(ref)!.sig;
-      if (sig !== 'REFR' && sig !== 'ACHR') throw new WorkspaceError(`${i.object} isn't a placed object. Triggers go on a placed object (place_contents) or a quest alias.`);
+      const named = form(i.object, 'placed object');
+      const sig0 = ws().summary(named)!.sig;
+      if (sig0 === 'CELL' || sig0 === 'WRLD' || sig0 === 'QUST') throw new WorkspaceError(`${i.object} isn't a placed object. Triggers go on a placed object (place_contents) or a quest alias.`);
+      // A base record (a chest, a character) stands for its placed copy.
+      const ref = placedCopy(host, named, 'placed object');
       const cell = ws().view(ref)?.parent?.cell;
       return { host: { kind: 'ref', ref }, name: label(ref), link: cell ? { tab: 'scene', key: cell, label: `${label(cell)} in World` } : { tab: 'scene', key: ref, label: label(ref) } };
     }
@@ -112,7 +120,7 @@ export function triggerTools(host: EngineHost): AgentTool<any>[] {
 
   const Trigger = {
     name: z.string().nullable().optional().describe('A short name, e.g. "Pull the lever"'),
-    when: z.enum(EVENT_KINDS).describe(TRIGGER_EVENTS.map((e) => `${e.kind}: ${e.label}${e.actorOnly ? ' (characters only)' : ''}`).join('; ')),
+    when: z.enum(EVENT_KINDS).describe(TRIGGER_EVENTS.map((e) => `${e.kind}: ${e.label} (${e.hint.replace(/\.$/, '')})${e.actorOnly ? ', characters only' : ''}`).join('; ')),
     onlyIf: z.array(Condition).nullable().optional().describe('All must be true'),
     then: z.array(Action).min(1).describe('Done in order'),
     once: z.boolean().nullable().optional().describe('Only the first time'),

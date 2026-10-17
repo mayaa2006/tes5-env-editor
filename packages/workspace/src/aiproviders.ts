@@ -11,11 +11,17 @@
  */
 import type { BetaMessageStreamParams } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import { WorkspaceError } from './engine';
+import { localModel } from './localai';
 
 export type AiProvider =
   | { kind: 'claude'; apiKey: string }
   | { kind: 'ollama'; url?: string; model: string }
-  | { kind: 'openai'; url: string; apiKey?: string; model: string };
+  | { kind: 'openai'; url: string; apiKey?: string; model: string; label?: string }
+  /** The built-in AI (localai.ts): the host starts its server and talks to it as an OpenAI-style service. */
+  | { kind: 'local'; model: string };
+
+/** The AIs requests go to directly (the built-in one becomes an OpenAI-style one once its server runs). */
+export type ChatProvider = Extract<AiProvider, { kind: 'ollama' | 'openai' }>;
 
 export const OLLAMA_URL = 'http://localhost:11434';
 
@@ -26,9 +32,11 @@ export const OLLAMA_URL = 'http://localhost:11434';
  * app asks the service for its current models (free models come and go).
  */
 export const OPENAI_PRESETS: { id: string; label: string; url: string; model: string; keyUrl?: string; note: string }[] = [
-  { id: 'gemini', label: 'Google Gemini (free tier)', url: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-3.8-flash', keyUrl: 'https://aistudio.google.com/apikey', note: 'Sign in with a Google account and press "Create API key". Free, with daily limits.' },
-  { id: 'groq', label: 'Groq (free tier)', url: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile', keyUrl: 'https://console.groq.com/keys', note: 'Make a free account and press "Create API Key". Fast, with per-minute and daily limits.' },
-  { id: 'openrouter', label: 'OpenRouter (free models)', url: 'https://openrouter.ai/api/v1', model: '', keyUrl: 'https://openrouter.ai/settings/keys', note: 'Make a free account and create a key. Only models ending in ":free" are listed; they change often.' },
+  { id: 'gemini', label: 'Google Gemini (free tier)', url: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-3.8-flash', keyUrl: 'https://aistudio.google.com/apikey', note: 'Sign in with a Google account and press "Create API key". Free, with daily limits (shown in AI Studio). Outside the EU, UK and Switzerland, Google may use free-tier requests to improve its products.' },
+  { id: 'nvidia', label: 'NVIDIA (free for developers)', url: 'https://integrate.api.nvidia.com/v1', model: 'deepseek-ai/deepseek-v4.1-flash', keyUrl: 'https://build.nvidia.com/settings/api-keys', note: 'Join the free NVIDIA Developer Program, then generate an API key. Large open models (DeepSeek, Kimi, GLM, Gemma, gpt-oss), about 40 requests a minute. Meant for trying things, not for running a service.' },
+  { id: 'mistral', label: 'Mistral (free plan)', url: 'https://api.mistral.ai/v1', model: 'mistral-small-latest', keyUrl: 'https://console.mistral.ai/api-keys', note: 'Make an account (it asks for a phone number), choose the free Experiment plan and create a key. On the free plan, Mistral may use your requests to train its models.' },
+  { id: 'openrouter', label: 'OpenRouter (free models)', url: 'https://openrouter.ai/api/v1', model: '', keyUrl: 'https://openrouter.ai/settings/keys', note: 'Make a free account and create a key. Only models ending in ":free" are listed; they change often. 50 requests a day (1,000 once you have bought $10 of credit); the providers may log what you send.' },
+  { id: 'groq', label: 'Groq (free tier)', url: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-120b', keyUrl: 'https://console.groq.com/keys', note: 'Make a free account and press "Create API Key". Very fast, but the free tier allows only about 8,000 tokens a minute, which one AI-tab message or quest plan can go over: best for short questions.' },
   { id: 'lmstudio', label: 'LM Studio (on this computer)', url: 'http://localhost:1234/v1', model: '', keyUrl: 'https://lmstudio.ai', note: 'Install LM Studio, download a model in it and start its local server (Developer tab). No key needed.' },
 ];
 
@@ -36,14 +44,15 @@ export const OPENAI_PRESETS: { id: string; label: string; url: string; model: st
 export function aiName(p: AiProvider | undefined): string {
   if (!p || p.kind === 'claude') return 'Claude';
   if (p.kind === 'ollama') return `${p.model || 'Ollama'}${p.model ? ' (Ollama)' : ''}`;
-  return p.model || hostOf(p.url) || 'the AI';
+  if (p.kind === 'local') return `${localModel(p.model)?.label ?? 'The built-in AI'} (on this PC)`;
+  return p.label || p.model || hostOf(p.url) || 'the AI';
 }
 
 /** Is it set up enough to try? */
 export function aiReady(p: AiProvider | undefined): boolean {
   if (!p) return false;
   if (p.kind === 'claude') return !!p.apiKey.trim();
-  if (p.kind === 'ollama') return !!p.model.trim();
+  if (p.kind === 'ollama' || p.kind === 'local') return !!p.model.trim();
   return !!p.url.trim() && !!p.model.trim();
 }
 
@@ -61,10 +70,94 @@ interface Reply {
   stop_reason: string | null;
 }
 
-type Fetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; json(): Promise<any>; text(): Promise<string> }>;
+type Fetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<ChatResponse>;
+
+/** What the AI code reads from a response (a fetch Response, or a test's stand-in). */
+export interface ChatResponse {
+  ok: boolean;
+  status: number;
+  json(): Promise<any>;
+  text(): Promise<string>;
+  headers?: { get(name: string): string | null };
+  body?: ReadableStream<Uint8Array> | null;
+}
+
+/**
+ * A chat answer, streamed or not, in the shape of the non-streamed one:
+ * OpenAI-style `{choices: [{message, finish_reason}], usage}` or Ollama's
+ * `{message, done_reason, prompt_eval_count, eval_count}`.
+ *
+ * Requests are streamed so the answer starts at once: a server that sends
+ * nothing until it's done (llama.cpp, Ollama) can take minutes on a
+ * processor, and fetch gives up on a server that's silent for 5 minutes.
+ * Services that ignore the request to stream answer in plain JSON, which is
+ * read as it is.
+ */
+export async function readChat(res: ChatResponse, kind: 'openai' | 'ollama', onText?: (delta: string) => void): Promise<any> {
+  const type = res.headers?.get('content-type') ?? '';
+  if (!res.body || !/event-stream|ndjson/i.test(type)) return res.json();
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let content = '';
+  let finish: string | null = null;
+  let usage: unknown;
+  const calls: { id?: string; type?: string; function: { name: string; arguments: string } }[] = [];
+  let ollama: Record<string, any> = {};
+  const ollamaCalls: unknown[] = [];
+  const line = (l: string) => {
+    if (kind === 'openai') {
+      const m = /^data:\s*(.*)$/.exec(l);
+      if (!m || m[1] === '[DONE]' || !m[1]) return;
+      const j = JSON.parse(m[1]);
+      if (j.usage) usage = j.usage;
+      const c = j.choices?.[0];
+      if (!c) return;
+      if (c.finish_reason) finish = c.finish_reason;
+      const d = c.delta ?? {};
+      if (typeof d.content === 'string' && d.content) {
+        content += d.content;
+        onText?.(d.content);
+      }
+      for (const t of d.tool_calls ?? []) {
+        const at = typeof t.index === 'number' ? t.index : calls.length;
+        const cur = (calls[at] ??= { function: { name: '', arguments: '' } });
+        if (t.id) cur.id = t.id;
+        if (t.type) cur.type = t.type;
+        if (t.function?.name) cur.function.name += t.function.name;
+        if (typeof t.function?.arguments === 'string') cur.function.arguments += t.function.arguments;
+        else if (t.function?.arguments) cur.function.arguments = JSON.stringify(t.function.arguments);
+      }
+    } else {
+      if (!l.trim()) return;
+      const j = JSON.parse(l);
+      if (j.error) throw new WorkspaceError(String(j.error));
+      const piece = j.message?.content;
+      if (typeof piece === 'string' && piece) {
+        content += piece;
+        onText?.(piece);
+      }
+      for (const t of j.message?.tool_calls ?? []) ollamaCalls.push(t);
+      if (j.done) ollama = j;
+    }
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (value) buf += decoder.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      line(buf.slice(0, nl).replace(/\r$/, ''));
+      buf = buf.slice(nl + 1);
+    }
+    if (done) break;
+  }
+  if (buf.trim()) line(buf.trim());
+  if (kind === 'openai') return { choices: [{ message: { content, ...(calls.length ? { tool_calls: calls.filter(Boolean) } : {}) }, finish_reason: finish }], ...(usage ? { usage } : {}) };
+  return { ...ollama, message: { role: 'assistant', content, ...(ollamaCalls.length ? { tool_calls: ollamaCalls } : {}) } };
+}
 
 /** Turn the planner's Anthropic-format request into one chat request for Ollama or an OpenAI-style service. */
-export function chatSend(p: Exclude<AiProvider, { kind: 'claude' }>, fetchImpl: Fetch = globalThis.fetch as unknown as Fetch): (params: BetaMessageStreamParams) => Promise<Reply> {
+export function chatSend(p: ChatProvider, fetchImpl: Fetch = globalThis.fetch as unknown as Fetch): (params: BetaMessageStreamParams) => Promise<Reply> {
   return async (params) => {
     const schema = (params.output_config?.format as { schema?: unknown } | undefined)?.schema;
     const system = [
@@ -94,7 +187,7 @@ export function chatSend(p: Exclude<AiProvider, { kind: 'claude' }>, fetchImpl: 
         (err as WorkspaceError & { status?: number }).status = res.status;
         throw err;
       }
-      return res.json();
+      return readChat(res, p.kind === 'ollama' ? 'ollama' : 'openai');
     };
     if (p.kind === 'ollama') {
       // Ollama's own API: the JSON schema constrains the answer. Ollama cuts a prompt that doesn't fit its
@@ -109,7 +202,7 @@ export function chatSend(p: Exclude<AiProvider, { kind: 'claude' }>, fetchImpl: 
       const r = await call(`${base}/api/chat`, {
         model: p.model,
         messages,
-        stream: false,
+        stream: true,
         format: schema ?? 'json',
         options: { num_ctx: contextWindow(promptTokens, max), temperature: 0.3 },
       });
@@ -117,7 +210,7 @@ export function chatSend(p: Exclude<AiProvider, { kind: 'claude' }>, fetchImpl: 
     }
     const url = `${p.url.replace(/\/+$/, '')}/chat/completions`;
     const headers: Record<string, string> = p.apiKey ? { authorization: `Bearer ${p.apiKey}` } : {};
-    const base = { model: p.model, messages, temperature: 0.3, max_tokens: Math.min(params.max_tokens ?? 16000, 32000) };
+    const base = { model: p.model, messages, temperature: 0.3, max_tokens: Math.min(params.max_tokens ?? 16000, 32000), ...streamFields(p.url) };
     let r;
     try {
       r = await call(url, { ...base, response_format: schema ? { type: 'json_schema', json_schema: { name: 'answer', schema, strict: false } } : { type: 'json_object' } }, headers);
@@ -129,6 +222,11 @@ export function chatSend(p: Exclude<AiProvider, { kind: 'claude' }>, fetchImpl: 
     const choice = r?.choices?.[0];
     return { content: [{ type: 'text', text: cleanJson(String(choice?.message?.content ?? '')) }], stop_reason: choice?.finish_reason === 'length' ? 'max_tokens' : 'end_turn' };
   };
+}
+
+/** Ask to stream (see readChat); servers on this computer are also asked for the token counts at the end. */
+export function streamFields(url: string): Record<string, unknown> {
+  return { stream: true, ...(/\/\/(localhost|127\.0\.0\.1)[:/]/.test(url) ? { stream_options: { include_usage: true } } : {}) };
 }
 
 /** Room left for the answer: a whole quest plan is a few thousand tokens. */
@@ -233,11 +331,13 @@ export async function serviceModels(p: { url: string; apiKey?: string }, fetchIm
   const j = await res.json();
   const list = ((j?.data ?? j?.models ?? []) as { id?: string; name?: string; supported_parameters?: string[] }[])
     .map((m) => ({ id: String(m.id ?? m.name ?? '').replace(/^models\//, ''), params: m.supported_parameters ?? [] }))
-    .filter((m) => m.id && !/embed|tts|whisper|transcri|speech|audio|image|imagen|veo|guard|moderation|safety|aqa/i.test(m.id));
+    .filter((m) => m.id && !/embed|tts|whisper|transcri|speech|audio|image|imagen|veo|guard|moderation|safety|aqa|reward|parse|clip|vila|neva|kosmos|deplot|fuyu|vision|detector|calibration|translate|retriever|diffusion|cosmos|topic-control/i.test(m.id));
   const openrouter = /openrouter\.ai/i.test(base);
   const usable = openrouter ? list.filter((m) => m.id.endsWith(':free')) : list;
+  // Current open families known to use tools well come first on services that list many old models too (NVIDIA).
+  const known = /deepseek-v4|kimi-k2|glm-5|nemotron-3|gemma-4|gpt-oss|qwen3|mistral-(small|medium|large)-latest/i;
   const score = (m: { id: string; params: string[] }) =>
-    (m.params.includes('structured_outputs') ? 4 : 0) + (m.params.includes('response_format') ? 2 : 0) + (/gemini/i.test(m.id) && /flash/i.test(m.id) && !/lite|preview|exp|thinking/i.test(m.id) ? 1 : 0);
+    (m.params.includes('structured_outputs') ? 4 : 0) + (m.params.includes('response_format') ? 2 : 0) + (known.test(m.id) ? 2 : 0) + (/gemini/i.test(m.id) && /flash/i.test(m.id) && !/lite|preview|exp|thinking/i.test(m.id) ? 1 : 0);
   const version = (id: string) => Number(/(\d+(?:\.\d+)?)/.exec(id)?.[1] ?? 0);
   return usable.sort((a, b) => score(b) - score(a) || version(b.id) - version(a.id) || a.id.localeCompare(b.id)).map((m) => m.id);
 }

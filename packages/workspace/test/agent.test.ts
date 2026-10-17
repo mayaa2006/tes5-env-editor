@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { ChatAgentModel, ClaudeAgentModel, claudeMessages, newAgentSession, runAgentTurn, sessionTitle, type AgentEvent, type AgentModel, type AgentReply, type AgentTool } from '../src';
+import { ChatAgentModel, ClaudeAgentModel, claudeMessages, newAgentSession, runAgentTurn, sessionTitle, textCalls, type AgentEvent, type AgentModel, type AgentReply, type AgentTool } from '../src';
 
 /** A model that answers from a script, recording what it was sent. */
 function scripted(replies: AgentReply[], free = false): AgentModel & { seen: { messages: unknown[] }[] } {
@@ -59,6 +59,78 @@ describe('the AI workspace loop', () => {
     expect(a.content).toContain('It takes:');
     expect(b.content).toBe('There is no tool called "nope".');
     expect(c).toMatchObject({ status: 'error', content: 'Failed: it broke' });
+  });
+
+  it("doesn't run a call again that already failed this turn, and says so", async () => {
+    log.length = 0;
+    const model = scripted([
+      { text: '', calls: [call('broken', {}, 'a')], stop: 'tools' },
+      { text: '', calls: [call('broken', {}, 'b'), call('look', { what: 'x' }, 'c')], stop: 'tools' },
+      { text: '', calls: [call('look', { what: 'x' }, 'd')], stop: 'tools' },
+    ]);
+    const s = newAgentSession();
+    await runAgentTurn(model, s, { text: 'x' }, tools);
+    const second = (s.messages[4] as any).results;
+    expect(second[0]).toMatchObject({ status: 'error' });
+    expect(second[0].content).toMatch(/already made exactly this call this turn and it failed:\nFailed: it broke\nDon't repeat it/);
+    // A reading call that worked isn't repeated either: its result is already there.
+    expect(log).toEqual(['look x undefined']);
+    expect((s.messages[6] as any).results[0].content).toMatch(/already made exactly this call this turn, and its result is above/);
+    // After a change, the same look is run again.
+    log.length = 0;
+    const again = scripted([
+      { text: '', calls: [call('look', { what: 'x' }, 'a')], stop: 'tools' },
+      { text: '', calls: [call('change', { to: 'y' }, 'b')], stop: 'tools' },
+      { text: '', calls: [call('look', { what: 'x' }, 'c')], stop: 'tools' },
+    ]);
+    await runAgentTurn(again, newAgentSession(), { text: 'x' }, tools);
+    expect(log).toEqual(['look x undefined', 'change y', 'look x undefined']);
+  });
+
+  it('shows only the offered tools, adds a topic when asked, and still runs any tool by name', async () => {
+    log.length = 0;
+    const seenTools: string[][] = [];
+    const replies: AgentReply[] = [
+      { text: '', calls: [call('more_tools', { topic: 'changes' }, 'a')], stop: 'tools' },
+      { text: '', calls: [call('change', { to: 'x' }, 'b'), call('broken', {}, 'c')], stop: 'tools' },
+      { text: 'Done.', calls: [], stop: 'end' },
+    ];
+    const model: AgentModel = { name: 'Small', free: true, provider: 'test', reply: async (req) => (seenTools.push(req.tools.map((t) => t.name)), replies.shift()!) };
+    const s = newAgentSession();
+    const r = await runAgentTurn(model, s, { text: 'x' }, tools, { offer: { tools: [tools[0]!], topics: { changes: { about: 'changing things', tools: [tools[1]!] } } } });
+    expect(seenTools[0]).toEqual(['look', 'more_tools']);
+    expect(seenTools[1]).toEqual(['look', 'change', 'more_tools']);
+    expect((s.messages[2] as any).results[0].content).toBe('You can now also use: change.');
+    // "broken" was never offered, but a model that knows its name can still use it.
+    expect((s.messages[4] as any).results.map((x: any) => x.status)).toEqual(['done', 'error']);
+    expect(r.changes).toEqual(['Change to x']);
+  });
+
+  it("doesn't make the same change twice in a turn", async () => {
+    log.length = 0;
+    const model = scripted([
+      { text: '', calls: [call('change', { to: 'x' }, 'a')], stop: 'tools' },
+      { text: '', calls: [call('change', { to: 'x' }, 'b'), call('change', { to: 'y' }, 'c')], stop: 'tools' },
+    ]);
+    const s = newAgentSession();
+    await runAgentTurn(model, s, { text: 'x' }, tools);
+    expect(log).toEqual(['change x', 'change y']);
+    expect((s.messages[4] as any).results[0].content).toMatch(/already made this turn/);
+    // A tool where the same call does more (placing another copy) can repeat.
+    log.length = 0;
+    const place: AgentTool = { ...tools[1]!, name: 'place', adds: true };
+    const twice = scripted([{ text: '', calls: [call('place', { to: 'x' }, 'a')], stop: 'tools' }, { text: '', calls: [call('place', { to: 'x' }, 'b')], stop: 'tools' }]);
+    await runAgentTurn(twice, newAgentSession(), { text: 'x' }, [place]);
+    expect(log).toEqual(['change x', 'change x']);
+  });
+
+  it('ends a turn that keeps repeating the same calls', async () => {
+    const same = () => ({ text: '', calls: [call('look', { what: 'x' }, `c${Math.random()}`)], stop: 'tools' as const });
+    const model = scripted([same(), same(), same(), same(), same(), same(), same()], true);
+    const r = await runAgentTurn(model, newAgentSession(), { text: 'x' }, tools);
+    expect(r.error).toMatch(/kept repeating the same calls/);
+    // One look, three warnings, then the stop: not all ten rounds.
+    expect(model.seen.length).toBe(5);
   });
 
   it('makes each change one labelled step, asks first when told to, and lists what changed', async () => {
@@ -184,6 +256,38 @@ describe('talking to a free AI', () => {
     };
     return { calls, fetch };
   }
+
+  it('mends a number past its limit and an empty list where none is meant', async () => {
+    log.length = 0;
+    const shape: AgentTool = { name: 'shape', description: '', group: 'world', writes: false, input: z.object({ width: z.number().min(64).max(4096).nullable().optional(), points: z.array(z.number()).min(1).nullable().optional() }), summary: () => 'Shape', run: (i) => (log.push(JSON.stringify(i)), { data: 'ok' }) };
+    const model = scripted([{ text: '', calls: [call('shape', { width: 5, points: [] }, 'a'), call('shape', { width: 99999 }, 'b')], stop: 'tools' }]);
+    const s = newAgentSession();
+    await runAgentTurn(model, s, { text: 'x' }, [shape]);
+    expect(log).toEqual(['{"width":64,"points":null}', '{"width":4096}']);
+  });
+
+  it('takes tool calls a model wrote out as text', () => {
+    const r = textCalls('Let me look.\n<tool_call>\n{"name": "look", "arguments": {"what": "mead"}}\n</tool_call>\n<tool_call>{"name": "nope", "arguments": {}}</tool_call>', tools);
+    expect(r!.calls.map((c) => [c.name, c.input])).toEqual([['look', { what: 'mead' }]]);
+    // An unknown tool stays as text; the call that was taken is removed from it.
+    expect(r!.text).toBe('Let me look.\n\n<tool_call>{"name": "nope", "arguments": {}}</tool_call>');
+    expect(textCalls('No calls here.', tools)).toBeNull();
+  });
+
+  it("calls the page's fetch as a plain function, as browsers require", async () => {
+    const real = globalThis.fetch;
+    // Like a browser: fetch run as a method of another object fails ("Illegal invocation").
+    globalThis.fetch = function (this: unknown) {
+      if (this !== undefined && this !== globalThis) throw new TypeError('Illegal invocation');
+      return Promise.resolve(new Response(JSON.stringify({ choices: [{ message: { content: 'Hi.' }, finish_reason: 'stop' }] }), { status: 200 }));
+    } as typeof fetch;
+    try {
+      const m = new ChatAgentModel({ kind: 'openai', url: 'http://127.0.0.1:1/v1', model: 'x' });
+      expect((await m.reply({ system: 's', messages: [{ role: 'user', text: 'hi' }], tools })).text).toBe('Hi.');
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
 
   it('uses function calling on OpenAI-style services and sends results as tool messages', async () => {
     const { calls, fetch } = server({ json: { choices: [{ message: { content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'look', arguments: '{"what":"inns"}' } }] }, finish_reason: 'tool_calls' }] } }, { json: { choices: [{ message: { content: 'Two inns.' }, finish_reason: 'stop' }] } });

@@ -1700,3 +1700,20 @@ table.grid tr.diff td {
 .ai-usage {
   white-space: nowrap;
 }
+
+/* The built-in AI's model list (Settings → AI → Free on this PC). */
+.local-model {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.local-model.selected {
+  border-color: var(--accent);
+}
+.local-model progress {
+  height: 8px;
+  accent-color: var(--accent);
+}

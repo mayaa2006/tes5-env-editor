@@ -13,6 +13,15 @@ import { readSetsStage, readWhen, writeSetsStage, writeWhen, type Item, type Whe
 import type { QuestToolContext } from './aitools-quest';
 
 const EMOTION_NAMES = Object.values(EMOTIONS).map((e) => e.toLowerCase());
+/** Everyday words for the game's emotions ("angry" for anger…). */
+const EMOTION_WORDS: Record<string, string> = { angry: 'anger', annoyed: 'anger', grumpy: 'anger', mad: 'anger', disgusted: 'disgust', afraid: 'fear', scared: 'fear', fearful: 'fear', sad: 'sad', sadness: 'sad', unhappy: 'sad', happiness: 'happy', glad: 'happy', cheerful: 'happy', surprised: 'surprise', shocked: 'surprise', puzzled: 'puzzled', confused: 'puzzled', calm: 'neutral', normal: 'neutral' };
+
+function emotionIndex(word: string): number {
+  const w = word.trim().toLowerCase();
+  const i = EMOTION_NAMES.indexOf(EMOTION_WORDS[w] ?? w);
+  if (i < 0) throw new WorkspaceError(`"${word}" isn't an emotion the game has. Use one of: ${EMOTION_NAMES.join(', ')}.`);
+  return i;
+}
 
 function whenText(w: When): string {
   switch (w.kind) {
@@ -42,8 +51,27 @@ export function dialogueTools(host: EngineHost, ctx: QuestToolContext): AgentToo
     const r = ref.trim();
     const key = (isFormKey(r) ? r : ws().byEditorId(r)) as FormKey | undefined;
     const v = key ? ws().view(key) : undefined;
-    if (!key || v?.sig !== sig) throw new WorkspaceError(`${r} isn't ${sig === 'INFO' ? 'a dialogue line (response)' : sig === 'DIAL' ? 'a player line (topic)' : 'a quest'}. Use the ids from list_dialogue_lines.`);
-    return key;
+    if (key && v?.sig === sig) return key;
+    // Small models give a line's words instead of its id: find it in the quests being edited.
+    const found = sig === 'QUST' ? null : byWords(r);
+    if (found?.[sig === 'INFO' ? 'infos' : 'topics'].length === 1) return found[sig === 'INFO' ? 'infos' : 'topics'][0]!;
+    if (sig === 'INFO' && found && !found.infos.length && found.topics.length === 1) throw new WorkspaceError(`"${r}" is what the player says (topic ${found.topics[0]}). Reword it with edit_player_line, or change one of the answers to it (list_dialogue_lines gives their ids).`);
+    throw new WorkspaceError(`${r} isn't ${sig === 'INFO' ? 'a dialogue line (response)' : sig === 'DIAL' ? 'a player line (topic)' : 'a quest'}. Use the ids from list_dialogue_lines.`);
+  };
+  /** Lines and player lines with these words, in the quests of the plugin being edited (and those changed this turn). */
+  const byWords = (text: string) => {
+    const norm = (t: string) => t.toLowerCase().replace(/^(player|npc|\w+)\s*:\s*/, '').replace(/[^a-z0-9]+/g, ' ').trim();
+    const want = norm(text);
+    if (want.length < 4) return null;
+    const quests = new Set<FormKey>([...ctx.touched, ...ws().search({ sigs: ['QUST'], plugin: ws().activeName, limit: 500 }).items.map((q) => q.formKey)]);
+    const infos: FormKey[] = [];
+    const topics: FormKey[] = [];
+    for (const q of quests)
+      for (const t of host.quest(q).topics) {
+        if (t.text && norm(t.text) === want) topics.push(t.formKey);
+        for (const i of t.infos) if (i.responses.some((x) => norm(x.text) === want || (want.length > 12 && norm(x.text).includes(want)))) infos.push(i.formKey);
+      }
+    return { infos, topics };
   };
   /** The quest a line belongs to (its topic's quest). */
   const questOfInfo = (info: FormKey): FormKey => {
@@ -97,7 +125,7 @@ export function dialogueTools(host: EngineHost, ctx: QuestToolContext): AgentToo
       input: z.object({
         line: z.string().describe('The line id (an INFO FormKey)'),
         says: z.array(z.string()).min(1).nullable().optional(),
-        emotion: z.enum(EMOTION_NAMES as [string, ...string[]]).nullable().optional(),
+        emotion: z.string().nullable().optional().describe(`How it's said: ${EMOTION_NAMES.join(', ')}`),
         when: z.object({ kind: z.enum(['always', 'at', 'from', 'before', 'thisDone']), stage: z.number().int().nullable().optional() }).nullable().optional(),
         movesQuestTo: z.number().int().nullable().optional().describe('A stage; null to stop it moving the quest. Leave out to keep it as it is'),
         endsConversation: z.boolean().nullable().optional(),
@@ -108,7 +136,7 @@ export function dialogueTools(host: EngineHost, ctx: QuestToolContext): AgentToo
         const quest = questOfInfo(info);
         ctx.touched.add(quest);
         if (i.when && i.when.kind !== 'always' && i.when.kind !== 'thisDone' && typeof i.when.stage !== 'number') throw new WorkspaceError(`“${i.when.kind}” needs a stage`);
-        const emotion = i.emotion ? EMOTION_NAMES.indexOf(i.emotion.toLowerCase()) : null;
+        const emotion = i.emotion ? emotionIndex(i.emotion) : null;
         ws().editRecord(
           info,
           (d: any) => {

@@ -1,3 +1,4 @@
+import type { FormKey } from '@tes5/esp';
 import { describe, expect, it } from 'vitest';
 import { MemoryFileSystem, createDemoData, type AgentModel, type AgentReply } from '@tes5/workspace';
 import { DEMO_GAME_DIR } from '../../src/engine/constants';
@@ -31,11 +32,39 @@ describe('the AI workspace tools on the demo data', () => {
     expect(found.results[0]).toMatchObject({ editorId: 'DemoInnkeeper', type: 'NPC_' });
     // Every word must match, in any order.
     expect(((await run('search_records', { query: 'tavern demo', kind: 'place' })).data as any).results.some((r: any) => r.editorId === 'DemoTavern')).toBe(true);
-    await expect(run('search_records', { query: 'x', kind: 'spaceship' })).rejects.toThrow(/Unknown kind/);
+    // Everyday words and plurals are understood; an unknown kind searches everything and says so.
+    expect(((await run('search_records', { query: 'tavern', kind: 'cell' })).data as any).results.some((r: any) => r.editorId === 'DemoTavern')).toBe(true);
+    expect(((await run('search_records', { query: 'innkeeper', kind: 'NPCs' })).data as any).results[0].editorId).toBe('DemoInnkeeper');
+    expect(((await run('search_records', { query: 'tankard', kind: 'item' })).data as any).results[0].editorId).toBe('DemoTankard');
+    const any = (await run('search_records', { query: 'innkeeper', kind: 'spaceship' })).data as any;
+    expect(any.note).toMatch(/isn't a kind I know/);
+    expect(any.results[0].editorId).toBe('DemoInnkeeper');
+    // Nothing of that kind: what the words match instead, and where to look for who's in a place.
+    const none = (await run('search_records', { query: 'tavern', kind: 'character' })).data as any;
+    expect(none.total).toBe(0);
+    expect(none.note).toMatch(/place_contents/);
+    expect(none.otherKinds[0].editorId).toBe('DemoTavern');
+    // The kind asked for has only near misses ("Bottle of Mead" as a misc item): records of other kinds with the name are offered too.
+    host.createPlugin('Extra.esp', {});
+    const potion = host.createBlankRecord('ALCH', 'TestMeadPotion') as FormKey;
+    host.ws!.editRecord(potion, (d: any) => void (d.name = 'Mead'), 'Name it');
+    const near = (await run('search_records', { query: 'mead', kind: 'misc' })).data as any;
+    expect(near.results.map((r: any) => r.editorId)).toEqual(['DemoBottle']);
+    expect(near.alsoOtherKinds.map((r: any) => r.editorId)).toContain('TestMeadPotion');
+    // No record has every word: the ones with most of them.
+    const some = (await run('search_records', { query: 'mead bottle flagon', kind: 'item' })).data as any;
+    expect(some.note).toMatch(/Nothing has all the words/);
+    expect(some.results[0].editorId).toBe('DemoBottle');
+    // place_contents takes kinds in words too; words that aren't kinds are explained.
+    const people = (await run('place_contents', { place: 'DemoTavern', kinds: ['characters'] })).data as any;
+    expect(Object.keys(people)).toContain('NPC_');
+    expect(Object.keys(people)).not.toContain('CONT');
+    const tables = (await run('place_contents', { place: 'DemoTavern', kinds: ['TABLE'] })).data as any;
+    expect(tables.note).toMatch(/"TABLE" isn't a kind of record.*place_object puts items on them/);
     const rec = await run('read_record', { form: 'DemoInnkeeper' });
     expect((rec.data as any).editorId).toBe('DemoInnkeeper');
     expect(rec.link).toMatchObject({ tab: 'records' });
-    await expect(run('read_record', { form: 'NoSuchThing' })).rejects.toThrow(/Search for it first/);
+    await expect(run('read_record', { form: 'NoSuchThing' })).rejects.toThrow(/There's no record "NoSuchThing".*search_records finds them/);
     expect(((await run('load_order', {})).data as any).plugins[0].name).toBe('DemoWorld.esm');
     const places = (await run('list_places', { query: 'tavern', interiorOnly: true })).data as any;
     expect(places.places[0].editorId).toBe('DemoTavern');

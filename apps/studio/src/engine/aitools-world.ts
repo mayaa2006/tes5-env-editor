@@ -8,12 +8,33 @@ import { z } from 'zod';
 import { isFormKey, type FormKey } from '@tes5/esp';
 import { CELL_MOODS, CLUTTER_THEMES, Placer, WorkspaceError, emptyPlan, validatePlan, type AgentTool, type CellMood, type ClutterTheme } from '@tes5/workspace';
 import type { EngineHost } from './host';
+import { lookup } from './aitools-lookup';
 
 const Place = z.string().describe('Editor ID or FormKey of the cell (from list_places)');
 const Refs = z.array(z.string()).min(1).describe('Placed objects: reference FormKeys from place_contents');
 
 /** Base objects that are carried items (they go on tables and shelves rather than the floor). */
 const ITEM_SIGS = new Set(['MISC', 'WEAP', 'ARMO', 'BOOK', 'ALCH', 'INGR', 'KEYM', 'SLGM', 'AMMO', 'SCRL', 'APPA']);
+
+/**
+ * A placed object for a record the AI named: a reference as it is, or the one
+ * placed copy of a base record (a chest, a character…). Several copies are
+ * listed with their cells so the AI can pick; none is an error.
+ */
+export function placedCopy(host: EngineHost, key: FormKey, what = 'object'): FormKey {
+  const ws = host.ws!;
+  const sig = ws.summary(key)?.sig;
+  if (sig === 'REFR' || sig === 'ACHR') return key;
+  const copies = (host.findReferences(key, true) as unknown as { formKey: FormKey; sig: string }[]).filter((r) => (r.sig === 'REFR' || r.sig === 'ACHR') && (ws.view(r.formKey)?.data as { base?: FormKey } | undefined)?.base === key);
+  const name = ws.summary(key)?.editorId ?? key;
+  if (copies.length === 1) return copies[0]!.formKey;
+  if (!copies.length) throw new WorkspaceError(`${name} isn't placed anywhere, so there's no ${what} to use. Place it first (place_object), or pick a placed one (place_contents lists a cell's objects).`);
+  const where = copies.slice(0, 12).map((c) => {
+    const cell = ws.view(c.formKey)?.parent?.cell;
+    return `${c.formKey} in ${cell ? (ws.summary(cell)?.editorId ?? cell) : 'the world'}`;
+  });
+  throw new WorkspaceError(`${name} is placed ${copies.length} times; say which one: ${where.join('; ')}${copies.length > 12 ? '…' : ''}.`);
+}
 
 export function worldTools(host: EngineHost): AgentTool<any>[] {
   const ws = () => {
@@ -22,8 +43,11 @@ export function worldTools(host: EngineHost): AgentTool<any>[] {
   };
   const resolve = (ref: string, what: string, sigs?: string[]): FormKey => {
     const r = ref.trim();
-    const key = (isFormKey(r) ? r : ws().byEditorId(r)) as FormKey | undefined;
-    const sig = key ? ws().summary(key)?.sig : undefined;
+    // A base record where a placed one is wanted is looked up as any record, then swapped for its placed copy.
+    const key = lookup(ws(), r, { what, ...(sigs && !sigs.includes('REFR') ? { sigs } : {}) });
+    const sig = ws().summary(key)?.sig;
+    // A base record where a placed one is wanted: its placed copy.
+    if (key && sig && sigs?.includes('REFR') && !sigs.includes(sig)) return placedCopy(host, key, what);
     if (!key || !sig || (sigs && !sigs.includes(sig))) throw new WorkspaceError(`There's no ${what} "${r}". Find it with ${what === 'place' ? 'list_places' : 'search_records or place_contents'} first.`);
     return key;
   };
@@ -71,6 +95,7 @@ export function worldTools(host: EngineHost): AgentTool<any>[] {
       name: 'place_object',
       group: 'world',
       writes: true,
+      adds: true,
       description:
         "Place objects in a cell: an item (on a table, a shelf, or by what 'where' names), or furniture, a container, a light, a static or a character (on open floor, or next to what 'where' names, e.g. \"by the fire\", \"behind the bar\"). They're dropped onto the surface below.",
       input: z.object({ place: Place, object: z.string().describe('Editor ID or FormKey of the base object to place (search_records)'), where: z.string().nullable().optional().describe('Next to or on what, in words'), count: z.number().int().min(1).max(20).nullable().optional() }),
@@ -103,6 +128,7 @@ export function worldTools(host: EngineHost): AgentTool<any>[] {
       name: 'move_objects',
       group: 'world',
       writes: true,
+      adds: true,
       description: 'Move and/or turn placed objects: by an offset in game units (about 70 units = 1 m; z is up) and a turn in degrees, then drop them onto the surface below unless told not to.',
       input: z.object({ refs: Refs, offset: z.object({ x: z.number(), y: z.number(), z: z.number() }).nullable().optional(), turnDegrees: z.number().nullable().optional(), drop: z.boolean().nullable().optional() }),
       summary: (i) => `Move ${i.refs.length} object${i.refs.length === 1 ? '' : 's'}`,
@@ -131,6 +157,7 @@ export function worldTools(host: EngineHost): AgentTool<any>[] {
       name: 'dress_room',
       group: 'world',
       writes: true,
+      adds: true,
       description: `Fill a room with clutter that fits its use, on its tables and along its floors: ${Object.entries(CLUTTER_THEMES)
         .map(([id, t]) => `${id} (${t.label})`)
         .join(', ')}.`,

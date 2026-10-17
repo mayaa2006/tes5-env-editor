@@ -61,6 +61,10 @@ describe('the AI workspace dialogue tools', () => {
     expect(third.when).toBe('from stage 0 on');
     await expect(run('edit_dialogue_line', { line: id, when: { kind: 'at' } })).rejects.toThrow(/needs a stage/);
     await expect(run('edit_dialogue_line', { line: quest, says: ['x'] })).rejects.toThrow(/isn't a dialogue line/);
+    // A line's words work as well as its id; the player's words point to edit_player_line.
+    await run('edit_dialogue_line', { line: 'I lost my ring.', emotion: 'Angry' });
+    expect((await run('list_dialogue_lines', { quest: 'LostRing' })).data.topics.find((t: any) => t.topic === topic.topic).lines[0].emotion).toBe('anger');
+    await expect(run('edit_dialogue_line', { line: 'PLAYER: Any work?', says: ['x'] })).rejects.toThrow(/is what the player says.*edit_player_line/);
     // The player's words.
     await run('edit_player_line', { topic: topic.topic, says: 'Need a hand?' });
     expect((await run('list_dialogue_lines', { quest: 'LostRing' })).data.topics.some((t: any) => t.playerSays === 'Need a hand?')).toBe(true);

@@ -17,7 +17,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { BetaContentBlockParam, BetaMessageParam, BetaToolUnion } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import { z } from 'zod';
 import { WorkspaceError } from './engine';
-import { OLLAMA_URL, aiName, cleanJson, contextWindow, estimateTokens, ollamaContextLength, type AiProvider } from './aiproviders';
+import { OLLAMA_URL, aiName, cleanJson, contextWindow, estimateTokens, ollamaContextLength, readChat, streamFields, type AiProvider, type ChatProvider, type ChatResponse } from './aiproviders';
 import { PLANNER_MODEL, fillMissing } from './planner';
 
 export const AGENT_MODEL = PLANNER_MODEL;
@@ -38,6 +38,8 @@ export interface AgentTool<I = any> {
   group: AgentToolGroup;
   /** True when it changes the plugin (or files next to it). */
   writes: boolean;
+  /** True when the same call again does more (places another copy, moves further), so a repeat isn't refused. */
+  adds?: boolean;
   input: z.ZodType<I>;
   /** What the call does, in a few plain words ("Add stage 20 to MyQuest"). */
   summary(input: I): string;
@@ -192,10 +194,10 @@ Quests:
 - For changes to an existing quest, small edits (a stage, a journal entry, an objective, a line of dialogue) have their own tools; bigger reworks go through quest_as_plan, revise_plan and update_quest_from_plan.
 - To change dialogue that's already there, list_dialogue_lines gives each line's id; then edit_dialogue_line (words, emotion, when it's said, which stage it moves to, ending the conversation), edit_player_line or remove_dialogue. Add new lines with add_dialogue.
 - Journal entries are first person, past tense ("Brynja asked me to find her ring."); objectives are short instructions ("Find Brynja's ring").
-- After changing a quest, run check_quest on it.
+- After changing a quest, run check_quest on it and tell the author what it found. Fix a problem only if your change caused it and fixing it is part of what they asked; otherwise leave it (a new stage nothing leads to yet is normal until the author connects it).
 
 Characters, items, magic and scripts:
-- New characters: create_character (copied from a fitting one and placed in a cell); changes to existing ones: change_character with only the fields that change. Clothing and items are named as they are in the load order.
+- New characters: create_character with their name, race, sex, role and place; it picks a fitting character to copy, so don't search for one first. Changes to existing ones: change_character with only the fields that change. Clothing and items are named as they are in the load order.
 - Items, spells, perks, lists and other records: copy_record a similar one and change it with update_record, or create_record a blank one. Read a similar record first to learn its field names; never invent fields.
 - Scripts: write_script saves only checked-clean source; then compile_scripts, attach_script and set_script_property or autofill_properties. Keep scripts short and use the game's own functions.
 
@@ -204,7 +206,7 @@ Places and the world:
 - Objects: place_object puts items on surfaces and furniture or characters on open floor, next to what "where" names. Use place_contents to see what's there and to get reference FormKeys for move_objects, remove_objects and doors.
 - dress_room adds clutter that fits the room's use; light_room sets the mood and lights candles and fires.
 - Levers, secret doors, quest items, traps and rewards: add_trigger on the placed object (or on a quest alias for whoever fills it): when something happens to it, if conditions hold, do actions. list_triggers shows them with ids for change_trigger and remove_trigger. Then compile_scripts.
-- Outdoors: list_worldspaces and ground_info show where things are; create_outdoor_cell adds a cell beside another, create_worldspace makes a new outdoor map (reach it with add_linked_door). shape_ground makes hills, hollows, flat spots (flatten before building) and, through several points, ridges, valleys and roads; paint_ground textures them (list_ground_textures). Heights are game units (about 70 = 1 m; a two-storey house is about 600). drop_to_floor objects after reshaping the ground under them.
+- Outdoors: list_worldspaces and ground_info show where things are; create_outdoor_cell adds a cell beside another, create_worldspace makes a new outdoor map (reach it with add_linked_door). shape_ground makes hills, hollows, flat spots (flatten before building) and, through several points, ridges, valleys and roads; paint_ground textures them (list_ground_textures). Sizes and heights for these tools are in metres (a cell is about 58 m across; a two-storey house is about 9 m tall). drop_to_floor objects after reshaping the ground under them.
 
 How to answer:
 - Plain, friendly words for someone who knows Skyrim but not the Creation Kit's jargon. Short paragraphs and lists. No JSON or code unless they ask for it (Papyrus scripts are fine when the task is a script).
@@ -259,6 +261,37 @@ export interface AgentHooks {
   /** After the AI finishes a turn that changed something: problems to send back once (empty: none). */
   checkChanges?: () => Promise<string[]>;
   signal?: AbortSignal;
+  /**
+   * Show the model only some tools (small models read every tool's description
+   * with each message): these first, and the rest by topic through more_tools.
+   * Any tool can still be run by name.
+   */
+  offer?: ToolOffer;
+}
+
+export interface ToolOffer {
+  tools: AgentTool[];
+  topics: Record<string, { about: string; tools: AgentTool[] }>;
+}
+
+/** The tool that adds a topic's tools to what the model sees, for the rest of the turn. */
+function moreToolsTool(offer: ToolOffer, offered: AgentTool[]): AgentTool<any> {
+  const names = Object.keys(offer.topics) as [string, ...string[]];
+  return {
+    name: 'more_tools',
+    group: 'read',
+    writes: false,
+    description: `Only the tools for this kind of job are listed, to keep things short. If you need tools for another kind of job, get them here: ${Object.entries(offer.topics)
+      .map(([k, t]) => `${k} (${t.about})`)
+      .join('; ')}.`,
+    input: z.object({ topic: z.enum(names) }),
+    summary: (i) => `Get the ${i.topic} tools`,
+    run: (i) => {
+      const add = offer.topics[i.topic]!.tools.filter((t) => !offered.includes(t));
+      offered.push(...add);
+      return { data: add.length ? `You can now also use: ${add.map((t) => t.name).join(', ')}.` : 'You already have these tools.' };
+    },
+  };
 }
 
 export interface AgentTurnResult {
@@ -285,7 +318,9 @@ export async function runAgentTurn(
   const emit = (e: AgentEvent) => hooks.onEvent?.(e);
   session.messages.push({ role: 'user', text: input.text, ...(input.context ? { context: input.context } : {}) });
   session.updated = Date.now();
-  const byName = new Map(tools.map((t) => [t.name, t]));
+  const offered = hooks.offer ? [...hooks.offer.tools] : tools;
+  const more = hooks.offer ? moreToolsTool(hooks.offer, offered) : undefined;
+  const byName = new Map([...tools, ...(more ? [more] : [])].map((t) => [t.name, t]));
   const usage = emptyUsage();
   const maxCalls = model.free ? 15 : 40;
   const maxRounds = model.free ? 10 : 25;
@@ -294,12 +329,21 @@ export async function runAgentTurn(
   const results: AgentToolResult[] = [];
   let calls = 0;
   let checked = false;
+  /** Calls that failed this turn, by tool and input: small models repeat a failed call word for word. */
+  const failed = new Map<string, string>();
+  /** Reading calls already answered this turn: small models also repeat those instead of moving on. */
+  const read = new Set<string>();
+  /** Changes already made this turn: making the same one again does nothing. */
+  const wrote = new Set<string>();
+  /** Calls not run because they repeated one: a model that keeps doing it is stuck, and the turn ends. */
+  let repeats = 0;
+  let stuck = false;
   let text = '';
   const system = `${AGENT_RULES}`;
   try {
     for (let round = 0; round < maxRounds; round++) {
       if (hooks.signal?.aborted) throw new AgentStopped();
-      const reply = await model.reply({ system, messages: session.messages, tools, onText: (d) => emit({ type: 'text', session: sid, delta: d }), signal: hooks.signal });
+      const reply = await model.reply({ system, messages: session.messages, tools: more ? [...offered, more] : tools, onText: (d) => emit({ type: 'text', session: sid, delta: d }), signal: hooks.signal });
       addUsage(usage, reply.usage);
       session.messages.push({ role: 'assistant', text: reply.text, calls: reply.calls, provider: model.provider, ...(reply.raw !== undefined ? { raw: reply.raw } : {}) });
       session.updated = Date.now();
@@ -319,7 +363,7 @@ export async function runAgentTurn(
           checked = true;
           const problems = await hooks.checkChanges().catch(() => [] as string[]);
           if (problems.length) {
-            session.messages.push({ role: 'user', text: `The editor's checks found these problems after your changes:\n${problems.map((p) => `- ${p}`).join('\n')}\nFix the ones your changes caused (leave the rest, but mention them), then sum up again.` });
+            session.messages.push({ role: 'user', text: `The editor's checks found these problems after your changes:\n${problems.map((p) => `- ${p}`).join('\n')}\nFix the ones your changes caused if fixing them is part of what the author asked for; otherwise don't change anything else: tell the author about them in your summary (for example, a new stage that nothing leads to yet). Then sum up again.` });
             continue;
           }
         }
@@ -336,7 +380,34 @@ export async function runAgentTurn(
           out.push(skipped(call, tool, `Not run: this turn has used its ${maxCalls} tool calls. Tell the author what is done and what is left, and they can ask you to go on.`));
           continue;
         }
+        // Reading the same thing in other capitals ("Mead", "mead") is the same look.
+        const sig = `${call.name} ${tool && !tool.writes ? JSON.stringify(call.input ?? {}).toLowerCase() : JSON.stringify(call.input ?? {})}`;
+        const before = failed.get(sig);
+        if ((before !== undefined || read.has(sig) || (wrote.has(sig) && !tool?.adds)) && ++repeats > 3) {
+          out.push(skipped(call, tool, 'Not run: the turn ended because the same calls kept being repeated.'));
+          stuck = true;
+          continue;
+        }
+        if (before !== undefined) {
+          out.push(skipped(call, tool, `Not run: you already made exactly this call this turn and it failed:\n${clip(before, 600)}\nDon't repeat it. Change the input, use another tool, or tell the author what's wrong.`));
+          continue;
+        }
+        if (wrote.has(sig) && !tool?.adds) {
+          out.push({ id: call.id, name: call.name, content: 'Not run again: this exact change was already made this turn. Go on to the next step, or tell the author what was done.', isError: true, summary: safeSummary(tool, call.input), writes: true, status: 'error' });
+          continue;
+        }
+        if (read.has(sig)) {
+          out.push({ id: call.id, name: call.name, content: `Not run again: you already made exactly this call this turn, and its result is above. Use what it returned to take the next step, or answer the author.`, isError: true, summary: safeSummary(tool, call.input), writes: false, status: 'error' });
+          continue;
+        }
         const r = await runTool(call, tool, model, hooks, resultMax, sid);
+        if (r.status === 'error') failed.set(sig, r.content);
+        else if (tool && !tool.writes) read.add(sig);
+        // After a change, looking again is worth it.
+        else if (tool?.writes) {
+          read.clear();
+          wrote.add(sig);
+        }
         out.push(r);
         results.push(r);
         if (r.writes && r.status === 'done') changes.push(r.summary);
@@ -345,6 +416,10 @@ export async function runAgentTurn(
       session.messages.push({ role: 'tool', results: out });
       session.updated = Date.now();
       if (hooks.signal?.aborted) throw new AgentStopped();
+      if (stuck) {
+        const msg = `${model.name} kept repeating the same calls, so the turn was stopped. Try asking again in other words, or one step at a time.`;
+        return { text: text || msg, changes, results, error: msg, usage };
+      }
     }
     const msg = `Stopped after ${maxRounds} rounds of tool calls. Ask the AI to go on if there's more to do.`;
     return { text: text || msg, changes, results, error: msg, usage };
@@ -376,10 +451,34 @@ function safeSummary(tool: AgentTool | undefined, input: unknown): string {
   }
 }
 
+/** Fix out-of-range numbers and empty lists where something is needed or nothing is meant; true if anything changed. */
+export function mendInput(input: unknown, issues: readonly { code: string; path: PropertyKey[]; origin?: string; minimum?: unknown; maximum?: unknown }[]): boolean {
+  let changed = false;
+  for (const issue of issues) {
+    if (!issue.path.length) continue;
+    let parent = input as Record<PropertyKey, unknown>;
+    for (const p of issue.path.slice(0, -1)) parent = (parent?.[p] ?? null) as Record<PropertyKey, unknown>;
+    const key = issue.path[issue.path.length - 1]!;
+    if (!parent || typeof parent !== 'object') continue;
+    const v = parent[key];
+    if (typeof v === 'number' && issue.origin === 'number') {
+      if (issue.code === 'too_small' && typeof issue.minimum === 'number') (parent[key] = issue.minimum), (changed = true);
+      if (issue.code === 'too_big' && typeof issue.maximum === 'number') (parent[key] = issue.maximum), (changed = true);
+    } else if (Array.isArray(v) && !v.length && issue.code === 'too_small' && !Array.isArray(parent)) {
+      parent[key] = null;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 async function runTool(call: AgentToolCall, tool: AgentTool | undefined, model: AgentModel, hooks: AgentHooks, max: number, sid: string): Promise<AgentToolResult> {
   if (!tool) return { id: call.id, name: call.name, content: `There is no tool called "${call.name}".`, isError: true, summary: `Unknown tool ${call.name}`, writes: false, status: 'error' };
   // Small models quote numbers and leave out empty fields: read them as meant, then check.
-  const parsed = tool.input.safeParse(fillMissing(tool.input, structuredClone(call.input ?? {})));
+  const input = fillMissing(tool.input, structuredClone(call.input ?? {}));
+  let parsed = tool.input.safeParse(input);
+  // Then mend what is plainly meant: a number past a limit is taken as the limit, an empty list as none.
+  if (!parsed.success && mendInput(input, parsed.error.issues)) parsed = tool.input.safeParse(input);
   if (!parsed.success) {
     const problems = parsed.error.issues.slice(0, 6).map((i) => `${i.path.join('.') || 'input'}: ${i.message}`);
     return { id: call.id, name: call.name, content: `The input doesn't fit this tool:\n${problems.join('\n')}\nIt takes: ${JSON.stringify(toolSchema(tool))}`, isError: true, summary: tool.name, writes: tool.writes, status: 'error' };
@@ -404,6 +503,7 @@ async function runTool(call: AgentToolCall, tool: AgentTool | undefined, model: 
 /** The model behind an AI choice. */
 export function agentModel(ai: AiProvider, fetchImpl?: Fetch): AgentModel {
   if (ai.kind === 'claude') return new ClaudeAgentModel(ai.apiKey);
+  if (ai.kind === 'local') throw new WorkspaceError('The built-in AI has to be started first');
   return new ChatAgentModel(ai, fetchImpl);
 }
 
@@ -482,7 +582,7 @@ export function claudeMessages(messages: AgentMessage[]): BetaMessageParam[] {
   return out;
 }
 
-type Fetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; json(): Promise<any>; text(): Promise<string> }>;
+type Fetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<ChatResponse>;
 
 /**
  * Ollama (its own API, so the context window can be sized) or an
@@ -498,19 +598,23 @@ export class ChatAgentModel implements AgentModel {
   private readonly fetch: Fetch;
 
   constructor(
-    private readonly ai: Exclude<AiProvider, { kind: 'claude' }>,
+    private readonly ai: ChatProvider,
     fetchImpl?: Fetch,
   ) {
     this.name = aiName(ai);
     this.provider = ai.kind;
-    this.fetch = fetchImpl ?? (globalThis.fetch as unknown as Fetch);
+    // Called as a plain function: a browser's fetch refuses to run as a method of another object ("Illegal invocation").
+    this.fetch = fetchImpl ?? ((url, init) => (globalThis.fetch as unknown as Fetch)(url, init));
   }
 
   async reply(req: { system: string; messages: AgentMessage[]; tools: AgentTool[]; onText?: (d: string) => void; signal?: AbortSignal }): Promise<AgentReply> {
+    // Text is shown as it streams in; a service that answers all at once has it shown at the end.
+    let streamed = false;
+    const onText = req.onText ? (d: string) => ((streamed = true), req.onText!(d)) : undefined;
     if (!this.jsonTools) {
       try {
-        const r = await this.send(req, false);
-        if (r.text) req.onText?.(r.text);
+        const r = await this.send({ ...req, onText }, false);
+        if (r.text && !streamed) req.onText?.(r.text);
         return r;
       } catch (e) {
         // "does not support tools", "tool use is not supported"…: fall back to tools in words.
@@ -518,7 +622,8 @@ export class ChatAgentModel implements AgentModel {
         this.jsonTools = true;
       }
     }
-    const r = await this.send(req, true);
+    // In words, the answer is JSON: it's shown once read, not as it streams.
+    const r = await this.send({ ...req, onText: undefined }, true);
     if (r.text) req.onText?.(r.text);
     return r;
   }
@@ -543,7 +648,7 @@ export class ChatAgentModel implements AgentModel {
     return out;
   }
 
-  private async send(req: { system: string; messages: AgentMessage[]; tools: AgentTool[]; signal?: AbortSignal }, json: boolean): Promise<AgentReply> {
+  private async send(req: { system: string; messages: AgentMessage[]; tools: AgentTool[]; signal?: AbortSignal; onText?: (d: string) => void }, json: boolean): Promise<AgentReply> {
     const messages = this.messages(req, json);
     const tools = json ? undefined : req.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: toolSchema(t) } }));
     if (this.ai.kind === 'ollama') {
@@ -551,21 +656,25 @@ export class ChatAgentModel implements AgentModel {
       const promptTokens = estimateTokens(JSON.stringify(messages) + JSON.stringify(tools ?? []));
       const max = await ollamaContextLength(base, this.ai.model, this.fetch);
       if (max && promptTokens + 2000 > max) throw new WorkspaceError(`The conversation is too long for ${this.ai.model} (it reads about ${max.toLocaleString('en')} tokens). Start a new conversation, or pick a model that reads more.`);
-      const r = await this.call(`${base}/api/chat`, { model: this.ai.model, messages, stream: false, ...(tools ? { tools } : { format: 'json' }), options: { num_ctx: contextWindow(promptTokens, max), temperature: 0.2 } }, {}, req.signal);
+      const r = await this.call(`${base}/api/chat`, { model: this.ai.model, messages, stream: true, ...(tools ? { tools } : { format: 'json' }), options: { num_ctx: contextWindow(promptTokens, max), temperature: 0.2 } }, {}, req.signal, req.onText);
       const msg = r?.message ?? {};
       const usage = { input: Number(r?.prompt_eval_count ?? 0), output: Number(r?.eval_count ?? 0), cacheRead: 0, cacheWrite: 0 };
       if (json) return { ...this.fromJson(String(msg.content ?? ''), r?.done_reason === 'length'), usage };
       const calls: AgentToolCall[] = ((msg.tool_calls ?? []) as { function?: { name?: string; arguments?: unknown } }[]).map((c) => ({ id: newCallId(), name: String(c.function?.name ?? ''), input: parseArgs(c.function?.arguments) }));
+      const fromText = calls.length ? null : textCalls(String(msg.content ?? ''), req.tools);
+      if (fromText?.calls.length) return { text: fromText.text, calls: fromText.calls, stop: 'tools', usage };
       return { text: stripThinking(String(msg.content ?? '')), calls, stop: r?.done_reason === 'length' ? 'max_tokens' : calls.length ? 'tools' : 'end', usage };
     }
     const url = `${this.ai.url.replace(/\/+$/, '')}/chat/completions`;
     const headers: Record<string, string> = this.ai.apiKey ? { authorization: `Bearer ${this.ai.apiKey}` } : {};
-    const r = await this.call(url, { model: this.ai.model, messages, temperature: 0.2, max_tokens: 8000, ...(tools ? { tools } : { response_format: { type: 'json_object' } }) }, headers, req.signal);
+    const r = await this.call(url, { model: this.ai.model, messages, temperature: 0.2, max_tokens: 8000, ...streamFields(this.ai.url), ...(tools ? { tools } : { response_format: { type: 'json_object' } }) }, headers, req.signal, req.onText);
     const choice = r?.choices?.[0] ?? {};
     const cut = choice.finish_reason === 'length';
     const usage = { input: Number(r?.usage?.prompt_tokens ?? 0), output: Number(r?.usage?.completion_tokens ?? 0), cacheRead: 0, cacheWrite: 0 };
     if (json) return { ...this.fromJson(String(choice.message?.content ?? ''), cut), usage };
     const calls: AgentToolCall[] = ((choice.message?.tool_calls ?? []) as { id?: string; function?: { name?: string; arguments?: unknown } }[]).map((c) => ({ id: c.id || newCallId(), name: String(c.function?.name ?? ''), input: parseArgs(c.function?.arguments) }));
+    const fromText = calls.length || cut ? null : textCalls(String(choice.message?.content ?? ''), req.tools);
+    if (fromText?.calls.length) return { text: fromText.text, calls: fromText.calls, stop: 'tools', usage };
     return { text: stripThinking(String(choice.message?.content ?? '')), calls, stop: cut ? 'max_tokens' : calls.length ? 'tools' : 'end', usage };
   }
 
@@ -583,7 +692,7 @@ export class ChatAgentModel implements AgentModel {
     return { text: typeof j.say === 'string' ? j.say : '', calls, stop: cut ? 'max_tokens' : calls.length ? 'tools' : 'end' };
   }
 
-  private async call(url: string, body: unknown, headers: Record<string, string>, signal?: AbortSignal): Promise<any> {
+  private async call(url: string, body: unknown, headers: Record<string, string>, signal?: AbortSignal, onText?: (d: string) => void): Promise<any> {
     let res;
     try {
       res = await this.fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body), signal });
@@ -600,7 +709,12 @@ export class ChatAgentModel implements AgentModel {
       (err as WorkspaceError & { status?: number }).status = res.status;
       throw err;
     }
-    return res.json();
+    try {
+      return await readChat(res, this.ai.kind === 'ollama' ? 'ollama' : 'openai', onText);
+    } catch (e) {
+      if (signal?.aborted) throw new AgentStopped();
+      throw e;
+    }
   }
 }
 
@@ -611,6 +725,30 @@ function parseArgs(v: unknown): unknown {
   } catch {
     return {};
   }
+}
+
+/**
+ * Tool calls a model wrote out as text instead of making them (small models
+ * do: "<tool_call>{"name": …, "arguments": {…}}</tool_call>", the format many
+ * were trained on). Only calls to tools it has are taken.
+ */
+export function textCalls(content: string, tools: AgentTool[]): { text: string; calls: AgentToolCall[] } | null {
+  if (!/<tool_call>/i.test(content)) return null;
+  const names = new Set(tools.map((t) => t.name));
+  const calls: AgentToolCall[] = [];
+  const text = content.replace(/<tool_call>\s*([\s\S]*?)\s*(?:<\/tool_call>|$)/gi, (whole, body: string) => {
+    try {
+      const j = JSON.parse(cleanJson(body)) as { name?: unknown; arguments?: unknown; parameters?: unknown };
+      if (typeof j.name === 'string' && names.has(j.name)) {
+        calls.push({ id: newCallId(), name: j.name, input: parseArgs(j.arguments ?? j.parameters ?? {}) });
+        return '';
+      }
+    } catch {
+      // Not a call after all: leave the text as it is.
+    }
+    return whole;
+  });
+  return { text: stripThinking(text), calls };
 }
 
 function stripThinking(text: string): string {

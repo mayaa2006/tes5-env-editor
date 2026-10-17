@@ -5,16 +5,28 @@
  */
 import { parentPort, workerData } from 'node:worker_threads';
 import { MemoryFileSystem, createDemoData } from '@tes5/workspace';
-import { NodeFileSystem, NodeProcessRunner } from '@tes5/workspace/node';
+import { LocalAi, NodeFileSystem, NodeProcessRunner } from '@tes5/workspace/node';
 import { DEMO_GAME_DIR } from '../src/engine/constants';
 import { EngineHost } from '../src/engine/host';
 
 if (!parentPort) throw new Error('engine-worker must run as a worker thread');
 const port = parentPort;
 
-const real = new EngineHost(new NodeFileSystem(), new NodeProcessRunner(), (workerData as { caprica?: string } | null)?.caprica);
+const data = (workerData ?? {}) as { caprica?: string; localAiDir?: string };
+const real = new EngineHost(new NodeFileSystem(), new NodeProcessRunner(), data.caprica);
 let demo: EngineHost | undefined;
 let active = real;
+
+// The built-in free AI, shared by the real and demo engines. The main process is told about its server so it can stop it on quit.
+const localAi = data.localAiDir
+  ? new LocalAi({
+      dir: data.localAiDir,
+      serverPath: process.env.TES5_LLAMA_SERVER || undefined,
+      onChange: (status) => port.postMessage({ type: 'event', event: { type: 'localAi', status } }),
+      onProcess: (pid, running) => port.postMessage({ type: 'child', pid, running }),
+    })
+  : undefined;
+real.localAi = localAi;
 
 function watch(host: EngineHost): void {
   host.onEvent((event) => {
@@ -32,6 +44,7 @@ port.on('message', async (m: { id: number; method: string; args: unknown[] }) =>
           const fs = new MemoryFileSystem();
           createDemoData(fs, DEMO_GAME_DIR);
           demo = new EngineHost(fs);
+          demo.localAi = localAi;
           watch(demo);
         }
         active = demo;

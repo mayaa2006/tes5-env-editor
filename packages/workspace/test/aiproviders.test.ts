@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { OPENAI_PRESETS, QuestPlanner, aiName, aiReady, chatSend, cleanJson, contextWindow, estimateTokens, exampleQuestPlan, ollamaModels, pickModel, schemaGuide, serviceModels } from '../src';
+import { OPENAI_PRESETS, QuestPlanner, readChat, aiName, aiReady, chatSend, cleanJson, contextWindow, estimateTokens, exampleQuestPlan, ollamaModels, pickModel, schemaGuide, serviceModels } from '../src';
 
 type Call = { url: string; body: any; headers: Record<string, string> };
 
@@ -42,7 +42,7 @@ describe('free AI providers', () => {
     const c = calls[1]!;
     expect(c.url).toBe('http://localhost:11434/api/chat');
     expect(c.body.model).toBe('qwen3:14b');
-    expect(c.body.stream).toBe(false);
+    expect(c.body.stream).toBe(true);
     expect(c.body.format.type).toBe('object');
     expect(c.body.format.properties.stages).toBeDefined();
     const prompt = c.body.messages.map((m: { content: string }) => m.content).join('\n');
@@ -141,6 +141,13 @@ describe('free AI providers', () => {
     expect(gem).not.toContain('text-embedding-004');
     expect(gem).not.toContain('gemini-3.8-flash-tts');
     expect(g.calls[0]!.headers.authorization).toBe('Bearer k');
+    // NVIDIA lists many old and non-chat models: current agent-capable families first, the rest left out.
+    const nv = server({ json: { data: ['writer/palmyra-creative-122b', 'nvidia/nemotron-3.5-content-safety', 'nvidia/nv-embedqa-mistral-7b-v2', 'deepseek-ai/deepseek-v4.1-flash', 'nvidia/vila', 'z-ai/glm-5.3', 'meta/llama2-70b'].map((id) => ({ id })) } });
+    const nvl = await serviceModels({ url: 'https://integrate.api.nvidia.com/v1', apiKey: 'k' }, nv.fetch);
+    expect(nvl.slice(0, 2).sort()).toEqual(['deepseek-ai/deepseek-v4.1-flash', 'z-ai/glm-5.3']);
+    expect(nvl).not.toContain('nvidia/vila');
+    expect(nvl).not.toContain('nvidia/nemotron-3.5-content-safety');
+    expect(pickModel(nvl, OPENAI_PRESETS.find((p) => p.id === 'nvidia')!.model)).toBe('deepseek-ai/deepseek-v4.1-flash');
     // A model the service no longer offers is swapped for one it does.
     expect(pickModel(['x', 'y'], 'gone')).toBe('x');
     expect(pickModel(['x', 'y'], 'y')).toBe('y');
@@ -150,5 +157,36 @@ describe('free AI providers', () => {
       expect(p.keyUrl).toMatch(/^https:\/\//);
       expect(p.keyUrl).not.toBe(p.url);
     }
+  });
+});
+
+describe('reading streamed answers', () => {
+  const stream = (chunks: string[], type: string) =>
+    new Response(new ReadableStream({ start: (c) => (chunks.forEach((x) => c.enqueue(new TextEncoder().encode(x))), c.close()) }), { headers: { 'content-type': type } });
+
+  it('puts an OpenAI-style stream back together, tool calls split across chunks included', async () => {
+    const seen: string[] = [];
+    const r = await readChat(
+      stream(
+        [
+          'data: {"choices":[{"delta":{"content":"Let me "}}]}\n\ndata: {"choices":[{"delta":{"content":"look."}}]}\n',
+          '\ndata: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"search_records","arguments":"{\\"query\\":"}}]}}]}\n\n',
+          'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"mead\\"}"}}]}}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":9,"completion_tokens":4}}\n\ndata: [DONE]\n\n',
+        ],
+        'text/event-stream',
+      ),
+      'openai',
+      (d) => seen.push(d),
+    );
+    expect(seen).toEqual(['Let me ', 'look.']);
+    expect(r.choices[0]).toEqual({ message: { content: 'Let me look.', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'search_records', arguments: '{"query":"mead"}' } }] }, finish_reason: 'tool_calls' });
+    expect(r.usage).toEqual({ prompt_tokens: 9, completion_tokens: 4 });
+  });
+
+  it("reads Ollama's line-by-line stream, and plain JSON from services that don't stream", async () => {
+    const r = await readChat(stream(['{"message":{"content":"Hel"}}\n{"message":{"content":"lo"}}\n', '{"message":{"content":"","tool_calls":[{"function":{"name":"look","arguments":{"what":"x"}}}]},"done":true,"done_reason":"stop","prompt_eval_count":5,"eval_count":2}\n'], 'application/x-ndjson'), 'ollama');
+    expect(r).toMatchObject({ message: { content: 'Hello', tool_calls: [{ function: { name: 'look' } }] }, done_reason: 'stop', prompt_eval_count: 5 });
+    const plain = await readChat(new Response('{"choices":[{"message":{"content":"Hi"},"finish_reason":"stop"}]}', { headers: { 'content-type': 'application/json' } }), 'openai');
+    expect(plain.choices[0].message.content).toBe('Hi');
   });
 });

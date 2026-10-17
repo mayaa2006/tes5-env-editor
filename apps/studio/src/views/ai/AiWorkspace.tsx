@@ -293,7 +293,7 @@ function Conversation({
         {live && (
           <div className="ai-msg assistant" data-testid="ai-live">
             {live.text && <Markdown text={live.text} />}
-            {live.calls.filter((c) => !PROJECT_TOOLS.has(c.name)).map((c) => (
+            {live.calls.filter((c) => !HIDDEN_TOOLS.has(c.name)).map((c) => (
               <ToolCard key={c.id} summary={c.summary} writes={c.writes} status={c.status} result={c.result} onApprove={c.status === 'waiting' ? (ok) => onApprove(c.id, ok) : undefined} />
             ))}
             {!live.calls.some((c) => c.status === 'waiting') && <div className="dim small ai-thinking">{name} is working…</div>}
@@ -376,6 +376,8 @@ function UsageMeter({ turns }: { turns: AgentTurn[] }) {
 }
 
 const PROJECT_TOOLS = new Set(['set_project', 'update_task', 'add_tasks', 'update_brief']);
+/** Calls that don't get a card: the project list shows the project tools' work, and more_tools only changes what a free AI sees. */
+const HIDDEN_TOOLS = new Set([...PROJECT_TOOLS, 'more_tools']);
 
 const TASK_MARK: Record<string, { icon: string; cls: string; title: string }> = {
   todo: { icon: '○', cls: 'dim', title: 'Not started' },
@@ -530,7 +532,7 @@ function MessageView({ m, results }: { m: AgentMessage; results: Map<string, Age
     );
   }
   // The project panel shows the to-do list; its updates don't need cards of their own.
-  const calls = m.calls.filter((c) => !PROJECT_TOOLS.has(c.name));
+  const calls = m.calls.filter((c) => !HIDDEN_TOOLS.has(c.name));
   if (!m.text && !calls.length) return null;
   return (
     <div className="ai-msg assistant" data-testid="ai-msg-assistant">

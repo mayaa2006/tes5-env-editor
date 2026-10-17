@@ -2,6 +2,15 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.34.0
+
+- **A free AI that runs on your PC, in one click.** Settings → AI → Free on this PC → Built in: pick a model and press Download. The app downloads it and the program that runs it (llama.cpp), checks the download, and starts it when the AI is first needed. Nothing else to install, no account, and it works offline afterwards. It runs on your graphics card if you have one (NVIDIA, AMD or Intel), otherwise on the processor. Downloads carry on where they stopped if interrupted. Ollama still works too.
+- **Small models tried on Skyrim's own data.** Every model offered was tried on nine real jobs against Skyrim SE's own records and meshes (finding who works at the Bannered Mare, adding a quest stage, making a weapon, putting mead on a table, a trigger on a chest, rewording dialogue, a whole small quest, a new character, a hill outside Whiterun). Five are offered: Qwen3.5 4B (recommended, 7 of 9 jobs right), Qwen3.5 2B and Ministral 3 3B (6 of 9), Gemma 4 E2B (5 of 9, and quick) and LFM2.5 1.2B (the smallest, 731 MB; 3 of 9). Five more were tried and left out. The README has the table.
+- **Free AIs work better in the AI tab.** They're shown only the tools for what you ask (a third of the reading, so much faster on a PC without a strong graphics card), with a way to ask for more. They can name things the way you do ("Nord Mead", "the chest"), get the closest matches back when a name is wrong, and don't repeat a call that already failed or make the same change twice; a turn that keeps going round in circles is stopped. Answers now stream in, so a long answer on a slow PC no longer gives up after five minutes.
+- **More free online AIs.** NVIDIA's free developer API (DeepSeek, Kimi, GLM, Gemma and other large models) and Mistral's free plan are in the list, each with how to get a key and what the free tier allows.
+- **Fixed:** undoing an AI turn that wrote the same quest script twice could leave the wrong version of the script on disk, and two saves of one file at the same moment could stop the editing engine. A script file that can't be written back on undo (locked, disk full) is now reported when you save instead of restarting the engine.
+- **Fixed:** in the browser demo, free AIs in the AI tab failed to send anything, and the new online services were blocked by the page.
+
 ## 0.33.0
 
 - **The AI can work outdoors.** Ask it to add an outdoor cell next to one you have, make a new worldspace, raise a hill, dig a hollow, flatten a spot to build on, run a ridge or a road across a cell, or paint the ground with grass, dirt, rock or road. Hills come out about as high as you ask, the cells around follow along, and each change is one undo step.

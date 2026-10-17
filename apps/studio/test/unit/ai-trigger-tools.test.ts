@@ -65,14 +65,27 @@ describe('the AI workspace trigger tools', () => {
     expect(((host.ws!.view(chest)!.data as any).scripts?.scripts ?? []).map((s: any) => s.name)).not.toContain(script);
   });
 
+  it('takes a base record for its one placed copy, and says when it is not placed', async () => {
+    const { host, run } = await demo();
+    const tavern = host.ws!.byEditorId('DemoTavern')!;
+    const chest = host.references(tavern).find((r) => r.base === host.ws!.byEditorId('DemoChest'))!.formKey;
+    await run('add_trigger', { object: 'DemoChest', when: 'activate', then: [{ kind: 'notification', text: 'Locked.' }] });
+    expect((await host.triggersOf({ kind: 'ref', ref: chest })).specs).toHaveLength(1);
+    await expect(run('add_trigger', { object: 'DemoBottle', when: 'activate', then: [{ kind: 'notification', text: 'x' }] })).rejects.toThrow(/isn't placed anywhere/);
+  });
+
   it('puts triggers on a quest alias and explains what is wrong', async () => {
     const { run } = await demo();
+    // With nothing looked at yet, it has to be told what the trigger is on.
+    await expect(run('add_trigger', { when: 'activate', then: [{ kind: 'notification', text: 'x' }] })).rejects.toThrow(/Say which placed object/);
     await run('add_trigger', { quest: 'DemoTavernQuest', alias: 'innkeeper', when: 'death', then: [{ kind: 'setStage', quest: 'DemoTavernQuest', stage: 100 }] });
     const r = await run('list_triggers', { quest: 'DemoTavernQuest', alias: 'Innkeeper' });
     expect(r.data.triggers[0].when).toBe('It dies');
     expect(r.link).toMatchObject({ tab: 'quest' });
     await expect(run('add_trigger', { quest: 'DemoTavernQuest', alias: 'Nobody', when: 'activate', then: [{ kind: 'notification', text: 'x' }] })).rejects.toThrow(/Its aliases: Innkeeper/);
-    await expect(run('add_trigger', { when: 'activate', then: [{ kind: 'notification', text: 'x' }] })).rejects.toThrow(/Say which placed object/);
+    // Then a trigger without one goes on what was last looked at (here the alias).
+    await run('add_trigger', { when: 'activate', then: [{ kind: 'notification', text: 'Hello.' }] });
+    expect((await run('list_triggers', { quest: 'DemoTavernQuest', alias: 'Innkeeper' })).data.triggers).toHaveLength(2);
     await expect(run('add_trigger', { object: 'DemoTavern', when: 'activate', then: [{ kind: 'notification', text: 'x' }] })).rejects.toThrow(/isn't a placed object/);
     await expect(run('remove_trigger', { quest: 'DemoTavernQuest', alias: 'Innkeeper', id: 'nope' })).rejects.toThrow(/no trigger nope/);
   });
