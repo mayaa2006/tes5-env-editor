@@ -594,10 +594,14 @@ export function MenuItem({ children, onClick, checked, hint, disabled, title }: 
   );
 }
 
+/** Inputs you don't type into (a ticked box, a slider): shortcuts like Ctrl+Z still work while one has focus. */
+const NOT_TYPED = new Set(['checkbox', 'radio', 'range', 'button', 'submit', 'reset', 'color', 'file']);
+
 export function useHotkeys(map: Record<string, (e: KeyboardEvent) => void>, deps: unknown[]): void {
   const cb = useCallback((e: KeyboardEvent) => {
     const t = e.target as HTMLElement;
-    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable || t.closest('.monaco-editor'))) return;
+    const typing = t && ((t.tagName === 'INPUT' && !NOT_TYPED.has((t as HTMLInputElement).type)) || t.tagName === 'TEXTAREA' || t.isContentEditable || t.closest('.monaco-editor'));
+    if (typing) return;
     const key = `${e.ctrlKey || e.metaKey ? 'ctrl+' : ''}${e.shiftKey ? 'shift+' : ''}${e.altKey ? 'alt+' : ''}${e.key.toLowerCase()}`;
     const fn = map[key];
     if (fn) {

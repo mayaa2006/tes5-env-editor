@@ -149,7 +149,7 @@ export function moreTools(host: EngineHost): AgentTool<any>[] {
           }, 'Name the new record');
         const v = ws().view(key)!;
         const c = host.categoryOf(key);
-        return { data: { formKey: key, editorId: v.editorId, name: v.name, type: v.sig, fields: v.data }, link: c ? { tab: c.tab, key, label: `${label(key)} in ${c.tab === 'items' ? 'Items' : 'Magic'}` } : { tab: 'records', key, label: `${label(key)} in Records` } };
+        return { data: { formKey: key, editorId: v.editorId, name: v.name, type: v.sig, fields: v.data }, link: c ? { tab: c.tab, key, label: `${label(key)} in ${{ items: 'Items', magic: 'Magic', people: 'Characters' }[c.tab]}` } : { tab: 'records', key, label: `${label(key)} in Records` } };
       },
     },
     {

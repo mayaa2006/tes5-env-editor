@@ -41,6 +41,7 @@ const KINDS: Record<string, string[]> = {
   shout: ['SHOU'],
   faction: ['FACT'],
   class: ['CLAS'],
+  relationship: ['RELA'],
   race: ['RACE'],
   outfit: ['OTFT'],
   'leveled list': ['LVLI', 'LVLN', 'LVSP'],
@@ -413,11 +414,11 @@ export function aiTools(host: EngineHost, ctx?: QuestToolContext): AgentTool[] {
       name: 'items_and_magic',
       group: 'read',
       writes: false,
-      description: 'The Items and Magic workspaces\' categories (weapons, armor, potions, loot lists, recipes, spells, perks…) with counts; with a category, the records in it.',
+      description: 'The Items and Magic workspaces\' categories (weapons, armor, potions, loot lists, recipes, spells, perks…) and Characters → Factions & more (factions, classes, leveled characters, relationships), with counts; with a category, the records in it.',
       input: z.object({ category: z.string().nullable().optional().describe('A category id from the list; null to list the categories'), query: z.string().nullable().optional(), limit: z.number().int().min(1).max(100).nullable().optional() }),
-      summary: (i) => (i.category ? `List ${i.category}` : 'List item and magic categories'),
+      summary: (i) => (i.category ? `List ${i.category}` : 'List the item, magic and people categories'),
       run: (i) => {
-        if (!i.category) return { data: { items: host.catalogCounts('items'), magic: host.catalogCounts('magic') } };
+        if (!i.category) return { data: { items: host.catalogCounts('items'), magic: host.catalogCounts('magic'), people: host.catalogCounts('people') } };
         const list = host.catalogList(i.category, i.query ?? '', i.limit ?? 30) as unknown;
         return { data: list };
       },
