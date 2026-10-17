@@ -75,7 +75,11 @@ describe('the AI workspace tools on the demo data', () => {
     expect(Object.keys(people)).toContain('NPC_');
     expect(Object.keys(people)).not.toContain('CONT');
     const tables = (await run('place_contents', { place: 'DemoTavern', kinds: ['TABLE'] })).data as any;
-    expect(tables.note).toMatch(/"TABLE" isn't a kind of record.*place_object puts items on them/);
+    expect(tables.note).toMatch(/"TABLE" isn't a kind of record/);
+    expect(tables.tip).toMatch(/place_object puts an item on one by itself/);
+    // Looking for a table as a record gets the same tip.
+    expect(((await run('search_records', { query: 'table', kind: 'furniture' })).data as any).tip).toMatch(/place_object/);
+    expect(((await run('search_records', { query: 'tankard', kind: 'item' })).data as any).tip).toBeUndefined();
     const rec = await run('read_record', { form: 'DemoInnkeeper' });
     expect((rec.data as any).editorId).toBe('DemoInnkeeper');
     expect(rec.link).toMatchObject({ tab: 'records' });

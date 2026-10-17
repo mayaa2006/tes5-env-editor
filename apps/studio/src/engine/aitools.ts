@@ -74,6 +74,10 @@ const SIG_WORDS: Record<string, string> = Object.fromEntries(Object.entries(KIND
 /** Carried things, for "item". */
 const ITEM_SIGS = ['WEAP', 'ARMO', 'MISC', 'BOOK', 'ALCH', 'INGR', 'KEYM', 'AMMO', 'SLGM', 'SCRL'];
 
+/** Things items go on. Small models look for them as records before placing anything; place_object finds them itself. */
+const SURFACES = /\b(tables?|shel(f|ves)|counters?|desks?|surfaces?)\b/i;
+const SURFACE_TIP = 'Tables, shelves and counters are part of the room, not records to find: place_object puts an item on one by itself. Give it the place and the item ("where" can say which, e.g. "on the bar").';
+
 /** The record types a kind in words means, or undefined for an unknown kind. */
 function kindSigs(kind: string): string[] | undefined {
   if (/^[A-Z_0-9]{4}$/.test(kind)) return [kind];
@@ -124,6 +128,7 @@ export function aiTools(host: EngineHost, ctx?: QuestToolContext): AgentTool[] {
         // An unknown kind is left out rather than refused: small models repeat a refused call instead of changing it.
         const sigs = kind ? kindSigs(kind) : undefined;
         const note = kind && !sigs ? `"${kind}" isn't a kind I know, so every kind was searched. Kinds: ${Object.keys(KINDS).join(', ')}.` : undefined;
+        const tip = SURFACES.test(i.query) ? { tip: SURFACE_TIP } : {};
         // Each word must match, so "bannered mare" finds "WhiterunBanneredMare".
         const words: string[] = i.query.toLowerCase().split(/\s+/).filter(Boolean);
         const first = ws().search({ sigs, query: words[0] ?? '', plugin: i.onlyMyPlugin ? ws().activeName : undefined, limit: 5000 });
@@ -140,7 +145,7 @@ export function aiTools(host: EngineHost, ctx?: QuestToolContext): AgentTool[] {
               some.set(s.formKey, e);
             }
           const best = [...some.values()].sort((a, b) => b.n - a.n || rank(b.s, i.query) - rank(a.s, i.query)).slice(0, limit);
-          if (best.length) return { data: { total: 0, note: `Nothing has all the words "${i.query}"; these have some of them (most first).`, results: best.map((b) => line(b.s)) } };
+          if (best.length) return { data: { ...tip, total: 0, note: `Nothing has all the words "${i.query}"; these have some of them (most first).`, results: best.map((b) => line(b.s)) } };
         }
         if (!hits.length && sigs && words.length) {
           // Nothing of that kind: show what the words do match, so a small model doesn't give up or guess.
@@ -148,6 +153,7 @@ export function aiTools(host: EngineHost, ctx?: QuestToolContext): AgentTool[] {
           if (other.length)
             return {
               data: {
+                ...tip,
                 total: 0,
                 results: [],
                 note: `No ${kind} matches "${i.query}", but ${other.length} other record${other.length === 1 ? '' : 's'} do (best first below). To see who or what is in a place, use place_contents on the place.`,
@@ -172,6 +178,7 @@ export function aiTools(host: EngineHost, ctx?: QuestToolContext): AgentTool[] {
         return {
           data: {
             ...(note ? { note } : {}),
+            ...tip,
             total: hits.length,
             results: hits.slice(0, limit).map(line),
             ...(hits.length > limit ? { more: `${hits.length - limit} more; narrow the search` } : {}),
@@ -286,7 +293,8 @@ export function aiTools(host: EngineHost, ctx?: QuestToolContext): AgentTool[] {
         const data: Record<string, unknown> = {
           place: label(key),
           total: refs.length,
-          ...(unknown.length ? { note: `${unknown.map((k: string) => `"${k}"`).join(', ')} isn't a kind of record, so ${sigs.size ? 'it was left out' : 'everything is listed'}. Tables and shelves are part of the room: place_object puts items on them.` } : {}),
+          ...(unknown.length ? { note: `${unknown.map((k: string) => `"${k}"`).join(', ')} isn't a kind of record, so ${sigs.size ? 'it was left out' : 'everything is listed'}.` } : {}),
+          ...(asked.some((a: { k: string }) => SURFACES.test(a.k)) ? { tip: SURFACE_TIP } : {}),
           ...(!refs.length && sigs.size ? { note: `Nothing of those kinds is placed here (${all.length} objects of other kinds are).` } : {}),
         };
         for (const [k, list] of byKind) data[k] = k === 'STAT' || k === 'MSTT' ? `${list.length} pieces` : list.slice(0, 60);
