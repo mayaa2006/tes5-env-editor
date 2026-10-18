@@ -12,7 +12,7 @@ import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
 import { unzipSync } from 'fflate';
 import { WorkspaceError } from './engine';
-import { LLAMA_CPP, LOCAL_MODELS, formatBytes, modelUrl, type LocalAiStatus, type LocalModel } from './localai';
+import { LLAMA_CPP, LOCAL_MODELS, formatBytes, modelUrl, type LocalAiDevice, type LocalAiStatus, type LocalModel } from './localai';
 
 type Fetch = typeof globalThis.fetch;
 
@@ -37,9 +37,14 @@ export class LocalAi {
   private readonly models: LocalModel[];
   private readonly fetch: Fetch;
   private download?: LocalAiStatus['download'] & { abort: AbortController };
-  private server: { child: ChildProcess; model: string; url: string; log: string[]; ready: Promise<string>; device?: string } | null = null;
+  private server: { child: ChildProcess; model: string; url: string; log: string[]; ready: Promise<string>; device?: string; processor: boolean } | null = null;
   private error?: string;
   private lastEmit = 0;
+  private prefer: LocalAiDevice = 'auto';
+  /** The graphics card failed under the AI this session: run on the processor until 'auto' is chosen again. */
+  private movedOffGpu = false;
+  /** When a server on the graphics card last stopped by itself (the card may have gone down with it). */
+  private gpuExitAt = 0;
 
   constructor(private readonly opts: LocalAiOptions) {
     this.models = opts.models ?? LOCAL_MODELS;
@@ -79,7 +84,32 @@ export class LocalAi {
         : this.error
           ? { state: 'error', error: this.error }
           : { state: 'stopped' },
+      prefer: this.prefer,
+      ...(this.movedOffGpu ? { movedOffGpu: true } : {}),
     };
+  }
+
+  private get onProcessor() {
+    return this.prefer === 'processor' || this.movedOffGpu;
+  }
+
+  async setDevice(device: LocalAiDevice): Promise<LocalAiStatus> {
+    this.prefer = device;
+    // Choosing the graphics card again means trying it again.
+    if (device === 'auto') this.movedOffGpu = false;
+    if (this.server && this.server.processor !== this.onProcessor) await this.stop();
+    this.changed();
+    return this.status();
+  }
+
+  async gpuLost(): Promise<void> {
+    const s = this.server;
+    const usedGpu = s ? !s.processor : Date.now() - this.gpuExitAt < 120_000;
+    if (!usedGpu) return;
+    this.movedOffGpu = true;
+    await this.stop();
+    this.error = GPU_LOST;
+    this.changed();
   }
 
   private changed(force = true) {
@@ -138,7 +168,11 @@ export class LocalAi {
     this.error = undefined;
     const port = await freePort();
     const url = `http://127.0.0.1:${port}/v1`;
-    const args = ['-m', this.modelPath(m), '--host', '127.0.0.1', '--port', String(port), '-c', String(m.context), '-np', '1', '--jinja', '--reasoning', 'off', '--no-webui'];
+    const processor = this.onProcessor;
+    // On a graphics card: smaller pieces of work (Windows resets a card that's busy for over 2 s at a time, which blacks out
+    // every window on it) and 1.5 GB left free for the app's own window. On the processor: no graphics card at all.
+    const device = processor ? ['--device', 'none'] : ['-ub', '256', '--fit-target', '1536'];
+    const args = ['-m', this.modelPath(m), '--host', '127.0.0.1', '--port', String(port), '-c', String(m.context), '-np', '1', '--jinja', '--reasoning', 'off', '--no-webui', ...device];
     const child = spawn(exe, args, { cwd: dirname(exe), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     const log: string[] = [];
     const keep = (d: Buffer) => {
@@ -147,7 +181,7 @@ export class LocalAi {
     };
     child.stdout?.on('data', keep);
     child.stderr?.on('data', keep);
-    const server = { child, model: id, url, log, ready: Promise.resolve(url), device: undefined as string | undefined };
+    const server = { child, model: id, url, log, ready: Promise.resolve(url), device: undefined as string | undefined, processor };
     server.ready = new Promise<string>((resolve, reject) => {
       let done = false;
       const fail = (why: string) => {
@@ -162,9 +196,18 @@ export class LocalAi {
       child.once('error', (e) => fail(`The AI runner couldn't start: ${e.message}`));
       child.once('exit', (code) => {
         if (child.pid) this.opts.onProcess?.(child.pid, false);
-        if (this.server === server) this.server = null;
-        if (!done) fail(`The AI runner stopped while loading ${m.label} (code ${code}). ${explain(log)}`);
-        else this.changed();
+        const unexpected = this.server === server;
+        if (unexpected) this.server = null;
+        if (!done) return fail(`The AI runner stopped while loading ${m.label} (code ${code}). ${explain(log)}`);
+        // Stopped by itself while answering: say why, and keep it off a graphics card that failed.
+        if (unexpected) {
+          if (!processor) this.gpuExitAt = Date.now();
+          if (!processor && gpuFailed(log)) {
+            this.movedOffGpu = true;
+            this.error = GPU_LOST;
+          } else this.error = `The AI runner stopped while it was working (code ${code}). ${explain(log)}`;
+        }
+        this.changed();
       });
       const started = Date.now();
       const poll = async () => {
@@ -326,9 +369,17 @@ export function deviceOf(log: string[]): string {
   return 'processor';
 }
 
+const GPU_LOST = "The graphics card stopped responding while the AI was using it (Windows resets a card that's busy too long or out of memory, and the screen can go black). The AI now runs on the processor instead: slower, but it can't affect the screen. Send your message again. To try the graphics card again, choose it under Settings → AI.";
+
+/** The log shows the graphics card failing (lost by the driver, or out of its memory). */
+export function gpuFailed(log: string[]): boolean {
+  return /device ?lost|ErrorDeviceLost|VK_ERROR_DEVICE_LOST|ErrorOutOfDeviceMemory|vk::.*Error/i.test(log.slice(-60).join('\n'));
+}
+
 /** A plain reason from the server's last log lines (memory, a damaged file…). */
 function explain(log: string[]): string {
   const text = log.slice(-40).join('\n');
+  if (/device ?lost|ErrorDeviceLost|VK_ERROR_DEVICE_LOST/i.test(text)) return 'The graphics card stopped responding. Choose "The processor" under Settings → AI → Run it on.';
   if (/out of memory|failed to allocate|ErrorOutOfDeviceMemory|cannot allocate/i.test(text)) return 'There was not enough memory. Close other programs, or pick a smaller model.';
   if (/failed to load model|invalid magic|unknown model architecture/i.test(text)) return 'The model file could not be read. Remove it and download it again.';
   const last = log.filter((l) => /error|failed/i.test(l)).pop();

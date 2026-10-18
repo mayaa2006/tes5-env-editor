@@ -81,6 +81,35 @@ function startWorker(): Worker {
   return w;
 }
 
+/** Recent window recoveries, so a window that keeps crashing isn't reloaded forever. */
+let recoveries: number[] = [];
+
+/**
+ * Load the app into the window. After a crash, the reason goes in the address (#recovered=…) so the page can
+ * say what happened; the engine kept running, so the open game data and unsaved changes are still there.
+ */
+function loadApp(w: BrowserWindow, recovered?: 'gpu' | 'window'): void {
+  const devUrl = process.env.VITE_DEV_SERVER_URL;
+  const hash = recovered ? `recovered=${recovered}` : undefined;
+  if (devUrl) void w.loadURL(hash ? `${devUrl}#${hash}` : devUrl);
+  else void w.loadFile(join(__dirname, '..', 'dist', 'index.html'), hash ? { hash } : undefined);
+}
+
+/**
+ * The window's drawing stopped: its process crashed, or Windows reset the graphics card (which a long job on the
+ * built-in AI can cause) and left the window black. Reload it, keep the AI off the graphics card, and say so.
+ */
+function recoverWindow(why: 'gpu' | 'window'): void {
+  if (why === 'gpu') worker?.postMessage({ type: 'gpuLost' });
+  if (!win || win.isDestroyed()) return;
+  const now = Date.now();
+  recoveries = recoveries.filter((t) => now - t < 60_000);
+  if (recoveries.length >= 3) return;
+  recoveries.push(now);
+  const w = win;
+  setTimeout(() => !w.isDestroyed() && loadApp(w, why), 500);
+}
+
 function createWindow(): void {
   win = new BrowserWindow({
     width: 1600,
@@ -98,9 +127,11 @@ function createWindow(): void {
     },
   });
   const devUrl = process.env.VITE_DEV_SERVER_URL;
-  if (devUrl) void win.loadURL(devUrl);
-  else void win.loadFile(join(__dirname, '..', 'dist', 'index.html'));
+  loadApp(win);
   win.on('closed', () => (win = null));
+  win.webContents.on('render-process-gone', (_e, d) => {
+    if (d.reason !== 'clean-exit') recoverWindow('window');
+  });
   // Never navigate away from the app or open windows; external links go to the browser.
   win.webContents.on('will-navigate', (e, url) => {
     if (!devUrl || !url.startsWith(devUrl)) e.preventDefault();
@@ -132,6 +163,11 @@ ipcMain.handle('dialog:openFile', async (_e, title: string, filters?: OpenDialog
 
 ipcMain.on('shell:showItemInFolder', (_e, path: string) => {
   if (typeof path === 'string') shell.showItemInFolder(path);
+});
+
+// Windows can reset the graphics card when a program keeps it busy too long; Chromium's graphics process goes down with it.
+app.on('child-process-gone', (_e, d) => {
+  if (d.type === 'GPU' && d.reason !== 'clean-exit') recoverWindow('gpu');
 });
 
 app.whenReady().then(() => {

@@ -94,4 +94,4 @@ export class NodeProcessRunner implements ProcessRunner {
     });
   }
 }
-export { LocalAi, deviceOf, type LocalAiOptions } from './localai-node';
+export { LocalAi, deviceOf, gpuFailed, type LocalAiOptions } from './localai-node';

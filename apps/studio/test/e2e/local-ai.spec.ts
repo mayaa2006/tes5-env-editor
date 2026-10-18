@@ -22,6 +22,12 @@ for (const size of [
         const copy = () => JSON.parse(JSON.stringify(st));
         const send = () => emit(copy());
         const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+        // What the real one does when the graphics card fails under it.
+        (window as any).__simulateGpuLost = () => {
+          st.movedOffGpu = true;
+          st.server = { state: 'error', error: 'The graphics card stopped responding while the AI was using it.' };
+          send();
+        };
         return {
           status: copy,
           async install(id: string) {
@@ -57,6 +63,15 @@ for (const size of [
           async stop() {
             st.server = { state: 'stopped' };
             send();
+          },
+          async setDevice(d: string) {
+            st.prefer = d;
+            if (d === 'auto') delete st.movedOffGpu;
+            send();
+            return copy();
+          },
+          async gpuLost() {
+            (window as any).__simulateGpuLost();
           },
         };
       };
@@ -110,6 +125,19 @@ for (const size of [
     await expect(page.getByTestId('local-server')).toContainText('starts when the AI is first needed');
     await first.getByTestId('local-remove').click();
     await expect(first.getByTestId('local-download')).toBeVisible();
+
+    // Where it runs: a graphics card when there is one, unless it failed (then the processor, and it says so) or the processor is chosen.
+    const device = page.getByTestId('local-device').locator('select');
+    await expect(device).toHaveValue('auto');
+    await expect(page.getByTestId('local-moved-off-gpu')).toHaveCount(0);
+    await page.evaluate(() => (window as any).__simulateGpuLost());
+    await expect(page.getByTestId('local-moved-off-gpu')).toContainText('runs on the processor for now');
+    await device.selectOption('processor');
+    await expect(page.getByTestId('local-moved-off-gpu')).toHaveCount(0);
+    await expect(device).toHaveValue('processor');
+    await device.selectOption('auto');
+    await expect(page.getByTestId('local-moved-off-gpu')).toHaveCount(0);
+    if (process.env.SCREENSHOT_DIR) await page.getByTestId('ai-settings').screenshot({ path: `${process.env.SCREENSHOT_DIR}/local-ai-device-${size.width}.png` });
     expect(errors).toEqual([]);
   });
 }

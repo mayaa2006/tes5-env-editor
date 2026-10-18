@@ -5,7 +5,7 @@ import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { zipSync, strToU8 } from 'fflate';
-import { LocalAi, deviceOf } from '../src/node';
+import { LocalAi, deviceOf, gpuFailed } from '../src/node';
 import { LOCAL_MODELS, type LocalAiStatus, type LocalModel } from '../src';
 
 /** A stand-in for llama-server: says what it runs on, then answers /health (or fails like a server out of memory). */
@@ -14,7 +14,11 @@ const http = require('node:http');
 const port = Number(process.argv[process.argv.indexOf('--port') + 1]);
 if (process.env.FAKE_LLAMA === 'oom') { console.error('ggml_vulkan: failed to allocate buffer: ErrorOutOfDeviceMemory'); process.exit(1); }
 console.error('load_tensors: offloaded 0/29 layers to GPU');
-http.createServer((req, res) => res.end(req.url === '/health' ? '{"status":"ok"}' : JSON.stringify({ args: process.argv.slice(2) }))).listen(port, '127.0.0.1');
+http.createServer((req, res) => {
+  // Like a graphics card reset by Windows in the middle of an answer.
+  if (req.url === '/crash' && process.env.FAKE_LLAMA === 'devicelost') { console.error('ggml_vulkan: vk::Queue::submit: ErrorDeviceLost'); process.exit(1); }
+  res.end(req.url === '/health' ? '{"status":"ok"}' : JSON.stringify({ args: process.argv.slice(2) }));
+}).listen(port, '127.0.0.1');
 `;
 
 const MODEL_BYTES = new Uint8Array(200_000).map((_, i) => (i * 7) % 251);
@@ -109,6 +113,57 @@ describe('the built-in AI', () => {
     process.env.FAKE_LLAMA = 'oom';
     await expect(ai.ensure('tiny')).rejects.toThrow(/not enough memory/);
     expect(ai.status().server).toMatchObject({ state: 'error' });
+  });
+
+  it('runs gently on a graphics card or only on the processor, and moves off a card that fails', async () => {
+    const { url } = await files();
+    const { ai } = setup(url);
+    await ai.install('tiny');
+    const argsOf = async (api: string) => (await (await fetch(api.replace('/v1', '/args'))).json()).args as string[];
+    const until = async (ok: () => boolean) => {
+      for (let i = 0; i < 100 && !ok(); i++) await new Promise((r) => setTimeout(r, 50));
+    };
+    // A graphics card gets small pieces of work and keeps 1.5 GB free for the app's window.
+    let api = await ai.ensure('tiny');
+    expect(await argsOf(api)).toEqual(expect.arrayContaining(['-ub', '256', '--fit-target', '1536']));
+    expect(await argsOf(api)).not.toContain('--device');
+    expect(ai.status().prefer).toBe('auto');
+
+    // The processor only: the server stops, and starts again without the graphics card.
+    await ai.setDevice('processor');
+    expect(ai.status()).toMatchObject({ prefer: 'processor', server: { state: 'stopped' } });
+    api = await ai.ensure('tiny');
+    expect(await argsOf(api)).toEqual(expect.arrayContaining(['--device', 'none']));
+
+    // Back on the graphics card, it fails in the middle of an answer: the AI says why and moves to the processor.
+    await ai.setDevice('auto');
+    process.env.FAKE_LLAMA = 'devicelost';
+    api = await ai.ensure('tiny');
+    await fetch(api.replace('/v1', '/crash')).catch(() => undefined);
+    await until(() => ai.status().server.state === 'error');
+    expect(ai.status()).toMatchObject({ movedOffGpu: true, server: { state: 'error', error: expect.stringMatching(/graphics card stopped responding.*processor/) } });
+    delete process.env.FAKE_LLAMA;
+    api = await ai.ensure('tiny');
+    expect(await argsOf(api)).toEqual(expect.arrayContaining(['--device', 'none']));
+
+    // Choosing the graphics card again tries it again; the app's window losing its card moves the AI off it.
+    await ai.setDevice('auto');
+    expect(ai.status().movedOffGpu).toBeUndefined();
+    await ai.ensure('tiny');
+    await ai.gpuLost();
+    expect(ai.status()).toMatchObject({ movedOffGpu: true, server: { state: 'error' } });
+    // A runner on the processor isn't affected by the window's graphics card.
+    await ai.setDevice('processor');
+    await ai.ensure('tiny');
+    await ai.gpuLost();
+    expect(ai.status().server.state).toBe('running');
+    await ai.stop();
+  });
+
+  it('tells a graphics card failing from other trouble in the log', () => {
+    expect(gpuFailed(['ggml_vulkan: vk::Queue::submit: ErrorDeviceLost'])).toBe(true);
+    expect(gpuFailed(['ggml_vulkan: Device memory allocation of size 123 failed.', 'ErrorOutOfDeviceMemory'])).toBe(true);
+    expect(gpuFailed(['main: server is listening', 'srv  operator(): cleaning up before exit...'])).toBe(false);
   });
 
   it('tells a graphics card from the processor in the log', () => {

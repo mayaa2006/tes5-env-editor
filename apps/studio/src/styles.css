@@ -1717,3 +1717,30 @@ table.grid tr.diff td {
   height: 8px;
   accent-color: var(--accent);
 }
+
+/* ---- a part of the window that failed to draw (ErrorBoundary) */
+.error-panel {
+  margin: 24px auto;
+  max-width: 640px;
+  padding: 16px 18px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warn, #e0a040);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.error-panel h2 {
+  margin: 0;
+  font-size: 16px;
+}
+.error-panel p {
+  margin: 0;
+}
+.error-panel pre {
+  margin: 0;
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow: auto;
+}
