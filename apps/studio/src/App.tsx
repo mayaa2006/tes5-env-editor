@@ -3,6 +3,7 @@ import { Icon, Modal, TextInput, Toasts, Checkbox, Field, useHotkeys } from './c
 import { engine, useStore, type WorkspaceTab } from './state/store';
 import { Welcome } from './views/Welcome';
 import { PluginsView } from './views/PluginsView';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { Inspector } from './views/record/Inspector';
 import { ObjectBrowser } from './views/ObjectBrowser';
 import { BottomLog } from './views/BottomLog';
@@ -63,6 +64,12 @@ export function App() {
     });
   }, [client]);
 
+  // The built-in AI keeps to the processor when asked (the engine starts with the graphics card allowed).
+  const localDevice = useStore((s) => s.settings.localDevice);
+  useEffect(() => {
+    if (client) void client.call('localAiSetDevice', localDevice).catch(() => undefined);
+  }, [client, localDevice]);
+
   const compilerKind = useStore((s) => s.settings.compilerKind);
   const compilerPath = useStore((s) => s.settings.compilerPath);
   useEffect(() => {
@@ -122,25 +129,31 @@ export function App() {
           {tab === 'script' ? <ScriptSidebar /> : tab === 'scene' ? <ObjectBrowser /> : null}
         </aside>
         <main className="center">
-          <Suspense fallback={<div className="empty">Loading…</div>}>
-            {tab === 'scene' && <SceneView />}
-            {tab === 'npc' && <NpcCreator />}
-            {tab === 'body' && <BodyView />}
-            {tab === 'items' && <CatalogView key="items" tab="items" />}
-            {tab === 'magic' && <CatalogView key="magic" tab="magic" />}
-            {tab === 'quest' && <QuestDesigner />}
-            {tab === 'ai' && <AiWorkspace />}
-            {tab === 'script' && <ScriptEditor />}
-            {tab === 'records' && <RecordsView />}
-            {tab === 'clean' && <CleanerView />}
-            {tab === 'automations' && <AutomationsView />}
-            {tab === 'plugins' && <PluginsView />}
-            {tab === 'release' && <ReleaseView />}
-          </Suspense>
+          <ErrorBoundary where={`the ${TABS.find((t) => t.id === tab)?.label ?? tab} tab`} resetKey={tab}>
+            <Suspense fallback={<div className="empty">Loading…</div>}>
+              {tab === 'scene' && <SceneView />}
+              {tab === 'npc' && <NpcCreator />}
+              {tab === 'body' && <BodyView />}
+              {tab === 'items' && <CatalogView key="items" tab="items" />}
+              {tab === 'magic' && <CatalogView key="magic" tab="magic" />}
+              {tab === 'quest' && <QuestDesigner />}
+              {tab === 'ai' && <AiWorkspace />}
+              {tab === 'script' && <ScriptEditor />}
+              {tab === 'records' && <RecordsView />}
+              {tab === 'clean' && <CleanerView />}
+              {tab === 'automations' && <AutomationsView />}
+              {tab === 'plugins' && <PluginsView />}
+              {tab === 'release' && <ReleaseView />}
+            </Suspense>
+          </ErrorBoundary>
           {hasInspector(tab) && <BottomLog />}
         </main>
         <aside className="rightbar" style={right ? undefined : { overflow: 'hidden', borderLeft: 'none' }}>
-          {right && <Inspector />}
+          {right && (
+            <ErrorBoundary where="the properties panel" resetKey={tab}>
+              <Inspector />
+            </ErrorBoundary>
+          )}
         </aside>
       </div>
       <StatusBar />

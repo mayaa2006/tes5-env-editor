@@ -119,6 +119,7 @@ import {
   runAgentTurn,
   sessionTitle,
   type LocalAiControl,
+  type LocalAiDevice,
   type LocalAiStatus,
 } from '@tes5/workspace';
 import { aiTools } from './aitools';
@@ -1169,6 +1170,11 @@ export class EngineHost {
     return this.localAiStatus();
   }
 
+  /** Run the built-in AI on a graphics card when there is one, or only on the processor. */
+  async localAiSetDevice(device: LocalAiDevice) {
+    return this.localAi ? this.localAi.setDevice(device) : this.localAiStatus();
+  }
+
   /** Models installed in Ollama on this computer. */
   ollamaModels(url?: string) {
     return ollamaModels(url || OLLAMA_URL);
@@ -1744,6 +1750,13 @@ export class EngineHost {
       const added = ws.undoLabelsSince(depth);
       const label = `AI: ${sessionTitle(text)}`;
       const undoLabel = added.length && added.every((l) => l.startsWith('AI: ')) && ws.squashUndo(depth, label) ? label : added.length ? (added[added.length - 1] ?? null) : null;
+      // A built-in AI that stopped mid-answer says why (its graphics card failed, it ran out of memory) instead of "couldn't
+      // reach": the request can fail a moment before the runner's exit is noticed, so that's waited for briefly.
+      if (res.error && asAi(ai).kind === 'local' && this.localAi && /reach|fetch failed|socket|ECONN|terminated/i.test(res.error)) {
+        for (let n = 0; n < 20 && this.localAi.status().server.state === 'running'; n++) await new Promise((r) => setTimeout(r, 100));
+        const why = this.localAi.status().server.error;
+        if (why) res.error = why;
+      }
       session.turns.push({ at, title: sessionTitle(text), undoLabel, changes: res.changes, ...(res.error ? { error: res.error } : {}), usage: res.usage, provider: model.provider });
       if (plans.size) session.plans = Object.fromEntries(plans);
       session.updated = Date.now();

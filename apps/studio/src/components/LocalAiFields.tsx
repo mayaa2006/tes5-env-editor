@@ -7,7 +7,7 @@
 import { useEffect, useState } from 'react';
 import { LLAMA_CPP, LOCAL_MODELS, formatBytes, type LocalAiStatus, type LocalModel } from '@tes5/workspace';
 import { useStore } from '../state/store';
-import { Help, Icon } from './ui';
+import { Help, Icon, Select } from './ui';
 
 export function useLocalAi(): [LocalAiStatus | null, (s: LocalAiStatus) => void] {
   const client = useStore((st) => st.client);
@@ -32,7 +32,7 @@ export function LocalAiFields() {
   const toast = useStore((st) => st.toast);
   const [status, setStatus] = useLocalAi();
   const [busy, setBusy] = useState(false);
-  const call = async (method: 'localAiInstall' | 'localAiRemove' | 'localAiStart' | 'localAiStop', ...args: unknown[]) => {
+  const call = async (method: 'localAiInstall' | 'localAiRemove' | 'localAiStart' | 'localAiStop' | 'localAiSetDevice', ...args: unknown[]) => {
     try {
       const r = (await (client as unknown as { call(m: string, ...a: unknown[]): Promise<unknown> } | null)?.call(method, ...args)) as LocalAiStatus | undefined;
       if (r && typeof r === 'object' && 'installed' in r) setStatus(r);
@@ -127,6 +127,30 @@ export function LocalAiFields() {
           );
         })}
       </div>
+      <div className="row small" style={{ gap: 6 }}>
+        <span className="dim" title="A graphics card makes the AI several times faster. On some PCs a long job can make Windows reset the card, which turns the screen black; the processor never does that.">
+          Run it on
+        </span>
+        <div style={{ width: 300 }} data-testid="local-device">
+          <Select
+            value={s.localDevice}
+            options={[
+              { value: 'auto', label: 'The graphics card if there is one (faster)' },
+              { value: 'processor', label: 'The processor only (slower, never affects the screen)' },
+            ]}
+            onChange={(localDevice) => {
+              update({ localDevice });
+              void call('localAiSetDevice', localDevice);
+            }}
+          />
+        </div>
+        <Help text="The graphics card makes the AI several times faster. If the screen goes black or flickers while the AI works (Windows resets a graphics card that's kept busy too long), choose the processor. The AI starts again on the new choice the next time it's needed." />
+      </div>
+      {status?.movedOffGpu && s.localDevice === 'auto' && (
+        <div className="small" style={{ color: 'var(--warn, #e0a040)' }} data-testid="local-moved-off-gpu">
+          The graphics card stopped responding while the AI was using it, so the AI runs on the processor for now. Choose the processor above to keep it that way, or the graphics card to try it again.
+        </div>
+      )}
       {current && installed.has(current.id) && (
         <div className="row small" style={{ gap: 6 }} data-testid="local-server">
           <span className={server?.state === 'error' ? '' : 'dim'} style={server?.state === 'error' ? { color: 'var(--warn, #e0a040)' } : undefined}>

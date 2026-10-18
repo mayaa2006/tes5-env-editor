@@ -134,7 +134,13 @@ export interface LocalAiControl {
   /** Start the server for a model if needed; its OpenAI-style address. */
   ensure(id: string): Promise<string>;
   stop(): Promise<void>;
+  /** Run on a graphics card when there is one ('auto'), or never ('processor'). */
+  setDevice(device: LocalAiDevice): Promise<LocalAiStatus>;
+  /** The app's window lost its graphics card (Windows reset it): keep the AI off it from now on. */
+  gpuLost(): Promise<void>;
 }
+
+export type LocalAiDevice = 'auto' | 'processor';
 
 export interface LocalAiStatus {
   /** False where the app can't run it (the browser demo, or not Windows without a server of your own). */
@@ -146,4 +152,8 @@ export interface LocalAiStatus {
   /** The download in progress: which model (its id), and whether it's the runner, the model or the final check. */
   download?: { model: string; what: 'runtime' | 'model' | 'checking'; done: number; total: number };
   server: { state: 'stopped' | 'starting' | 'running' | 'error'; model?: string; device?: string; error?: string };
+  /** Where it's set to run. */
+  prefer?: LocalAiDevice;
+  /** The graphics card failed while the AI was using it, so it runs on the processor for now (until 'auto' is chosen again). */
+  movedOffGpu?: boolean;
 }

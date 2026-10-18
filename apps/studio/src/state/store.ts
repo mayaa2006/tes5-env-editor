@@ -74,6 +74,8 @@ export interface Settings {
   aiKind: 'claude' | 'local' | 'ollama' | 'openai';
   /** The built-in AI's model (an id from LOCAL_MODELS). */
   localModel: string;
+  /** Where the built-in AI runs: a graphics card when there is one, or only the processor. */
+  localDevice: 'auto' | 'processor';
   ollamaUrl: string;
   ollamaModel: string;
   openaiUrl: string;
@@ -109,6 +111,7 @@ const DEFAULT_SETTINGS: Settings = {
   anthropicApiKey: '',
   aiKind: 'claude',
   localModel: '',
+  localDevice: 'auto',
   ollamaUrl: 'http://localhost:11434',
   ollamaModel: '',
   openaiUrl: '',

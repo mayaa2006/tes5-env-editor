@@ -2,6 +2,13 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.35.1
+
+- **Fixed: the screen could go black when the built-in AI made a quest.** Asking for a quest gives the AI its biggest job, and on some PCs the graphics card is kept busy so long that Windows resets it, which leaves the editor's window black. The built-in AI now works the graphics card in smaller pieces and leaves 1.5 GB of its memory free for the window. If the card still fails, the AI moves to the processor and says so, and the window is drawn again with your work still open.
+- **Run the built-in AI on the processor only.** Settings → AI → Free on this PC → Built in → **Run it on**: the graphics card if there is one (faster), or the processor only (slower, never affects the screen).
+- **A part of the window that fails to draw now says what went wrong**, with **Try again** and **Copy the details**, instead of turning black. Your work stays open; the rest of the window keeps working.
+- When the built-in AI stops in the middle of an answer, the AI tab says why (its graphics card stopped responding, or it ran out of memory) instead of "couldn't reach".
+
 ## 0.35.0
 
 - **Factions, classes, leveled characters and relationships, in plain words.** The Characters tab has a new switch, **Factions, classes & more**, laid out like Items and Magic. Factions show who's in them (add someone, change their rank or take them out), their ranks and titles, who they're friends or enemies with, crime bounties and jail clothes, and shop hours and goods. Classes show what they train, how fast each skill grows, and how health, magicka and stamina grow. Relationships say who and how they feel about each other. New ones start with values like Skyrim's, and everything can be undone.

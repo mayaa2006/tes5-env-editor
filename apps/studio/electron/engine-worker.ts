@@ -35,7 +35,9 @@ function watch(host: EngineHost): void {
 }
 watch(real);
 
-port.on('message', async (m: { id: number; method: string; args: unknown[] }) => {
+port.on('message', async (m: { id: number; method: string; args: unknown[]; type?: string }) => {
+  // The window's graphics card was reset: keep the built-in AI off it.
+  if (m.type === 'gpuLost') return void localAi?.gpuLost();
   try {
     if (m.method === 'open') {
       const opts = m.args[0] as { kind?: string } | undefined;

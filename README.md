@@ -246,6 +246,8 @@ The **AI** tab is a conversation with an AI that works through the editor itself
 
 **Settings → AI → Free on this PC → Built in** lists five small open models. Press **Download** on one and it's ready: the app fetches the model from Hugging Face and the program that runs it ([llama.cpp](https://github.com/ggml-org/llama.cpp)) from GitHub, checks the download, and starts it when the AI is first needed. Nothing you write leaves your PC, and it works offline once downloaded. The settings say whether it's running on your graphics card or the processor; **Stop** frees its memory.
 
+**Run it on** chooses where it runs: the graphics card if there is one (several times faster), or the processor only. On some PCs a long job (planning a quest is the longest) keeps the graphics card so busy that Windows resets it, which can turn the screen black; the built-in AI gives the card smaller pieces of work and leaves room for the editor's window, and if the card still fails, it moves to the processor by itself, says so, and the window is drawn again with your work still open. Choose the processor if your screen flickers or goes black while the AI works.
+
 Each model was tried on nine real jobs in the AI tab, against Skyrim Special Edition's own data (Skyrim.esm, Update.esm, the three DLCs and their BSAs), on a 4-core processor with no graphics card, which is about as slow as it gets:
 
 | Model | Download | Memory it needs | Jobs done right | Time per job |
