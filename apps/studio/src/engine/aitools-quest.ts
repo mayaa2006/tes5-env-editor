@@ -19,7 +19,12 @@ export interface QuestToolContext {
   ai: AiProvider;
   plans: Map<string, { plan: QuestPlan; source?: string; quest?: FormKey }>;
   touched: Set<FormKey>;
+  /** Revisions asked for in this turn: small models can revise in circles, minutes at a time. */
+  revisions?: number;
 }
+
+/** Revisions of a plan allowed in one turn of the conversation. */
+const MAX_REVISIONS = 2;
 
 const Form = z.string().describe('Editor ID or FormKey of the quest');
 const Stage = z.number().int().min(0).max(65535);
@@ -83,7 +88,7 @@ export function questTools(host: EngineHost, ctx: QuestToolContext): AgentTool<a
   };
   const label = (k: FormKey) => ws().summary(k)?.editorId ?? k;
   const link = (k: FormKey) => ({ tab: 'quest' as const, key: k, label: `${label(k)} in Quests` });
-  const planner = () => new QuestPlanner({ ai: ctx.ai });
+  const planner = (signal?: AbortSignal) => new QuestPlanner({ ai: ctx.ai, signal });
   const catalog = (text: string) => planCatalog(ws(), { text, ...catalogLimits(ctx.ai) });
   const stageOf = (q: FormKey, s: number) => host.quest(q).stages.find((x) => x.index === s);
 
@@ -96,8 +101,8 @@ export function questTools(host: EngineHost, ctx: QuestToolContext): AgentTool<a
         "Plan a whole new quest (characters, places, items, stages, journal, objectives, what moves it on, dialogue, events, rewards) from a description, the way Quests → From writing does. Nothing is built yet: you get a plan id and a summary with problems to check. Also plans creating or changing characters, places and items without a quest. Describe everything the author asked for in 'text', in your own words if they told you over several messages.",
       input: z.object({ text: z.string().describe('The quest as the author describes it: who, where, what the player does, how it ends'), mode: z.enum(['document', 'conversation']).nullable().optional().describe("'conversation' when the text is a conversation to build a quest around; otherwise 'document'") }),
       summary: () => 'Plan a quest',
-      run: async (i) => {
-        const plan = await planner().plan(i.text, i.mode ?? 'document', catalog(i.text));
+      run: async (i, c) => {
+        const plan = await planner(c?.signal).plan(i.text, i.mode ?? 'document', catalog(i.text));
         settleCharacters(ws(), plan, i.text, ctx.ai.kind !== 'claude');
         const id = keep(plan, { source: i.text });
         return { data: review(id), note: `Planned “${plan.title}”` };
@@ -110,14 +115,17 @@ export function questTools(host: EngineHost, ctx: QuestToolContext): AgentTool<a
       description: 'Change a plan as described in words ("make Eirik the thief", "add a reward of 200 gold"). Returns the new plan id and summary.',
       input: z.object({ planId: z.string(), change: z.string().describe('What to change, in words') }),
       summary: (i) => `Revise ${i.planId}`,
-      run: async (i) => {
+      run: async (i, c) => {
         const p = planOf(i.planId);
-        const next = await planner().revise(p.plan, i.change, catalog(`${p.source ?? ''}\n${i.change}`), p.source);
+        if ((ctx.revisions ?? 0) >= MAX_REVISIONS)
+          throw new WorkspaceError(`That's ${MAX_REVISIONS} revisions in this turn. Don't revise again now: build the latest plan with build_plan if nothing in mustFix is left, or tell the author what's still wrong and let them decide.`);
+        ctx.revisions = (ctx.revisions ?? 0) + 1;
+        const next = await planner(c?.signal).revise(p.plan, i.change, catalog(`${p.source ?? ''}\n${i.change}`), p.source);
         settleCharacters(ws(), next, `${p.source ?? ''}\n${i.change}`, ctx.ai.kind !== 'claude');
         const id = keep(next, { source: p.source, quest: p.quest });
         const was = blockingIssues(validatePlan(p.plan)).map((x) => x.message).sort().join('|');
         const now = review(id);
-        const same = was && [...now.mustFix, ...now.shouldFix].sort().join('|') === was;
+        const same = JSON.stringify(next) === JSON.stringify(p.plan) || (was && [...now.mustFix, ...now.shouldFix].sort().join('|') === was);
         // A small model can revise in circles: say so, and what to do instead.
         return { data: same ? { ...now, next: now.readyToBuild ? 'The revision fixed nothing: build it now and tell the author what is left.' : 'The revision fixed nothing: use edit_plan for the exact change (show_plan gives the plan), or tell the author what is wrong.' } : now };
       },

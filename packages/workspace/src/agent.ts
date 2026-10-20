@@ -44,7 +44,8 @@ export interface AgentTool<I = any> {
   input: z.ZodType<I>;
   /** What the call does, in a few plain words ("Add stage 20 to MyQuest"). */
   summary(input: I): string;
-  run(input: I): Promise<AgentToolOutput> | AgentToolOutput;
+  /** `signal` is aborted when the author presses Stop: tools that wait on something slow (an AI request) pass it on. */
+  run(input: I, ctx?: { signal?: AbortSignal }): Promise<AgentToolOutput> | AgentToolOutput;
 }
 
 /** What a tool hands back: data for the AI, and optionally a short line and a link for the author. */
@@ -509,7 +510,7 @@ async function runTool(call: AgentToolCall, tool: AgentTool | undefined, model: 
   }
   hooks.onEvent?.({ type: 'call', session: sid, id: call.id, name: call.name, summary, writes: tool.writes, status: 'running' });
   try {
-    const run = () => Promise.resolve(tool.run(parsed.data));
+    const run = () => Promise.resolve(tool.run(parsed.data, { signal: hooks.signal }));
     const out = tool.writes && hooks.transaction ? await hooks.transaction(`AI: ${summary}`, run) : await run();
     return { id: call.id, name: call.name, content: clip(stringify(out.data ?? 'Done.'), max), summary, writes: tool.writes, status: 'done', ...(out.note ? { note: out.note } : {}), ...(out.link ? { link: out.link } : {}) };
   } catch (e) {

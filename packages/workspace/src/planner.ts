@@ -37,7 +37,7 @@ export interface PlannerReply {
 }
 
 /** Sends one request. The default streams it through the Anthropic SDK; tests pass their own. */
-export type PlannerSend = (params: BetaMessageStreamParams) => Promise<PlannerReply>;
+export type PlannerSend = (params: BetaMessageStreamParams, signal?: AbortSignal) => Promise<PlannerReply>;
 
 const RULES = `You turn a Skyrim mod author's writing into a quest plan that a tool builds into a working quest (records, scripts, dialogue). Return only the plan, in the given JSON format.
 
@@ -263,20 +263,27 @@ export class QuestPlanner {
   /** What to call the AI in messages. */
   readonly name: string;
 
-  constructor(opts: { apiKey?: string; ai?: AiProvider; send?: PlannerSend; model?: string } = {}) {
+  /** `signal`: Stop in the AI tab ends a plan that's still being written (with the built-in AI that can take minutes). */
+  constructor(opts: { apiKey?: string; ai?: AiProvider; send?: PlannerSend; model?: string; signal?: AbortSignal } = {}) {
     const ai: AiProvider | undefined = opts.ai ?? (opts.apiKey ? { kind: 'claude', apiKey: opts.apiKey } : undefined);
     this.name = aiName(ai);
-    if (opts.send) this.send = opts.send;
-    else if (ai?.kind === 'local') throw new WorkspaceError('The built-in AI has to be started first');
-    else if (ai && ai.kind !== 'claude') this.send = chatSend(ai);
-    else {
+    const signal = opts.signal;
+    if (opts.send) {
+      const send = opts.send;
+      this.send = (params) => send(params, signal);
+    } else if (ai?.kind === 'local') throw new WorkspaceError('The built-in AI has to be started first');
+    else if (ai && ai.kind !== 'claude') {
+      const send = chatSend(ai);
+      this.send = (params) => send(params, signal);
+    } else {
       if (ai?.kind === 'claude') opts = { ...opts, apiKey: ai.apiKey };
       if (!opts.apiKey) throw new WorkspaceError('Add your Anthropic API key, or pick a free AI, to plan quests');
       const client = new Anthropic({ apiKey: opts.apiKey, dangerouslyAllowBrowser: true });
       this.send = async (params) => {
         try {
-          return await client.beta.messages.stream(params).finalMessage();
+          return await client.beta.messages.stream(params, signal ? { signal } : undefined).finalMessage();
         } catch (e) {
+          if (signal?.aborted) throw new WorkspaceError('Stopped.');
           if (e instanceof Anthropic.AuthenticationError) throw new WorkspaceError('Anthropic rejected the API key. Check it in Settings.');
           if (e instanceof Anthropic.RateLimitError) throw new WorkspaceError('Too many requests to Claude right now. Wait a minute and try again.');
           if (e instanceof Anthropic.APIConnectionError) throw new WorkspaceError("Couldn't reach Anthropic's API. Check your internet connection.");
