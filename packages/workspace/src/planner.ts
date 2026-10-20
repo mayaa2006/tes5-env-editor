@@ -585,7 +585,7 @@ function planBrief(plan: QuestPlan, source: string): string {
 
 /** Problems worth one more round with the AI: errors, and gaps that leave the quest stuck. */
 function blockingIssues(issues: PlanIssue[]): PlanIssue[] {
-  return issues.filter((i) => i.severity === 'error' || /^(Nothing moves the quest|Nothing starts the quest|No stage completes|The player needs|The player loses|A line in .* sets stage|The quest starts with the game, so stage|.* fails the quest as soon as stage|.* whenever it's chosen, even before)/.test(i.message));
+  return issues.filter((i) => i.severity === 'error' || /^(Nothing moves the quest|Nothing starts the quest|No stage completes|The player needs|The player loses|A line in .* sets stage|The quest starts with the game, so stage|.* fails the quest as soon as stage|.* whenever it's chosen, even before|The player has to pick up)/.test(i.message));
 }
 
 const JournalDraftSchema = z.object({

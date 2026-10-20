@@ -587,6 +587,21 @@ export function validatePlan(input: QuestPlan): PlanIssue[] {
   // Items the player has to have ([takes …], [if has …]) must reach them somehow.
   const lines = (plan.conversations ?? []).map((c) => c.screenplay).join('\n');
   const tagged = (verbs: string, i: PlanItem, text = lines) => [i.key, i.name].some((n) => n && new RegExp(`\\[(?:${verbs})\\s+${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s*[x×]\\s*\\d+)?\\]`, 'i').test(text));
+  // Something a character carries reaches the player when they hand it over or die (looted from their body).
+  const released = (i: PlanItem) => {
+    if (i.startsWith !== 'character') return true;
+    const c = (plan.characters ?? []).find((x) => x.key === i.startsAtKey);
+    if (!c) return true;
+    const who = new RegExp(`^\\s*(${[c.key, c.name].map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\s*:`, 'i');
+    const hands = lines.split('\n').some((l) => who.test(l) && tagged('gives', i, l));
+    const dies = (plan.steps ?? []).some((st) => st.kind === 'death' && st.targetKey === c.key) || (plan.events ?? []).some((e) => (e.kind === 'kill' || e.kind === 'hostile') && e.targetKey === c.key) || !!c.combat?.hostile;
+    return hands || dies;
+  };
+  for (const i of plan.items ?? [])
+    if ((plan.steps ?? []).some((st) => st.kind === 'pickup' && st.targetKey === i.key) && !released(i)) {
+      const c = (plan.characters ?? []).find((x) => x.key === i.startsAtKey)!;
+      warn(`The player has to pick up ${i.name}, but ${c.name} carries it and never hands it over or dies: put it on the character it should be taken from (one who fights or dies), somewhere to pick up, or have ${c.name} hand it over with [gives ${i.key} x1]`);
+    }
   for (const i of plan.items ?? []) {
     if (i.kind === 'gold' || !tagged('takes|if\\s+has', i)) continue;
     const gets =
@@ -594,7 +609,7 @@ export function validatePlan(input: QuestPlan): PlanIssue[] {
       i.startsWith === 'location' ||
       tagged('gives', i) ||
       (plan.rewards ?? []).some((r) => r.itemKey === i.key) ||
-      (plan.steps ?? []).some((st) => st.kind === 'pickup' && st.targetKey === i.key);
+      ((plan.steps ?? []).some((st) => st.kind === 'pickup' && st.targetKey === i.key) && released(i));
     if (!gets)
       warn(
         `The player needs ${i.name} ([takes ${i.key}] or [if has ${i.key}]) but never gets it: put it somewhere to pick up (startsWith "location" and a pickup step), have its owner hand it over with [gives ${i.key} x1], or give it as a reward`,

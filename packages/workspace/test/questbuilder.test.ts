@@ -109,6 +109,18 @@ describe('plans that would play wrong', () => {
     expect(validatePlan(plan).filter((i) => /whenever it's chosen/.test(i.message))).toEqual([]);
   });
 
+  it('an item to pick up that someone carries and never lets go of', () => {
+    const plan = exampleQuestPlan();
+    // Brynja holds her own ring, yet the plan says the player picks it up.
+    plan.items[0] = { ...plan.items[0]!, startsWith: 'character', startsAtKey: 'brynja', spot: null };
+    const msg = "The player has to pick up Brynja's Ring, but Brynja carries it and never hands it over or dies: put it on the character it should be taken from (one who fights or dies), somewhere to pick up, or have Brynja hand it over with [gives ring x1]";
+    expect(validatePlan(plan).map((i) => i.message)).toContain(msg);
+    // Eirik has it and dies for it: fine.
+    plan.items[0]!.startsAtKey = 'eirik';
+    plan.characters[1]!.combat = { hostile: true, levelScaled: null, skills: [], spells: [], perks: [], combatStyle: null };
+    expect(validatePlan(plan).some((i) => i.message.startsWith('The player has to pick up'))).toBe(false);
+  });
+
   it('a “right away” step into a failing stage', () => {
     const plan = exampleQuestPlan();
     plan.stages.push({ index: 90, journal: 'I kept the ring.', startsQuest: false, completesQuest: false, failsQuest: true });
