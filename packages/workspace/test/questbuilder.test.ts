@@ -183,6 +183,17 @@ describe('plans that would play wrong', () => {
     expect(code).toContain('AddItem(Game.GetFormFromFile(0x00000F, "Skyrim.esm"), 100)');
   });
 
+  it('joins a stage that leads nowhere to the completing stage nothing reaches', () => {
+    const plan = exampleQuestPlan();
+    // "Returned" at 100 no longer completes; a separate 200 does, and nothing gets there.
+    plan.stages.find((x) => x.index === 100)!.completesQuest = false;
+    plan.stages.push({ index: 200, journal: 'Brynja thanked me again.', startsQuest: false, completesQuest: true, failsQuest: false });
+    expect(validatePlan(plan).map((i) => i.message)).toContain('Nothing moves the quest to stage 200: add a step, or a [stage 200] tag on a line of dialogue');
+    expect(repairPlan(plan)).toContain('stage 100 led nowhere and nothing reached stage 200, which completes the quest: it now goes straight on from 100 to 200');
+    expect(plan.steps.at(-1)).toMatchObject({ from: 100, to: 200, kind: 'script' });
+    expect(validatePlan(plan).some((i) => i.message.includes('stage 200'))).toBe(false);
+  });
+
   it('mends a key used twice in an AI plan: an item listed as a character too', () => {
     const plan = exampleQuestPlan();
     plan.characters.push({ ...plan.characters[1]!, key: 'ring', name: "Brynja's Ring", existing: 'Gold Ring', routine: [], outfit: null });

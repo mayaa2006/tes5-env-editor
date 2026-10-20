@@ -454,6 +454,22 @@ export function repairPlan(plan: QuestPlan): string[] {
     best.conv.screenplay = rows.join('\n');
     changes.push(`${holder.name as string} hands over ${(i.name as string) || i.key} when the job is taken (${best.conv.title as string})`);
   }
+  // A completing stage nothing reaches, after a stage that leads nowhere ("delivered" at 30, "completes" at 100): the quest
+  // goes straight on from that stage to the end.
+  if (Array.isArray(p.stages) && Array.isArray(p.steps) && Array.isArray(p.conversations)) {
+    const plan = p as unknown as QuestPlan;
+    const said = stagesSaid(plan);
+    const reached = new Set<number>([...said, ...plan.steps.map((st) => st.to), ...(plan.failures ?? []).map((f) => f.failStage)]);
+    const stagesOf = plan.stages.filter((x) => typeof x.index === 'number');
+    const start = (stagesOf.find((x) => x.startsQuest) ?? [...stagesOf].sort((a, b) => a.index - b.index)[0])?.index;
+    const ends = stagesOf.filter((x) => x.completesQuest && !reached.has(x.index) && x.index !== start);
+    const gatedAt = (stage: number) => plan.conversations.some((c) => new RegExp(`\\[if\\s+(?:stage\\s*)?(?:==?\\s*)?${stage}\\][^\\n]*(?:\\n\\s+[^\\n]*)*\\[stage\\s+\\d+\\]`, 'i').test(c.screenplay));
+    const deadEnds = stagesOf.filter((x) => !x.completesQuest && !x.failsQuest && (reached.has(x.index) || x.index === start) && !plan.steps.some((st) => st.from === x.index) && !gatedAt(x.index));
+    if (ends.length === 1 && deadEnds.length === 1 && deadEnds[0]!.index < ends[0]!.index) {
+      plan.steps.push({ from: deadEnds[0]!.index, to: ends[0]!.index, kind: 'script', targetKey: null, note: 'Goes straight on to the end' });
+      changes.push(`stage ${deadEnds[0]!.index} led nowhere and nothing reached stage ${ends[0]!.index}, which completes the quest: it now goes straight on from ${deadEnds[0]!.index} to ${ends[0]!.index}`);
+    }
+  }
   // "Fails if kept three days" written as a step that fails the quest right away, where a failure already does it.
   const failed = new Set(list(p.failures).map((f) => f.failStage));
   const steps = list(p.steps);
