@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { FormKey } from '@tes5/esp';
 import {
   DialogueService,
@@ -174,6 +176,51 @@ describe('written dialogue', () => {
       ['chose persuaded', 'gold x250'],
       [null, 'gold x150'],
     ]);
+  });
+
+  it("mends a small model's tags for the Cartographer's first quest: lines miscounted, the job taken, the promise, the persuasion", () => {
+    const doc = readFileSync(join(import.meta.dirname, '../../../apps/studio/test/models/questline-cartographer.md'), 'utf8');
+    const blocks = blocksFor(findDialogue(splitQuestline(doc)!.parts[0]!.text).blocks, 'HESTA');
+    const plan = {
+      stages: [0, 10, 20, 30, 40].map((index) => ({ index, completesQuest: index === 40, failsQuest: false })),
+      items: [{ key: 'mapPage1', name: 'Torn Map Page' }, { key: 'wantedNotice', name: 'Wanted Notice' }],
+      steps: [
+        { from: 0, to: 10, kind: 'script', targetKey: null, note: 'Player reads the wanted notice on the bar' },
+        { from: 10, to: 20, kind: 'talk', targetKey: null, note: 'Player agrees to take the job with Hesta' },
+        { from: 20, to: 30, kind: 'pickup', targetKey: 'mapPage1', note: 'Player finds the first map page' },
+        { from: 30, to: 40, kind: 'talk', targetKey: null, note: 'Player returns the pages to Hesta' },
+      ],
+    };
+    // What Qwen3.5 4B answered (on the real run): the promise remembered on the wrong lines, nothing taking the job,
+    // block 2 ("Right after the player takes the job") offered before it's taken.
+    const on = (n: number, tags: string) => ({ line: n, tags });
+    applyAnnotation(blocks, {
+      blocks: [{ block: 1, tags: '[if stage 10]' }, { block: 2, tags: '[if stage 10]' }, { block: 3, tags: '[if stage 20]' }, { block: 4, tags: '[if stage 30]' }],
+      lines: [on(6, '[if stage 10] [remember promised] | [if stage 10] [remember promised]'), on(7, '[if stage 10] [remember persuaded]'), on(8, '[if stage 10] [remember persuaded]'), on(16, '[if stage 10] [remember promised]'), on(24, '[if stage 10] [remember promised]'), on(31, '[if stage 30] [gives gold x150] | [if stage 30] [if chose persuaded] [gives gold x250]')],
+    });
+    directionTags(blocks, plan);
+    // Its retry, one line off, with the words that show which line it meant.
+    applyAnnotation(blocks, { blocks: [], lines: [{ line: 9, words: 'Ha. Fine. 250', tags: '[stage 20]' }] });
+    const text = writtenScreenplay(blocks);
+    expect(parseScreenplay(text).errors).toEqual([]);
+    const row = (start: string) => text.split('\n').find((r) => r.trim().startsWith(start))!;
+    expect(row("HESTA: The case will be ruined")).toMatch(/\[stage 20\]/);
+    expect(row("HESTA: The case will be ruined")).not.toMatch(/remember/);
+    expect(row('HESTA: Ha. Fine. 250')).toMatch(/\[stage 20\].*\[remember persuaded\]|\[remember persuaded\].*\[stage 20\]/);
+    expect(row('HESTA: 150 is what I have')).not.toMatch(/stage/);
+    expect(row('HESTA: Three pages. All three, mind.')).toMatch(/\[stage 20\]/);
+    expect(row("HESTA: Good. I'll hold you to it.")).toMatch(/\[remember promised\]/);
+    expect(row('PLAYER: You have my word.')).toMatch(/\[if stage 20\]|^HESTA/);
+    // The line said at stage 20 isn't held back to stage 10 by the AI's own condition.
+    expect(row("HESTA: Good. I'll hold you to it.")).not.toMatch(/if stage/);
+    // Paid 250 if persuaded, otherwise 150; either way the pages are taken and the quest is done.
+    const back = parseScreenplay(text).topics.find((t) => t.text === 'I found your map pages.')!;
+    expect(back.tags.if).toBe('stage 30');
+    expect(back.responses.map((r) => [r.tags.if ?? null, r.tags.gives, r.tags.takes, r.tags.stage])).toEqual([
+      ['chose persuaded', 'gold x250', 'mapPage1 x3', '40'],
+      [null, 'gold x150', 'mapPage1 x3', '40'],
+    ]);
+    expect(blocks.find((b) => b.id === 2)!.tags).toEqual(['[if stage 20]']);
   });
 
   it('adds up what the lines of one answer give, and [or] starts another answer', () => {

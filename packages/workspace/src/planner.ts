@@ -380,7 +380,8 @@ export class QuestPlanner {
     // Stages a talk step says a conversation reaches, that no line reaches yet: ask which lines do it.
     const unsaid = plan.steps.filter((st) => st.kind === 'talk' && !stagesSaid(plan).has(st.to));
     if (unsaid.length) await this.addWrittenDialogue(plan, blocks, context, unsaid);
-    if (blockingIssues(validatePlan(plan)).length) this.onStep?.('fixing what would leave the quest stuck');
+    const blocking = blockingIssues(validatePlan(plan));
+    if (blocking.length) this.onStep?.(`fixing what would leave the quest stuck (${blocking[0]!.message}${blocking.length > 1 ? `, and ${blocking.length - 1} more` : ''})`);
     plan = await this.fixLogic(params, plan, true);
     const paid = doubledRewards(plan);
     if (paid.length) plan.assumptions = [...(plan.assumptions ?? []), ...paid.map((x) => x[0]!.toUpperCase() + x.slice(1))];
@@ -410,7 +411,8 @@ export class QuestPlanner {
       const blocks = blocksFor(all, speaker);
       const who = characterFor(plan, speaker);
       const title = who?.name ?? blocks[0]!.speaker;
-      const focus = stuck.length ? stuck.filter((st) => blocks.some((b) => b.lines.some((l) => !l.player))) : [];
+      // Only someone whose lines carry directions can be what moves the quest on.
+      const focus = stuck.length && blocks.some((b) => b.lines.some((l) => l.notes.length)) ? stuck : [];
       if (stuck.length && !focus.length) continue;
       this.onStep?.(stuck.length ? `finding which of ${title}'s lines move the quest on` : `tagging ${title}'s lines (${blocks.reduce((n, b) => n + b.lines.length, 0)} of them)`);
       try {
@@ -430,7 +432,7 @@ export class QuestPlanner {
     const kept = stuck.length ? plan.conversations.filter((c) => c.title.startsWith('✎ ') && !made.some((m) => `✎ ${m.title}` === c.title)) : [];
     plan.conversations = [...kept, ...made.map((m) => ({ title: `✎ ${m.title}`, screenplay: m.screenplay })), ...own];
     const note = 'Kept word for word from your text: ';
-    plan.assumptions = [...(plan.assumptions ?? []).filter((x) => !x.startsWith(note) && !notes.includes(x)), `${note}${authorLines.length} lines in ${made.length} conversation(s) (marked ✎)`, ...notes];
+    plan.assumptions = [...(plan.assumptions ?? []).filter((x) => !x.startsWith(note) && !notes.includes(x)), `${note}${authorLines.length} lines in ${made.length} conversation(s) (marked ✎)`, ...new Set(notes)];
   }
 
   /** The tags for one character's written conversations, as the AI reads the author's directions. */
@@ -446,7 +448,7 @@ export class QuestPlanner {
         system: [{ type: 'text', text: `${ANNOTATE_RULES}\n\n${TAG_REFERENCE}` }],
         messages: [{ role: 'user', content: `${annotateBrief(plan)}${context ? `\n${context}` : ''}\n\nThe author's dialogue:\n\n${describeBlocks(blocks)}\n\n${ask}` }],
       },
-      AnnotationSchema,
+      AnnotationAnswer as unknown as z.ZodType<DialogueAnnotation>,
     );
   }
 
@@ -704,14 +706,18 @@ const ScreenplaySchema = z.object({ screenplay: z.string().describe('The whole c
 
 const AnnotationSchema = z.object({
   blocks: z.array(z.object({ block: z.number().int(), tags: z.string().describe('Tags for every line of the block, e.g. "[if stage 10]"; for a scene "[at stage 100]"') })).describe('Blocks that need tags'),
-  lines: z.array(z.object({ line: z.number().int(), tags: z.string().describe('Tags for the line, e.g. "[stage 10] [remember promised]"; two ways of saying it are separated by |') })).describe('Lines that need tags'),
+  lines: z
+    .array(z.object({ line: z.number().int(), words: z.string().describe('The first three words of that line, as written'), tags: z.string().describe('Tags for the line, e.g. "[stage 10] [remember promised]"; two ways of saying it are separated by |') }))
+    .describe('Only the lines that need tags'),
 });
+/** The same, as it's read back: an answer without the words is still used, by number. */
+const AnnotationAnswer = AnnotationSchema.extend({ lines: z.array(z.object({ line: z.number().int(), words: z.string().nullable().optional(), tags: z.string() })) });
 
 /** Told to the planner when the author's conversations are written out. */
 const WRITTEN_NOTE = `The conversations the author wrote out are shown above only as outlines "(Conversation N, with …)": they are added to the plan afterwards, word for word, with their tags. Don't write them into "conversations": write there only lines the author describes without writing them out (a greeting described in a sentence, what someone says during the day), or leave it empty. Plan the stages and the talk steps for what those conversations do (taking the job, agreeing to go, each ending); a talk step's note says which line does it.`;
 
 /** How the AI turns an author's directions into tags. */
-const ANNOTATE_RULES = `You add tags to dialogue a Skyrim quest's author has already written, so the quest works. The words stay exactly as they are: you only say which tags go on which numbered lines. Answer in the JSON format given.
+const ANNOTATE_RULES = `You add tags to dialogue a Skyrim quest's author has already written, so the quest works. The words stay exactly as they are: you only say which tags go on which numbered lines (with each line's first three words, to be sure which it is). Answer in the JSON format given.
 
 Blocks: give each block the tags that say when its lines can be said, from its heading and the plan. Usually [if stage N] (the stage the quest is at then; [if stage >= N] when it stays available), also [if night], [if day], [if chose NAME]. A block that can be said any time while the quest runs needs nothing. A scene (characters talking to each other) gets [at stage N]: the stage that starts it.
 Lines: turn the author's directions (after "—") into tags:
@@ -826,8 +832,9 @@ function withoutAuthorLines(screenplay: string, author: string[]): string {
     chunk.push(line);
   }
   flush();
-  // Blocks left with nothing under them go too.
-  const lines = out.filter((l, i) => !(/^(GREETINGS?|HELLO|IDLE|CHATTER|SCENE)\s*:/i.test(l.trim()) && (i + 1 >= out.length || /^(GREETINGS?|HELLO|IDLE|CHATTER|SCENE|PLAYER)\s*:/i.test(out[i + 1]!.trim()))));
+  // Blocks left with nothing under them go too (a tag on a line of its own isn't anything said).
+  const kept = out.filter((l) => /^\s*[^\s:[\]][^:]*:/.test(l));
+  const lines = kept.filter((l, i) => !(/^(GREETINGS?|HELLO|IDLE|CHATTER|SCENE)\s*:/i.test(l.trim()) && (i + 1 >= kept.length || /^(GREETINGS?|HELLO|IDLE|CHATTER|SCENE|PLAYER)\s*:/i.test(kept[i + 1]!.trim()))));
   return lines.join('\n').trim();
 }
 

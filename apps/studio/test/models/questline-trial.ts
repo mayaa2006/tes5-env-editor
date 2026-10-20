@@ -6,6 +6,7 @@
  *
  *   SKYRIM_DATA=<Data folder> npx tsx apps/studio/test/models/questline-trial.ts <base url> <model> [--doc FILE] [--save plan.json] [--log-ai requests.jsonl]
  *   SKYRIM_DATA=<Data folder> npx tsx apps/studio/test/models/questline-trial.ts --rebuild plan.json
+ *   … <base url> <model> --replay requests.jsonl   (answers recorded by --log-ai first, the live model for the rest)
  *
  * Checks per quest: the quest map's problems, dialogue errors, every script the build wrote (the editor's Papyrus
  * checker), the release check's errors, and the plugin saved and read back with every record decoding exactly.
@@ -40,6 +41,40 @@ if (aiLog) {
     const copy = res.clone();
     void copy.text().then((answer) => appendFileSync(aiLog, `${JSON.stringify({ seconds: Math.round((Date.now() - t) / 1000), request: init?.body ? JSON.parse(String(init.body)) : null, answer })}\n`)).catch(() => undefined);
     return res;
+  }) as typeof fetch;
+}
+// --replay FILE: answer from an earlier --log-ai recording where it has the same request (the plan of the same quest,
+// the tags for the same character's lines), and ask the live model otherwise: a trial picks up where it stopped, and
+// the editor's own handling of the model's answers can be tried again without waiting for them.
+const replay = flag('--replay');
+if (replay) {
+  const recorded = readFileSync(replay, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((l) => JSON.parse(l) as { request: { messages: { role: string; content: unknown }[] } | null; answer: string });
+  const text = (c: unknown) => (typeof c === 'string' ? c : JSON.stringify(c ?? ''));
+  const signature = (req: { messages: { role: string; content: unknown }[] } | null) => {
+    if (!req) return '';
+    const system = text(req.messages[0]?.content);
+    const user = req.messages.filter((m) => m.role === 'user').map((m) => text(m.content)).join('\n');
+    const quest = /This is quest (\d+) of/.exec(user)?.[1] ?? '1';
+    if (/into a quest plan/.test(system)) return `plan ${quest} ${req.messages.length}`;
+    if (/You add tags to dialogue/.test(system)) {
+      const speakers = [...new Set([...user.matchAll(/^\s*\d+\s+([A-Z][A-Z' .-]+):/gm)].map((m) => m[1]!.trim()).filter((x) => x !== 'PLAYER'))].sort();
+      return `tags ${quest} ${speakers.join(',')} ${/Nothing moves the quest to/.test(user) ? 'stuck' : ''}`;
+    }
+    return `other ${system.slice(0, 40)} ${quest}`;
+  };
+  const used = new Set<number>();
+  const live = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const req = init?.body ? JSON.parse(String(init.body)) : null;
+    const key = signature(req);
+    const i = recorded.findIndex((r, n) => !used.has(n) && signature(r.request) === key);
+    if (i < 0 || !key) return live(input, init);
+    used.add(i);
+    console.log(JSON.stringify({ replayed: key }));
+    return new Response(recorded[i]!.answer, { status: 200, headers: { 'content-type': recorded[i]!.answer.startsWith('data:') ? 'text/event-stream' : 'application/json' } });
   }) as typeof fetch;
 }
 const outputDir = join(process.env.TMPDIR ?? tmpdir(), `questline-trial-out-${process.pid}`);

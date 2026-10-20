@@ -224,8 +224,8 @@ function plainNotes(blocks: WrittenBlock[]): void {
 export interface DialogueAnnotation {
   /** Tags for every line of a block (when it can be said). */
   blocks: { block: number; tags: string }[];
-  /** Tags for single lines (what saying them does, or when they're offered). */
-  lines: { line: number; tags: string }[];
+  /** Tags for single lines (what saying them does, or when they're offered), with the line's first words. */
+  lines: { line: number; words?: string; tags: string }[];
 }
 
 /** Only tags the editor knows, written the way the screenplay format reads them. */
@@ -233,38 +233,77 @@ function cleanTags(tags: string): string[] {
   return [...tags.matchAll(/\[([a-z]+)((?:\s+[^\]]*)?)\]/gi)].map((m) => `[${m[1]!.toLowerCase()}${m[2] ?? ''}]`);
 }
 
+const wordsOf = (t: string) => t.toLowerCase().replace(/[’]/g, "'").replace(/[^a-z0-9' ]+/g, ' ').split(/\s+/).filter(Boolean);
+
+/**
+ * The line the AI meant: the number it gave, unless the words it quoted begin a line nearby instead (smaller models
+ * count a numbered list off by one).
+ */
+function lineFor<T extends { l: WrittenLine }>(all: T[], n: number, words: string | undefined): T | undefined {
+  const at = all.findIndex((x) => x.l.n === n);
+  const w = wordsOf(words ?? '').slice(0, 5);
+  if (!w.length) return all[at];
+  const starts = (x: T | undefined) => !!x && (wordsOf(x.l.text).slice(0, w.length).join(' ') === w.join(' ') || wordsOf(x.l.text).join(' ').includes(w.join(' ')));
+  if (at >= 0 && starts(all[at])) return all[at];
+  for (const d of [1, -1, 2, -2, 3, -3]) if (at >= 0 && starts(all[at + d])) return all[at + d];
+  return all.find(starts) ?? all[at];
+}
+
 /** Put the AI's tags on the blocks and lines they're for. */
 export function applyAnnotation(blocks: WrittenBlock[], a: DialogueAnnotation): void {
   for (const x of a.blocks ?? []) {
     const b = blocks.find((y) => y.id === x.block);
-    if (b) b.tags.push(...cleanTags(x.tags ?? ''));
+    if (b) b.tags.push(...cleanTags(x.tags ?? '').filter((t) => !b.tags.includes(t)));
   }
-  const byN = new Map(blocks.flatMap((b) => b.lines.map((l) => [l.n, { l, b }] as const)));
+  const all = blocks.flatMap((b) => b.lines.map((l) => ({ l, b })));
   for (const x of a.lines ?? []) {
-    const hit = byN.get(x.line);
+    if (!cleanTags(x.tags ?? '').length) continue;
+    const hit = lineFor(all, x.line, x.words);
     if (!hit) continue;
     const { l, b } = hit;
-    // "A | B": the line said two ways (paying 250 if persuaded, otherwise 150): a copy for each.
-    const variants = (x.tags ?? '').split('|').map(cleanTags);
-    if (variants.length > 1 && !l.player && variants[0]!.some(isIf)) {
-      const at = b.lines.indexOf(l);
-      const copies = variants.slice(1).map((v) => ({ ...l, notes: [], tags: [...l.tags, ...v, ...(v.some(isIf) ? [] : ['[otherwise]'])] }));
-      l.tags.push(...variants[0]!);
-      b.lines.splice(at + 1, 0, ...copies);
+    // "A | B": the line said two ways (paying 250 if persuaded, otherwise 150): a copy for each, the one with its own
+    // condition first and the other said otherwise. Only where the author's direction says there are two ways.
+    const variants = (x.tags ?? '').split('|').map(cleanTags).filter((v) => v.length);
+    const common = variants[0]?.filter((t) => variants.every((v) => v.includes(t))) ?? [];
+    const own = variants.map((v) => v.filter((t) => !common.includes(t)));
+    const twoWays = variants.length > 1 && !l.player && l.notes.some((n) => /\b(or|otherwise|if|unless)\b/i.test(n)) && new Set(own.map((o) => o.join(' '))).size === own.length && own.some((o) => o.some(isIf));
+    if (twoWays) {
+      const order = own.map((_, i) => i).sort((i, j) => Number(!own[i]!.some(isIf)) - Number(!own[j]!.some(isIf)));
+      const before = [...l.tags];
+      const copies = order.slice(1).map((i) => ({ ...l, notes: [...l.notes], tags: [...before, ...common, ...own[i]!, ...(own[i]!.some(isIf) ? [] : ['[otherwise]'])] }));
+      l.tags.push(...common, ...own[order[0]!]!);
+      b.lines.splice(b.lines.indexOf(l) + 1, 0, ...copies);
       continue;
     }
-    l.tags.push(...variants.flat().filter((t) => !l.tags.includes(t)));
+    l.tags.push(...variants.flat().filter((t, i, xs) => !l.tags.includes(t) && xs.indexOf(t) === i));
   }
 }
 
+/** Words that say nothing about which step a direction or heading means. */
+const STOP = new Set('the a an and or of to in on at for with by from his her their its him them she he they it is are was be been this that these those player players you your quest now then there here up out into onto as so just all right when while after once before until has have had who what'.split(' '));
+/** The content words of a phrase, roughly stemmed ("takes the job" and "agrees to take the job" share take and job). */
+function keyWords(t: string): Set<string> {
+  return new Set(wordsOf(t).map((w) => w.replace(/'s$/, '')).filter((w) => w.length > 1 && !STOP.has(w)).map((w) => w.replace(/(?:ing|ed|es|e|s)$/, '') || w));
+}
+const shared = (a: Set<string>, b: Set<string>) => [...a].filter((w) => b.has(w)).length;
+
+type DirectionPlan = {
+  stages: { index: number; completesQuest: boolean; failsQuest: boolean }[];
+  items: { key: string; name: string }[];
+  steps?: { from: number | null; to: number; kind: string; targetKey: string | null; note: string }[];
+};
+
 /**
- * Plain readings of explicit directions, for lines the AI left without them: "pays 100 gold" gives gold, "the quest is
- * done" sets the one stage that completes it, "takes the ledger" takes that item, "he attacks", "leaves for good".
- * Returns what was added, in words.
+ * Plain readings of explicit directions, where the AI left them out or (headings) got them wrong: "pays 100 gold"
+ * gives gold, "the quest is done" sets the one stage that completes it, "takes the ledger" takes that item, "the
+ * player takes the job" sets the stage of the talk step that says so, "she remembers the promise" remembers it, "he
+ * attacks", "leaves for good"; a heading like "Right after the player takes the job" or "When the player comes back
+ * with all three pages" says the stage its block is offered at. Returns what was added, in words.
  */
-export function directionTags(blocks: WrittenBlock[], plan: { stages: { index: number; completesQuest: boolean; failsQuest: boolean }[]; items: { key: string; name: string }[] }): string[] {
+export function directionTags(blocks: WrittenBlock[], plan: DirectionPlan): string[] {
   const out: string[] = [];
   const ends = plan.stages.filter((st) => st.completesQuest && !st.failsQuest);
+  const steps = (plan.steps ?? []).filter((st) => typeof st.to === 'number');
   const has = (l: WrittenLine, tag: string) => l.tags.some((t) => t.toLowerCase().startsWith(`[${tag}`));
   const add = (l: WrittenLine, tag: string, why: string) => {
     l.tags.push(tag);
@@ -276,22 +315,92 @@ export function directionTags(blocks: WrittenBlock[], plan: { stages: { index: n
     const words = phrase.split(/\s+/).map((w) => w.replace(/s$/, ''));
     return plan.items.find((i) => i.name.toLowerCase().replace(/['’]s\b/g, '').split(/\s+/).some((w) => w.length > 3 && words.includes(w.replace(/s$/, ''))) || words.includes(i.key.toLowerCase()));
   };
-  for (const b of blocks)
-    for (const l of b.lines) {
-      if (l.player) continue;
-      for (const note of l.notes) {
-        const n = note.toLowerCase();
-        // One amount, said plainly (not "150, or 250 if persuaded": that's two ways of saying the line).
-        const gold = /\b(?:pays?|gives?(?: the player)?|hands? over)\s+(\d+)\s*(?:gold|septims?|coins?)\b/.exec(n);
-        if (gold && !/\bor\s+\d+/.test(n) && !l.tags.some((t) => /^\[gives gold/i.test(t))) add(l, `[gives gold x${gold[1]}]`, 'pays gold');
-        const takes = /\b(?:takes?|keeps?)\s+(?:the\s+|his\s+|her\s+)?(?:(a|an|one|two|three|four|five|six|\d+)\s+)?([a-z'’ -]+?)(?:\s+and\b|[;,.]|$)/.exec(n);
-        const item = takes ? itemIn(takes[2]!) : undefined;
-        if (takes && item && !l.tags.some((t) => /^\[takes\s/i.test(t))) add(l, `[takes ${item.key} x${NUMBERS[takes[1] ?? ''] ?? (Number(takes[1]) || 1)}]`, `takes ${item.name}`);
-        if (/\b(the quest is (done|complete|finished|over)|quest ends|ends the quest|completes the quest)\b/.test(n) && !has(l, 'stage') && ends.length === 1) add(l, `[stage ${ends[0]!.index}]`, 'the quest is done');
-        if (/\b(attacks?|draws? (his|her) (sword|weapon|blade))\b/.test(n) && !/\bif\b/.test(n) && !has(l, 'attacks')) add(l, '[attacks]', 'attacks');
-        if (/\b(leaves? for good|walks? away|is gone|leaves skyrim|disappears?)\b/.test(n) && !has(l, 'leaves')) add(l, '[leaves]', 'leaves');
-      }
+  /** The talk step a direction names ("the player takes the job" → 10 → 20 "Player agrees to take the job"), if just one does. */
+  const talkStep = (note: string) => {
+    const w = keyWords(note);
+    if (!w.size) return undefined;
+    const scored = steps.filter((st) => st.kind === 'talk' && st.note).map((st) => ({ st, hit: shared(w, keyWords(st.note)) }));
+    const best = Math.max(0, ...scored.map((x) => x.hit));
+    const top = scored.filter((x) => x.hit === best);
+    if (best < Math.min(2, w.size) || best / w.size < 0.5 || new Set(top.map((x) => x.st.to)).size !== 1) return undefined;
+    return top[0]!.st;
+  };
+  const REMEMBER = /\bremembers?\b\s+(?:the |that |this |his |her |your |their |what )?([a-z]+)/;
+  const lines = blocks.flatMap((b) => b.lines);
+  // A choice the AI remembered on a line the author gave no such direction: it belongs on the line that says it.
+  const remembering = lines.filter((l) => l.notes.some((n) => REMEMBER.test(n.toLowerCase())));
+  const misplaced: string[] = [];
+  if (remembering.length)
+    for (const l of lines) {
+      if (remembering.includes(l)) continue;
+      const wrong = l.tags.filter((t) => /^\[remember\s/i.test(t));
+      if (!wrong.length) continue;
+      l.tags = l.tags.filter((t) => !wrong.includes(t));
+      misplaced.push(...wrong.map((t) => /^\[remember\s+([^\]\s]+)/i.exec(t)![1]!));
     }
+  for (const l of lines) {
+    for (const note of l.notes) {
+      const n = note.toLowerCase();
+      const rem = REMEMBER.exec(n);
+      if (rem && !has(l, 'remember')) add(l, `[remember ${misplaced.find((m) => m.slice(0, 4) === rem[1]!.slice(0, 4)) ?? (remembering.length === 1 && misplaced.length ? misplaced[0] : rem[1])}]`, 'remembers the choice');
+      if (!has(l, 'stage') && !/\bif\b/.test(n)) {
+        const st = talkStep(n.split(/[;]/)[0]!);
+        if (st) add(l, `[stage ${st.to}]`, `“${st.note}”`);
+      }
+      if (l.player) continue;
+      // One amount, said plainly (not "150, or 250 if persuaded": that's two ways of saying the line).
+      const gold = /\b(?:pays?|gives?(?: the player)?|hands? over)\s+(\d+)\s*(?:gold|septims?|coins?)\b/.exec(n);
+      if (gold && !/\bor\s+\d+/.test(n) && !l.tags.some((t) => /^\[gives gold/i.test(t))) add(l, `[gives gold x${gold[1]}]`, 'pays gold');
+      const takes = /\b(?:takes?|keeps?)\s+(?:the\s+|his\s+|her\s+)?(?:(a|an|one|two|three|four|five|six|\d+)\s+)?([a-z'’ -]+?)(?:\s+and\b|[;,.]|$)/.exec(n);
+      const item = takes ? itemIn(takes[2]!) : undefined;
+      if (takes && item && !l.tags.some((t) => /^\[takes\s/i.test(t))) add(l, `[takes ${item.key} x${NUMBERS[takes[1] ?? ''] ?? (Number(takes[1]) || 1)}]`, `takes ${item.name}`);
+      if (/\b(the quest is (done|complete|finished|over)|quest ends|ends the quest|completes the quest)\b/.test(n) && !has(l, 'stage') && ends.length === 1) add(l, `[stage ${ends[0]!.index}]`, 'the quest is done');
+      if (/\b(attacks?|draws? (his|her) (sword|weapon|blade))\b/.test(n) && !/\bif\b/.test(n) && !has(l, 'attacks')) add(l, '[attacks]', 'attacks');
+      if (/\b(leaves? for good|walks? away|is gone|leaves skyrim|disappears?)\b/.test(n) && !has(l, 'leaves')) add(l, '[leaves]', 'leaves');
+    }
+  }
+  // "[if chose persuaded]" with nothing remembering it: a persuasion's success remembers it.
+  for (const m of lines.flatMap((l) => l.tags).map((t) => /^\[if\s+chose\s+([^\]\s]+)\]/i.exec(t)?.[1]).filter((x): x is string => !!x && /persua|convinc|intimidat|bribe|haggl/i.test(x))) {
+    if (lines.some((l) => l.tags.some((t) => t.toLowerCase() === `[remember ${m.toLowerCase()}]`))) continue;
+    for (const l of lines.filter((x) => x.tags.includes('[success]') && !has(x, 'remember'))) add(l, `[remember ${m}]`, 'the persuasion worked');
+  }
+  // Headings that say when a block is offered: after a step → the stage it sets; while looking for something → the
+  // stage it's looked for at; coming back with it → the stage that has it.
+  for (const b of blocks) {
+    const h = b.header.toLowerCase();
+    // Only a heading that says when ("While the player is looking for the pages:"), not a paragraph of the story.
+    if (!h || b.scene || !/:\s*$/.test(h) || h.length > 120 || !/\b(when|while|after|once|before|now that|as soon as|during|until)\b/.test(h)) continue;
+    // "While the quest is running": whenever the quest runs (its dialogue is only there then), at no one stage.
+    if (/\b(while|whenever|as long as) the (quest|job) is (running|on|active|going|open|under way)\b|\bduring the quest\b|\bany time\b/.test(h)) {
+      const gate = b.tags.filter((t) => /^\[if\s+(?:stage\s*)?(?:==?\s*)?\d+\]$/i.test(t));
+      if (gate.length) out.push(`no stage condition on the conversation “${b.header.slice(0, 50)}${b.header.length > 50 ? '…' : ''}” (said while the quest runs, not only at ${gate.join(' ')})`);
+      b.tags = b.tags.filter((t) => !gate.includes(t));
+      for (const l of b.lines) l.tags = l.tags.filter((t) => !/^\[if\s+(?:stage\s*)?(?:==?\s*)?\d+\]$/i.test(t));
+      continue;
+    }
+    let stage: number | undefined;
+    let why = '';
+    const item = itemIn(h.replace(/[^a-z0-9' ]+/g, ' '));
+    const pickup = item ? steps.find((st) => st.kind === 'pickup' && st.targetKey === item.key) : undefined;
+    if (pickup && /\b(with|has|have|got|brings?|found|finds|returns?|comes? back)\b/.test(h)) (stage = pickup.to), (why = `has ${item!.name}`);
+    else if (pickup && typeof pickup.from === 'number' && /\b(looking|searching|search|finding|find|hunting|while)\b/.test(h)) (stage = pickup.from), (why = `looking for ${item!.name}`);
+    else if (/\b(after|once|now that|having)\b/.test(h)) {
+      const w = keyWords(h);
+      const scored = steps.filter((st) => st.note).map((st) => ({ st, hit: shared(w, keyWords(st.note)) }));
+      const best = Math.max(0, ...scored.map((x) => x.hit));
+      const top = scored.filter((x) => x.hit === best);
+      if (best >= 2 && new Set(top.map((x) => x.st.to)).size === 1) (stage = top[0]!.st.to), (why = `after “${top[0]!.st.note}”`);
+    }
+    if (stage === undefined || !plan.stages.some((st) => st.index === stage)) continue;
+    const gate = b.tags.filter((t) => /^\[if\s+(?:stage\s*)?(?:[<>=!]=?\s*)?\d+\]$/i.test(t));
+    if (gate.length === 1 && Number(/(\d+)/.exec(gate[0]!)![1]) === stage) continue;
+    b.tags = [...b.tags.filter((t) => !gate.includes(t)), `[if stage ${stage}]`];
+    out.push(`[if stage ${stage}] on the conversation “${b.header.slice(0, 50)}${b.header.length > 50 ? '…' : ''}” (${why}${gate.length ? `, not ${gate.join(' ')}` : ''})`);
+  }
+  // A line's own "[if stage N]" in a block offered at one stage only repeats the block's, or (another stage) would
+  // never be said: the block's is what counts.
+  const exact = /^\[if\s+(?:stage\s*)?(?:==?\s*)?\d+\]$/i;
+  for (const b of blocks) if (b.tags.filter((t) => exact.test(t)).length === 1) for (const l of b.lines) l.tags = l.tags.filter((t) => !exact.test(t));
   return out;
 }
 
