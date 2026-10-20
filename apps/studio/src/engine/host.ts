@@ -33,6 +33,12 @@ import {
   exampleQuestPlan,
   settleCharacters,
   planCatalog,
+  splitQuestline,
+  planQuestline,
+  questlineLinks,
+  questlineIssues,
+  buildQuestline,
+  type QuestlinePlan,
   validatePlan,
   type PlannerMode,
   type QuestPlan,
@@ -179,7 +185,7 @@ export interface OpenOptions {
 }
 
 /** Workspace events, and the AI workspace's progress while a turn runs. */
-export type HostEvent = WorkspaceEvent | { type: 'ai'; event: AgentEvent } | { type: 'localAi'; status: LocalAiStatus };
+export type HostEvent = WorkspaceEvent | { type: 'ai'; event: AgentEvent } | { type: 'localAi'; status: LocalAiStatus } | { type: 'planProgress'; message: string };
 
 type Listener = (e: HostEvent) => void;
 
@@ -1235,7 +1241,7 @@ export class EngineHost {
   /** Claude plans a quest from a design document or a conversation. */
   async planQuest(source: string, mode: PlannerMode, ai: AiProvider | string) {
     const a = await this.resolveAi(ai);
-    const plan = await new QuestPlanner({ ai: a }).plan(source, mode, planCatalog(this.requireWs(), { text: source, ...catalogLimits(a) }));
+    const plan = await this.stoppable((signal) => new QuestPlanner({ ai: a, signal }).plan(source, mode, planCatalog(this.requireWs(), { text: source, ...catalogLimits(a) })));
     settleCharacters(this.requireWs(), plan, source, a.kind !== 'claude');
     return { plan, ...this.reviewQuestPlan(plan) };
   }
@@ -1244,13 +1250,76 @@ export class EngineHost {
   async reviseQuestPlan(plan: QuestPlan, feedback: string, ai: AiProvider | string, source?: string) {
     const a = await this.resolveAi(ai);
     const text = `${source ?? ''}\n${feedback}\n${plan.characters.map((c) => `${c.name} ${c.existing ?? ''}`).join('\n')}\n${plan.locations.map((l) => `${l.name} ${l.existing ?? ''}`).join('\n')}`;
-    const next = await new QuestPlanner({ ai: a }).revise(plan, feedback, planCatalog(this.requireWs(), { text, ...catalogLimits(a) }), source);
+    const next = await this.stoppable((signal) => new QuestPlanner({ ai: a, signal }).revise(plan, feedback, planCatalog(this.requireWs(), { text, ...catalogLimits(a) }), source));
     settleCharacters(this.requireWs(), next, `${source ?? ''}\n${feedback}`, a.kind !== 'claude');
     return { plan: next, ...this.reviewQuestPlan(next) };
   }
 
+  private planning?: AbortController;
+
+  /** Planning that stopPlanning can end (the request is called off). */
+  private async stoppable<T>(fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    this.planning?.abort();
+    const stop = (this.planning = new AbortController());
+    try {
+      return await fn(stop.signal);
+    } finally {
+      if (this.planning === stop) this.planning = undefined;
+    }
+  }
+
   buildQuestPlan(plan: QuestPlan) {
     return this.builder!.build(plan);
+  }
+
+  // ---------------------------------------------------------------- questlines
+
+  /** The quests in a document, when it's a questline (several "Quest 1: …" headings); null for a single quest. */
+  questlineOf(source: string) {
+    const line = splitQuestline(source);
+    return line && { title: line.title, quests: line.parts.map((p) => p.title) };
+  }
+
+  /**
+   * Plan every quest of a questline document, one after another (each knows what the earlier ones made). Progress
+   * comes as planProgress events; stopPlanning ends it.
+   */
+  async planQuestline(source: string, ai: AiProvider | string) {
+    const line = splitQuestline(source);
+    if (!line) throw new Error('This reads as one quest: give each quest its own heading (“Quest 1: …”, “Quest 2: …”) to plan them as a questline.');
+    const a = await this.resolveAi(ai);
+    const ws = this.requireWs();
+    const free = a.kind !== 'claude';
+    const t0 = Date.now();
+    const n = line.parts.length;
+    const say = (i: number, what: string) => {
+      const mins = i ? Math.round((Date.now() - t0) / 60000 / i) : 0;
+      this.emitHost({ type: 'planProgress', message: `Quest ${i + 1} of ${n}, ${line.parts[i]!.title}: ${what}…${mins ? ` (about ${mins} min a quest so far)` : ''}` });
+    };
+    return this.stoppable(async (signal) => {
+      const plan = await planQuestline((i) => new QuestPlanner({ ai: a, signal, onStep: (what) => say(i, what) }), line, {
+        // Free AIs read slowly: the questline's own names lead the list, and less of the rest of the load order.
+        catalog: (text) => planCatalog(ws, { text, ...(free ? { limit: 60, short: 25 } : catalogLimits(a)) }),
+        settle: (p, text) => void settleCharacters(ws, p, text, free),
+        progress: (i) => say(i, 'starting'),
+      });
+      return { line: plan, ...this.reviewQuestline(plan) };
+    });
+  }
+
+  /** Stop a questline (or quest) being planned. */
+  stopPlanning() {
+    this.planning?.abort();
+  }
+
+  /** Each quest's review, what links them (characters, places and items one quest takes from another) and problems across them. */
+  reviewQuestline(line: QuestlinePlan) {
+    const plans = line.quests.map((q) => q.plan);
+    return { reviews: plans.map((p) => this.reviewQuestPlan(p)), links: questlineLinks(plans), questlineIssues: questlineIssues(plans) };
+  }
+
+  buildQuestline(line: QuestlinePlan) {
+    return buildQuestline(this.requireWs(), this.builder!, line);
   }
 
   /** An existing quest as a plan (exactly as built, or read from the quest), ready to change. */
@@ -1726,7 +1795,7 @@ export class EngineHost {
     const at = session.messages.length;
     // Plans made earlier in the conversation (saved with it) can be revised and built in later turns.
     const plans: QuestToolContext['plans'] = new Map(Object.entries(session.plans ?? {}) as [string, { plan: QuestPlan; source?: string; quest?: FormKey }][]);
-    const ctx: QuestToolContext = { ai: resolved, plans, touched: new Set() };
+    const ctx: QuestToolContext = { ai: resolved, plans, touched: new Set(), questlines: new Map(Object.entries(session.questlines ?? {})) };
     try {
       // The project's to-do goes with every message, so the AI always works from the current list.
       const context = [opts.context, projectSummary(session.project)].filter(Boolean).join('\n\n') || undefined;
@@ -1762,6 +1831,7 @@ export class EngineHost {
       }
       session.turns.push({ at, title: sessionTitle(text), undoLabel, changes: res.changes, ...(res.error ? { error: res.error } : {}), usage: res.usage, provider: model.provider });
       if (plans.size) session.plans = Object.fromEntries(plans);
+      if (ctx.questlines?.size) session.questlines = Object.fromEntries(ctx.questlines);
       session.updated = Date.now();
       await this.aiSave();
       this.emitHost({ type: 'ai', event: { type: 'done', session: id, ...(res.error ? { error: res.error } : {}) } });

@@ -31,7 +31,7 @@ export interface DialogueLint {
 export const PLAYER_LINE_MAX = 80;
 /** Responses longer than this make a long, hard-to-read subtitle (and one long voice file). */
 export const RESPONSE_LINE_MAX = 150;
-export const KNOWN_TAGS = new Set(['goodbye', 'stage', 'if', 'emotion', 'gives', 'takes', 'gesture', 'once', 'persuade', 'at', 'start', 'remember', 'forget', 'skill', 'teaches', 'trains']);
+export const KNOWN_TAGS = new Set(['goodbye', 'stage', 'if', 'emotion', 'gives', 'takes', 'gesture', 'once', 'persuade', 'at', 'start', 'remember', 'forget', 'skill', 'teaches', 'trains', 'attacks', 'leaves', 'or']);
 const PLACEHOLDER = /\b(TODO|TBD|FIXME|XXX|lorem ipsum)\b|\{\{|\}\}|<[A-Z ]+>/;
 
 /** A conversation in a neutral shape, from records or from a screenplay. */
@@ -116,7 +116,7 @@ export function lintScreenplay(source: string, ctx: { stages?: number[]; speaker
   source.split(/\r?\n/).forEach((raw, i) => {
     for (const m of raw.matchAll(/\[([a-z]+)(?:\s+[^\]]*)?\]/gi)) {
       const tag = m[1]!.toLowerCase();
-      if (!KNOWN_TAGS.has(tag)) out.push({ severity: 'error', message: `Unknown tag ${m[0]}`, detail: 'Tags: [stage N], [if …], [goodbye], [once], [persuade N], [emotion …], [gives …], [takes …], [gesture …], [skill NAME xN], [remember NAME], [forget NAME]; on a SCENE: line, [at stage N] or [start].', line: i + 1 });
+      if (!KNOWN_TAGS.has(tag)) out.push({ severity: 'error', message: `Unknown tag ${m[0]}`, detail: 'Tags: [stage N], [if …], [goodbye], [once], [persuade N], [emotion …], [gives …], [takes …], [gesture …], [skill NAME xN], [remember NAME], [forget NAME], [attacks], [leaves], [or] (another answer to the same line); on a SCENE: line, [at stage N] or [start].', line: i + 1 });
       else if ((tag === 'skill' || tag === 'teaches' || tag === 'trains') && !skillTag(m[0].slice(tag.length + 1, -1))) out.push({ severity: 'error', message: `${m[0]}: that isn't a skill`, detail: 'Skills: One-handed, Two-handed, Archery, Block, Smithing, Heavy Armor, Light Armor, Pickpocket, Lockpicking, Sneak, Alchemy, Speech, Alteration, Conjuration, Destruction, Illusion, Restoration, Enchanting.', line: i + 1 });
     }
     if (/\[[^\]]*$/.test(raw)) out.push({ severity: 'error', message: 'A tag is missing its closing ]', line: i + 1 });

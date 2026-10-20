@@ -258,6 +258,38 @@ export class WorldService {
     return { origin: { x: info.grid.x * 4096, y: info.grid.y * 4096 }, heights, colors };
   }
 
+  /** The ground height at a point of an outdoor cell, from its terrain (undefined indoors or without terrain). */
+  groundHeight(cell: FormKey, x: number, y: number): number | undefined {
+    const t = this.terrain(cell);
+    if (!t) return undefined;
+    const fx = Math.max(0, Math.min(32, (x - t.origin.x) / 128));
+    const fy = Math.max(0, Math.min(32, (y - t.origin.y) / 128));
+    const c = Math.min(31, Math.floor(fx));
+    const r = Math.min(31, Math.floor(fy));
+    const h = (rr: number, cc: number) => t.heights[rr * 33 + cc]!;
+    const tx = fx - c;
+    const ty = fy - r;
+    return (h(r, c) * (1 - tx) + h(r, c + 1) * tx) * (1 - ty) + (h(r + 1, c) * (1 - tx) + h(r + 1, c + 1) * tx) * ty;
+  }
+
+  /** The water level of an outdoor cell (its own, or its worldspace's default), or undefined when it has no water. */
+  waterHeight(cell: FormKey): number | undefined {
+    const info = this.cells().find((c) => c.formKey === cell);
+    if (!info || info.interior) return undefined;
+    const d = this.ws.view(cell)?.data as { flags?: number; waterHeight?: number } | undefined;
+    if (!d || !((d.flags ?? 0) & 2)) return undefined;
+    if (typeof d.waterHeight === 'number' && Math.abs(d.waterHeight) < 1e7) return d.waterHeight;
+    const w = info.worldspace ? (this.ws.view(info.worldspace)?.data as { landData?: { defaultWaterHeight?: number } } | undefined) : undefined;
+    return w?.landData?.defaultWaterHeight;
+  }
+
+  /** The persistent cell of an outdoor cell's worldspace, where the game keeps persistent references that stand outside. */
+  persistentCellFor(cell: FormKey): FormKey | undefined {
+    const info = this.cells().find((c) => c.formKey === cell);
+    if (!info || info.interior || info.persistentCell || !info.worldspace) return undefined;
+    return this.cells({ worldspace: info.worldspace }).find((c) => c.persistentCell)?.formKey;
+  }
+
   /** The winning LAND record of an outdoor cell (with heights), and the plugin it's in. */
   landRecord(cell: FormKey): { slot: PluginSlot; record: PluginRecord } | undefined {
     for (let i = this.ws.slots.length - 1; i >= 0; i--) {
@@ -360,9 +392,11 @@ export class WorldService {
     };
     if (opts.editorId) data.editorId = opts.editorId;
     if (Math.abs(t.scale - 1) > 1e-6) data.scale = t.scale;
-    // Actors and quest-referenced objects are persistent; the engine needs them loaded.
+    // Actors and quest-referenced objects are persistent; the engine needs them loaded. Outdoors the game keeps
+    // persistent references in the worldspace's persistent cell, wherever they stand.
     const persistent = opts.persistent ?? sig === 'ACHR';
-    return this.ws.createRecord(sig, data, { cell, persistent }, persistent ? RecordFlags.Persistent : 0);
+    const home = (persistent && this.persistentCellFor(cell)) || cell;
+    return this.ws.createRecord(sig, data, { cell: home, persistent }, persistent ? RecordFlags.Persistent : 0);
   }
 
   /** Move/rotate/scale references (one undo step). */

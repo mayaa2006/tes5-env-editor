@@ -6,7 +6,7 @@
  */
 import { z } from 'zod';
 import type { FormKey } from '@tes5/esp';
-import { QuestPlanSchema, QuestPlanner, WorkspaceError, blockingIssues, lintScreenplay, normalizePlan, planCatalog, repairPlan, settleCharacters, validatePlan, type AgentTool, type AiProvider, type PlanIssue, type PlanResolution, type QuestPlan } from '@tes5/workspace';
+import { QuestPlanSchema, QuestPlanner, WorkspaceError, blockingIssues, lintScreenplay, normalizePlan, planCatalog, planQuestline, repairPlan, settleCharacters, splitQuestline, validatePlan, type AgentTool, type AiProvider, type PlanIssue, type PlanResolution, type QuestPlan } from '@tes5/workspace';
 import type { EngineHost } from './host';
 
 /** How much of the load order the planner lists: everything for Claude, less for a free AI (it reads it slowly). */
@@ -21,6 +21,8 @@ export interface QuestToolContext {
   touched: Set<FormKey>;
   /** Revisions asked for in this turn: small models can revise in circles, minutes at a time. */
   revisions?: number;
+  /** Questlines planned in this conversation: their title and the plans of their quests, in order. */
+  questlines?: Map<string, { title: string; planIds: string[] }>;
 }
 
 /** Revisions of a plan allowed in one turn of the conversation. */
@@ -102,10 +104,64 @@ export function questTools(host: EngineHost, ctx: QuestToolContext): AgentTool<a
       input: z.object({ text: z.string().describe('The quest as the author describes it: who, where, what the player does, how it ends'), mode: z.enum(['document', 'conversation']).nullable().optional().describe("'conversation' when the text is a conversation to build a quest around; otherwise 'document'") }),
       summary: () => 'Plan a quest',
       run: async (i, c) => {
+        // Several quests, each under its own heading: a questline, planned quest by quest.
+        const line = (i.mode ?? 'document') === 'document' ? splitQuestline(i.text) : null;
+        if (line) {
+          const free = ctx.ai.kind !== 'claude';
+          const n = line.parts.length;
+          const planned = await planQuestline((q) => new QuestPlanner({ ai: ctx.ai, signal: c?.signal, onStep: (what) => c?.progress?.(`quest ${q + 1} of ${n} (${line.parts[q]!.title}), ${what}…`) }), line, {
+            catalog: (text) => planCatalog(ws(), { text, ...(free ? { limit: 60, short: 25 } : catalogLimits(ctx.ai)) }),
+            settle: (p, text) => void settleCharacters(ws(), p, text, free),
+          });
+          const planIds = planned.quests.map((q) => keep(q.plan, { source: q.source }));
+          ctx.questlines ??= new Map();
+          const lineId = `questline${ctx.questlines.size + 1}`;
+          ctx.questlines.set(lineId, { title: planned.title, planIds });
+          const r = host.reviewQuestline(planned);
+          return {
+            data: { questlineId: lineId, title: planned.title, quests: planIds.map((id) => review(id)), linkedAcrossQuests: r.links.map((l) => `${l.name}: made in quest ${l.from + 1}, used in quest ${l.quest + 1}`), questlineProblems: r.questlineIssues.map((x) => x.message), next: 'Tell the author what each quest does and ask whether to build; build all of them with build_questline.' },
+            note: `Planned the questline “${planned.title}” (${planIds.length} quests)`,
+          };
+        }
         const plan = await planner(c?.signal).plan(i.text, i.mode ?? 'document', catalog(i.text));
         settleCharacters(ws(), plan, i.text, ctx.ai.kind !== 'claude');
         const id = keep(plan, { source: i.text });
         return { data: review(id), note: `Planned “${plan.title}”` };
+      },
+    },
+    {
+      name: 'build_questline',
+      group: 'quest',
+      writes: true,
+      description: 'Build every quest of a questline planned with plan_quest, in order, as one undo step: characters, places and items shared between the quests are made once, and each quest starts when the one before ends. Check the quests have no errors first (fix one with revise_plan or edit_plan on its plan id).',
+      input: z.object({ questlineId: z.string().describe('The questline id plan_quest gave, e.g. "questline1"') }),
+      summary: (i) => `Build ${i.questlineId}`,
+      run: async (i) => {
+        const l = ctx.questlines?.get(i.questlineId.trim()) ?? [...(ctx.questlines?.values() ?? [])].pop();
+        if (!l) throw new WorkspaceError('There is no questline in this conversation yet: plan one with plan_quest (a text with a heading for each quest).');
+        // The latest revision of each quest's plan.
+        const plans = l.planIds.map((id) => {
+          const p = planOf(id);
+          const latest = [...ctx.plans.entries()].reverse().find(([, v]) => v.source === p.source && v.source);
+          return latest?.[1] ?? p;
+        });
+        for (const [n, p] of plans.entries()) {
+          const errors = validatePlan(p.plan).filter((x) => x.severity === 'error');
+          if (errors.length) throw new WorkspaceError(`Quest ${n + 1} (${p.plan.title}) needs fixing first (revise_plan or edit_plan): ${errors.map((e) => e.message).join('; ')}`);
+        }
+        const r = await host.buildQuestline({ title: l.title, quests: plans.map((p) => ({ title: p.plan.title, source: p.source ?? '', plan: p.plan })) });
+        r.quests.forEach((q, n) => {
+          if (!q.quest) return;
+          ctx.touched.add(q.quest);
+          const id = [...ctx.plans].find(([, v]) => v === plans[n])?.[0];
+          if (id) ctx.plans.set(id, { ...plans[n]!, quest: q.quest });
+        });
+        const first = r.quests[0]?.quest;
+        return {
+          data: { built: r.quests.map((q) => ({ quest: q.quest, editorId: q.editorId, created: q.created.length, dialogueLines: q.dialogue.responses, problems: q.problems, warnings: q.warnings.slice(0, 8) })), linked: r.links },
+          ...(first ? { link: link(first) } : {}),
+          note: `Built the questline ${l.title} (${r.quests.length} quests)`,
+        };
       },
     },
     {

@@ -13,10 +13,17 @@ import type { ScriptService } from './scripts';
 
 // ------------------------------------------------------------------ model
 
-export type TriggerEventKind = 'activate' | 'pickup' | 'drop' | 'death' | 'hit' | 'arrive' | 'load' | 'equip' | 'read';
+export type TriggerEventKind = 'activate' | 'pickup' | 'drop' | 'death' | 'hit' | 'arrive' | 'load' | 'equip' | 'read' | 'collect' | 'wait';
 
 export interface TriggerEvent {
   kind: TriggerEventKind;
+  /**
+   * arrive: only once the player is within this many units of it. Outdoors a cell loads long before the player
+   * gets there (about two cells away), so "arrives at the stones" checks the distance instead.
+   */
+  within?: number;
+  /** wait (on the player's quest alias): the in-game hours the stage script asks for before this fires; shown on the quest map. */
+  hours?: number;
 }
 
 export type TriggerCompareOp = '==' | '!=' | '>=' | '<=' | '>' | '<';
@@ -119,6 +126,10 @@ const EVENT_SIGNATURES: Record<TriggerEventKind, { sig: string; playerCheck?: st
   load: { sig: 'Event OnLoad()' },
   equip: { sig: 'Event OnEquipped(Actor akActor)', playerCheck: 'akActor == Game.GetPlayer()' },
   read: { sig: 'Event OnRead()' },
+  // On the player's quest alias: an item is added (with a "player has N" condition: collect N), or game time passes
+  // (the stage script that starts the wait registers for it).
+  collect: { sig: 'Event OnItemAdded(Form akBaseItem, Int aiItemCount, ObjectReference akItemReference, ObjectReference akSourceContainer)' },
+  wait: { sig: 'Event OnUpdateGameTime()' },
 };
 
 function conditionCode(c: TriggerCondition, props: PropTable): string {
@@ -185,6 +196,15 @@ export function generateTriggerScript(scriptName: string, extendsType: string, s
   const body: string[] = [];
   const onceVars: string[] = [];
   const self = extendsType === 'ReferenceAlias' ? 'GetReference()' : 'Self';
+  // Arriving within a distance: when its cell loads, check every second while it stays loaded.
+  const near = specs.map((spec, index) => ({ spec, index })).filter(({ spec }) => spec.event.kind === 'arrive' && (spec.event.within ?? 0) > 0);
+  if (near.length) {
+    const attach = EVENT_SIGNATURES.arrive.sig;
+    const g = byEvent.get(attach)!;
+    const nearIdx = new Set(near.map((x) => x.index));
+    g.specs = g.specs.filter((x) => !nearIdx.has(x.index));
+    if (!g.specs.length) byEvent.delete(attach);
+  }
   for (const [sig, g] of byEvent) {
     body.push('', sig);
     for (const { spec, index } of g.specs) {
@@ -202,6 +222,43 @@ export function generateTriggerScript(scriptName: string, extendsType: string, s
       if (!spec.actions.length) body.push(`${indent}; (no actions yet)`);
       if (conds.length) body.push('\tEndIf');
     }
+    if (sig === EVENT_SIGNATURES.arrive.sig && near.length) body.push(...nearAttach(near));
+    body.push('EndEvent');
+  }
+  function nearAttach(list: typeof near): string[] {
+    // Triggers that may fire again are ready again each time the place loads.
+    return [...list.filter((x) => !x.spec.once).map((x) => `\tNear${x.index} = False`), '\tRegisterForSingleUpdate(1.0)'];
+  }
+  if (near.length && !byEvent.has(EVENT_SIGNATURES.arrive.sig)) body.push('', EVENT_SIGNATURES.arrive.sig, ...nearAttach(near), 'EndEvent');
+  // Collecting: the player's inventory only reports the items asked about; and it's checked again when the stage
+  // script asks (the player may already have them when the quest gets there).
+  const collect = specs.map((spec, index) => ({ spec, index })).filter(({ spec }) => spec.event.kind === 'collect');
+  const filters = [...new Set(collect.flatMap(({ spec }) => spec.conditions.flatMap((c) => (c.kind === 'playerHasItem' ? [props.ref(c.item, 'Form')] : []))))];
+  if (near.length || collect.length) {
+    // Also when the quest starts (or the game loads it) with the player already there.
+    body.push('', 'Event OnInit()', ...filters.map((f) => `\tAddInventoryEventFilter(${f})`), ...(near.length ? ['\tRegisterForSingleUpdate(1.0)'] : []), 'EndEvent');
+    body.push('', 'Event OnUpdate()');
+    if (near.length) body.push('\tBool waiting = False');
+    for (const { spec, index } of near) {
+      onceVars.push(`Bool Near${index} = False`);
+      const conds = spec.conditions.map((c) => conditionCode(c, props));
+      body.push(`\t; ${spec.name ?? `Trigger ${index + 1}`}`);
+      body.push(`\tIf !Near${index}`);
+      body.push(`\t\tIf ${['Game.GetPlayer().GetDistance(' + self + ') <= ' + Math.round(spec.event.within!) + '.0', ...conds].join(' && ')}`);
+      body.push(`\t\t\tNear${index} = True`);
+      for (const a of spec.actions) for (const line of actionCode(a, props, self)) body.push(`\t\t\t${line}`);
+      if (!spec.actions.length) body.push('\t\t\t; (no actions yet)');
+      body.push('\t\tElse', '\t\t\twaiting = True', '\t\tEndIf', '\tEndIf');
+    }
+    for (const { spec, index } of collect) {
+      const conds = [...spec.conditions.map((c) => conditionCode(c, props)), ...(spec.once ? [`!Fired${index}`] : [])];
+      body.push(`\t; ${spec.name ?? `Trigger ${index + 1}`}`);
+      if (conds.length) body.push(`\tIf ${conds.join(' && ')}`);
+      if (spec.once) body.push(`\t\tFired${index} = True`);
+      for (const a of spec.actions) for (const line of actionCode(a, props, self)) body.push(`\t\t${line}`);
+      if (conds.length) body.push('\tEndIf');
+    }
+    if (near.length) body.push(`\tIf waiting && ${self}.GetParentCell() && ${self}.GetParentCell().IsAttached()`, '\t\tRegisterForSingleUpdate(1.0)', '\tEndIf');
     body.push('EndEvent');
   }
   const header = [

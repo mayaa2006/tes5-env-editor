@@ -33,7 +33,7 @@ describe('updating a quest from a revised plan', () => {
     const next = structuredClone(plan);
     next.stages.find((s) => s.index === 10)!.journal = 'Brynja lost her ring somewhere in the tavern.';
     next.stages.push({ index: 30, journal: 'I should tell Brynja.', startsQuest: false, completesQuest: false, failsQuest: false });
-    next.steps.push({ from: 20, to: 30, kind: 'script', targetKey: null, note: 'Straight after finding it' });
+    next.steps.push({ from: 20, to: 30, kind: 'script', targetKey: null, count: null, hours: null, note: 'Straight after finding it' });
     next.objectives.push({ index: 30, text: 'Tell Brynja', shownAtStage: 30, completedAtStage: 100, targetKey: 'brynja' });
     next.conversations[0]!.screenplay = next.conversations[0]!.screenplay.replace('Got any work for me?', 'Anything I can help with?');
     next.characters.push({ ...next.characters[1]!, key: 'sigrid', name: 'Sigrid', sex: 'female', voice: 'FemaleCommoner', outfit: null, routine: [], spot: null, look: null, factions: [], inventory: [] });
@@ -90,7 +90,7 @@ describe('updating a quest from a revised plan', () => {
     const next = exampleQuestPlan();
     next.conversations = next.conversations.filter((c) => c.title !== 'Eirik');
     next.steps = next.steps.filter((s) => s.kind !== 'pickup');
-    next.steps.push({ from: 10, to: 20, kind: 'script', targetKey: null, note: 'Found it' });
+    next.steps.push({ from: 10, to: 20, kind: 'script', targetKey: null, count: null, hours: null, note: 'Found it' });
     next.animations = [];
     const r = await builder.update(quest, next);
     expect(r.updated).toEqual(['Removed the conversation “Eirik”', 'Removed “The player finds the ring”', 'Added “Found it”', 'Updated the animations at quest stages']);

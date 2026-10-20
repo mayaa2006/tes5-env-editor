@@ -2,6 +2,24 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.37.0
+
+- **Questlines you've already written, made in one go.** Paste a whole questline into **Quests → From text** (or the AI tab), with a heading for each quest ("Quest 1: …", "Quest 2: …"). Each quest is planned in turn, knowing the characters, places, items, choices and Editor IDs of the quests before it, and starts when the one before ends. The review has an overview of every quest (how it starts, how much of your dialogue it kept, who is made once and used again) and a tab per quest. **Build the questline** makes them all as one step you can undo. Characters shared between quests are made once; one who turns up somewhere else in a later quest is moved there when that quest starts. In the AI tab, a pasted questline is planned straight away and built with the new build_questline tool.
+- **Your dialogue, word for word.** Conversations you wrote out (`NAME: line` with the player's choices indented, or Markdown lists with bold names) go into the quest exactly as written. The AI only turns your directions ("(the player takes the job)", "(she pays 150 gold)", "(only if the player promised…)", "(he attacks)") into tags on numbered lines; it never rewrites a line, and the tags are checked against the plan before they go in. Persuasion with success and failure, "end the conversation", "pays N gold", "takes the …", "the quest is done", "attacks" and "leaves for good" are read even when the AI misses them. A character who speaks first gets a greeting with the player's choices after it, and answers that depend on how things went ("if Varro left… / if he's dead…, then if you took his money… / otherwise…") become every combination, so each part is said. Your conversations are marked ✎ in the plan.
+- **People, enemies and items outdoors.** A camp by the river, a road, standing stones: plans can put characters, enemy groups and items in Skyrim's outdoor cells, on dry, fairly flat ground near what the text names, with the people at one place kept together. Arriving there means coming within about 25 metres (outdoors the game loads a cell long before you reach it). Persistent outdoor references now go in the worldspace's persistent cell, as the game's own do.
+- **New mechanics for quests and questlines:**
+  - notes, letters and notices with their words copied from your text (handwritten for notes and letters);
+  - several of one item ("three pages, one by the forge, one in a chest…"), and a step that moves on when the player has all of them, however they got them, checked again when the stage is reached;
+  - "come back tomorrow": a step some in-game hours after a stage;
+  - a container locked so only the plan's key opens it;
+  - an ambush: an enemy group hidden until a stage;
+  - in dialogue: `[if night]`, `[if day]`, `[if time 20-4]`, `[if quest MyQuest done 20]`, `[attacks]`, `[leaves]` and `[or]` (another answer to the same line). A choice remembered in one quest can be checked in a later one.
+
+  The quest map can make the new connections too: **Collect items** and **Time passes**.
+- **Stop** on the "planning…" message calls off a quest or questline being planned (and revising a plan), and the message says which quest and step it's on.
+- A speaker in your dialogue whom the plan left out ("LUCAN:") is added as the character from your load order whose name starts that way.
+- **Fixed:** lines of one answer that each gave something (`[gives gold x100]` then `[gives ring x1]`) gave only the last.
+
 ## 0.36.0
 
 - **Free AIs now make whole quests in the AI tab.** Asked to make a quest, a free AI (the built-in one, Ollama or a free online service) was shown the tools for editing a quest a piece at a time but not the quest planner. So it made the quest a stage and a line at a time, ran out of steps, and left a quest that nothing moved on. Now, when you ask for a new quest, the planner runs straight away on what you wrote (small models otherwise tend to describe a plan in words and never call it), and the AI gets the planner's tools. The planner makes the whole quest (characters, places, items, stages, journal, objectives, what moves it on, dialogue), tells you what it will build, and builds it when you say so. The first message the AI reads is a quarter of the size it was, so a PC without a strong graphics card answers about four times sooner. A model you've already downloaded is used without pressing **Use** first.

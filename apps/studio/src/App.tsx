@@ -44,6 +44,7 @@ export function App() {
   const tab = useStore((s) => s.tab);
   const setTab = useStore((s) => s.setTab);
   const busy = useStore((s) => s.busy);
+  const busyStop = useStore((s) => s.busyStop);
   const client = useStore((s) => s.client);
   const [savePrompt, setSavePrompt] = useState(false);
   const pluginPrompt = useStore((s) => s.pluginPrompt);
@@ -159,7 +160,14 @@ export function App() {
       <StatusBar />
       {busy && (
         <div className="modal-backdrop" style={{ background: 'rgba(0,0,0,0.25)' }}>
-          <div className="card">{busy}</div>
+          <div className="card row" style={{ gap: 12 }} data-testid="busy">
+            <span>{busy}</span>
+            {busyStop && (
+              <button className="btn small" onClick={busyStop} title="Stop now. Nothing is built; what you wrote is kept." data-testid="busy-stop">
+                Stop
+              </button>
+            )}
+          </div>
         </div>
       )}
       {(savePrompt || pluginPrompt) && (

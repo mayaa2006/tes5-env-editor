@@ -133,6 +133,27 @@ The plan covers:
 
 You check the plan first, in tabs: **Overview** (problems to fix and every decision Claude made on its own), **Cast & places**, **Story** (how it starts, stages and journal, objectives, what moves it on, how it can fail), **World events** and **Dialogue**. Problems that must be fixed show on whichever tab you're on, and the Build button stays at the bottom. You can edit the journal, objectives and dialogue directly, or ask Claude to change something ("make Eirik the thief"). **Build the quest** then creates everything (records, triggers, scripts, dialogue) as one undo step, and lists what still needs you (such as empty new interiors); new and changed faces get their face files when you save. **Use the example** tries it without any AI.
 
+#### Questlines, already written
+
+Paste a whole questline into **Quests → From text**, with a heading for each quest ("Quest 1: Lines on a Map", "## Quest 2: …", or "Part two" on a line of its own), and it's planned as a questline. Anything before the first quest (an introduction, the cast list) goes with every quest.
+
+- **Planned in order:** each quest is planned knowing the earlier ones: their characters, places and items (by key), the choices they remember, and their Editor IDs. Each starts when the one before ends, unless its own text says otherwise ("starts when the player reads the notice"). A progress message says which quest and which step it's on, and **Stop** calls it off.
+- **Your dialogue, word for word:** conversations written out as `NAME: line`, with the player's choices indented under the line they answer, or as Markdown lists with bold names (`- **Player:** "…"` / `  - **Varro:** "…"`), go into the quest exactly as written. The AI only reads your directions, such as "(the player takes the job)", "(she pays 150 gold)", "(only if the player promised…)", "(he attacks)" or "(leaves for good)", and turns them into tags on the numbered lines. It never rewrites the words. Persuasion ("(Persuade, Speech 40)" with "(success)" and "(failure)") and "(end the conversation)" are read without the AI. A character speaking first becomes a greeting, with the player's choices as things to say. Alternative answers ("(if Varro left)" / "(if Varro is dead)", then "(if the player took his money)" / "(otherwise)") become every combination, each its own answer, so each part is said. These conversations are marked ✎ in the plan.
+- **Checked together:** the review has an **Overview** (each quest, how it starts, how much of your dialogue it kept, and who is made once and used again) and a tab per quest with the usual plan review. Problems across the questline (a choice checked before any quest remembers it) are listed too.
+- **Built together:** **Build the questline** makes every quest in order as one undo step. Characters, places and items shared between quests are made once, by the first quest that has them. A character who is somewhere else in a later quest (Varro leaves the Bannered Mare for a camp) is moved there when that quest starts and stays there while it runs.
+
+What a written questline can use, beyond a single quest's plan:
+
+- **People and places outdoors:** a camp by the river, a road, standing stones. Characters, enemy groups and items stand on dry, fairly flat ground near what the text names ("by the Warrior Stone"), and the people at one place stay together. Arriving there means coming within about 25 metres; outdoors the game loads a cell long before the player reaches it.
+- **Notes, letters and notices with their words**, copied from your text (in the handwritten font for notes and letters). Reading one can start the quest.
+- **Several of one thing** ("three torn pages, one by the forge, one in a chest…"), and a step that moves on once the player **has all of them**, however they got them, checked again when the stage is reached.
+- **"Come back tomorrow":** a step that waits some in-game hours after a stage.
+- **Locked containers:** the item inside a strongbox that only the plan's key opens.
+- **Ambushes:** an enemy group that stays hidden until a stage, then appears.
+- **In dialogue:** `[if night]`, `[if day]`, `[if time 20-4]`; `[if quest MyQuest done 20]` (another quest reached a stage); `[attacks]` (the speaker turns on the player); `[leaves]` (the speaker is gone for good); `[or]` (another answer to the same line). A choice remembered in one quest (`[remember promised]`) can be checked in a later one (`[if chose promised]`).
+
+The quest map has the new kinds of connection too: **Collect items** (how many of which item) and **Time passes** (how many in-game hours).
+
 **Change with a plan** (on any quest) shows the quest as a plan: exactly as it was built, or read back from a quest made by hand. Change it yourself or ask Claude ("add a stage where Eirik confesses"), see the list of what will change, and **Update the quest**. Only those differences are applied (stages, journal, objectives, steps, characters, routines, rewards, events, how it starts, how it fails, and conversations that came from the plan), so edits you made by hand stay. One undo reverts the update.
 
 #### Dialogue

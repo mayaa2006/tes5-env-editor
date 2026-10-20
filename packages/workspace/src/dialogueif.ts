@@ -10,6 +10,10 @@
  *   [if female] / [if male]
  *   [if race Nord]         the player's race
  *   [if quest MQ101 done]  another quest is completed
+ *   [if quest MQ101 done 20]  another quest has reached stage 20 ([if quest MQ101 not done 20]: it hasn't)
+ *   [if night] / [if day]  the time of day (8 in the evening to 6 in the morning is night)
+ *   [if time 20-4]         between those hours (it can run past midnight)
+ *   [if chose spared]      a choice remembered with [remember spared], in this quest or an earlier one of yours
  *
  * Several [if …] tags on one line must all be true. Each becomes a normal
  * Creation Kit condition, so it shows (and can be edited) in the condition list.
@@ -26,6 +30,8 @@ export type IfClause =
   | { kind: 'sex'; female: boolean }
   | { kind: 'race'; race: string }
   | { kind: 'questDone'; quest: string }
+  | { kind: 'questStage'; quest: string; stage: number; not: boolean }
+  | { kind: 'time'; from: number; to: number }
   | { kind: 'choice'; name: string; not: boolean };
 
 /** Run on the player (in dialogue, "Target" is the player). */
@@ -60,9 +66,17 @@ export function parseIf(value: string | undefined): IfClause[] {
       out.push({ kind: m[1]!.toLowerCase() as 'gold' | 'speech' | 'level', ...r });
     } else if (l === 'female' || l === 'male') out.push({ kind: 'sex', female: l === 'female' });
     else if ((m = /^race\s+(.+)$/i.exec(part))) out.push({ kind: 'race', race: m[1]!.trim() });
+    else if ((m = /^quest\s+(\S+)\s+(not\s+)?(?:done|reached|stage done|at)\s+(?:stage\s+)?(\d+)$/i.exec(part))) out.push({ kind: 'questStage', quest: m[1]!, stage: Number(m[3]), not: !!m[2] });
     else if ((m = /^quest\s+(\S+)\s+(?:done|completed|complete)$/i.exec(part))) out.push({ kind: 'questDone', quest: m[1]! });
+    else if (/^(night|night\s*time|after dark|dark)$/i.test(l)) out.push({ kind: 'time', from: 20, to: 6 });
+    else if (/^(day|day\s*time|daylight|daytime)$/i.test(l)) out.push({ kind: 'time', from: 6, to: 20 });
+    else if ((m = /^(?:time|hours?)\s+(\d{1,2})(?::00)?\s*(?:-|–|to)\s*(\d{1,2})(?::00)?$/i.exec(part))) {
+      const [from, to] = [Number(m[1]), Number(m[2])];
+      if (from > 24 || to > 24 || from === to) throw new Error(`[if ${part}]: use hours from 0 to 24, e.g. [if time 20-4] for 8 in the evening to 4 in the morning`);
+      out.push({ kind: 'time', from, to });
+    }
     else if ((m = /^(not\s+)?(?:chose|remembered|remembers)\s+([A-Za-z][\w-]*)$/i.exec(part))) out.push({ kind: 'choice', name: m[2]!, not: !!m[1] });
-    else throw new Error(`[if ${part}] isn't understood. Try: stage 10, done 20, has Ring, gold 100, speech 50, level 10, female, race Nord, quest MyQuest done, chose spared`);
+    else throw new Error(`[if ${part}] isn't understood. Try: stage 10, done 20, has Ring, gold 100, speech 50, level 10, female, race Nord, quest MyQuest done, quest MyQuest done 20, night, time 20-4, chose spared`);
   }
   return out;
 }
@@ -83,14 +97,42 @@ function cond(name: string, init: Partial<Condition>): Condition {
  * The global that remembers a choice made in a quest ([remember spared] sets
  * it to 1, [forget spared] back to 0). Made on first use, named after the quest.
  */
-export function choiceGlobal(ws: Workspace, quest: FormKey, name: string): FormKey {
+export function choiceGlobal(ws: Workspace, quest: FormKey, name: string): FormKey;
+export function choiceGlobal(ws: Workspace, quest: FormKey, name: string, create: false): FormKey | undefined;
+export function choiceGlobal(ws: Workspace, quest: FormKey, name: string, create = true): FormKey | undefined {
   const qid = (ws.view(quest)?.editorId ?? 'Quest').replace(/[^A-Za-z0-9_]/g, '');
-  const word = name.replace(/[^A-Za-z0-9]+/g, ' ').trim().split(' ').map((w) => w[0]!.toUpperCase() + w.slice(1)).join('');
+  const word = choiceWord(name);
   if (!word) throw new Error(`“${name}” can't be used as a choice name; use letters and digits`);
   const editorId = `${qid}Chose${word}`;
   const found = ws.byEditorId(editorId);
-  if (found) return found;
+  if (found || !create) return found;
   return ws.createRecord('GLOB', { editorId, type: 115, value: 0 });
+}
+
+/**
+ * The global a condition on a choice reads: the quest's own when it remembers it, otherwise one an earlier quest of
+ * yours remembers under that name (choices carry across a questline), otherwise the quest's own (made now).
+ */
+export function choiceGlobalFor(ws: Workspace, quest: FormKey, name: string): FormKey {
+  const own = choiceGlobal(ws, quest, name, false);
+  if (own) return own;
+  const word = choiceWord(name);
+  const suffix = `chose${word.toLowerCase()}`;
+  const others = ws
+    .search({ sigs: ['GLOB'], query: `Chose${word}`, limit: 200 })
+    .items.filter((g) => !g.deleted && g.inActive && g.editorId?.toLowerCase().endsWith(suffix) && g.editorId.length > suffix.length);
+  if (others.length === 1) return others[0]!.formKey;
+  return choiceGlobal(ws, quest, name);
+}
+
+function choiceWord(name: string): string {
+  return name
+    .replace(/[^A-Za-z0-9]+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean)
+    .map((w) => w[0]!.toUpperCase() + w.slice(1))
+    .join('');
 }
 
 /** Choices a quest remembers: the globals made by choiceGlobal (name → global). */
@@ -140,8 +182,19 @@ export function clauseConditions(ws: Workspace, quest: FormKey, clauses: IfClaus
         break;
       }
       case 'choice':
-        out.push(cond('GetGlobalValue', { param1: choiceGlobal(ws, quest, c.name), op: '==', value: c.not ? 0 : 1 }));
+        out.push(cond('GetGlobalValue', { param1: choiceGlobalFor(ws, quest, c.name), op: '==', value: c.not ? 0 : 1 }));
         break;
+      case 'time':
+        // Past midnight (20 to 4): later than the start OR earlier than the end; the game groups ORs before ANDs.
+        if (c.from < c.to) out.push(cond('GetCurrentTime', { op: '>=', value: c.from }), cond('GetCurrentTime', { op: '<', value: c.to }));
+        else out.push(cond('GetCurrentTime', { op: '>=', value: c.from, or: true }), cond('GetCurrentTime', { op: '<', value: c.to }));
+        break;
+      case 'questStage': {
+        const q = ws.byEditorId(c.quest);
+        if (!q || ws.summary(q)?.sig !== 'QUST') throw new Error(`[if quest ${c.quest} done ${c.stage}]: no quest with that Editor ID`);
+        out.push(cond('GetStageDone', { param1: q, param2: c.stage, op: '==', value: c.not ? 0 : 1 }));
+        break;
+      }
       case 'questDone': {
         const q = ws.byEditorId(c.quest);
         if (!q || ws.summary(q)?.sig !== 'QUST') throw new Error(`[if quest ${c.quest} done]: no quest with that Editor ID`);

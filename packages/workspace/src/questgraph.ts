@@ -86,9 +86,16 @@ export type NewQuestEdge = {
   to: number;
 } & (
   | { kind: 'talk'; npc: FormKey; playerText: string; npcText: string | string[]; goodbye?: boolean }
-  | { kind: Exclude<TriggerEventKind, never>; target: FormKey }
+  | { kind: Exclude<TriggerEventKind, 'collect' | 'wait'>; target: FormKey }
   | { kind: 'script' }
+  /** The player has `count` of an item (picked up, looted, bought, handed over…). */
+  | { kind: 'collect'; item: FormKey; count: number }
+  /** Some in-game hours after the earlier stage ("come back tomorrow"). */
+  | { kind: 'wait'; hours: number }
 );
+
+/** The player's own reference, for a quest alias that watches their inventory and the time. */
+export const PLAYER_REF = '000014:Skyrim.esm' as FormKey;
 
 const SET_STAGE = /\b(?:\w+\.)?SetStage\s*\(\s*(\d+)\s*\)/gi;
 const OBJ = /^\s*(?:\w+\.)?SetObjective(Displayed|Completed)\s*\(\s*(\d+)\s*(?:,[^)]*)?\)\s*$/i;
@@ -211,13 +218,20 @@ export class QuestGraphService {
       }
       if (src.type === 'ref-trigger' && spec.actions.some((a) => a.kind === 'startQuest' && a.quest === quest)) {
         // Arriving is about the place, not the hidden marker that listens for it.
-        const cell = spec.event.kind === 'arrive' ? this.ws.view(src.ref)?.parent.cell : undefined;
+        const cell = spec.event.kind === 'arrive' ? this.cellOf(src.ref) : undefined;
         starts.push({ kind: 'trigger', label: `${eventVerb(spec.event.kind)} ${cell ? this.name(cell) : where}`, ref: src.ref, event: spec.event.kind });
       }
       const cond = spec.conditions.find((c) => c.kind === 'questStage' && c.quest === quest && c.op === '==');
+      const has = spec.conditions.find((c) => c.kind === 'playerHasItem');
+      const label =
+        spec.event.kind === 'collect' && has?.kind === 'playerHasItem'
+          ? `Collect ${has.count} × ${this.name(has.item)}`
+          : spec.event.kind === 'wait'
+            ? `${spec.event.hours ?? '?'} in-game hours pass`
+            : `${eventVerb(spec.event.kind)} ${where}`;
       for (const a of spec.actions) {
         if (a.kind !== 'setStage' || a.quest !== quest) continue;
-        edges.push({ id: `${src.type}:${'alias' in src ? src.alias : 'ref' in src ? src.ref : ''}:${spec.id}:${a.stage}`, from: cond && cond.kind === 'questStage' ? cond.stage : null, to: a.stage, kind: spec.event.kind, label: `${eventVerb(spec.event.kind)} ${where}`, target, source: src });
+        edges.push({ id: `${src.type}:${'alias' in src ? src.alias : 'ref' in src ? src.ref : ''}:${spec.id}:${a.stage}`, from: cond && cond.kind === 'questStage' ? cond.stage : null, to: a.stage, kind: spec.event.kind, label, target: spec.event.kind === 'collect' && has?.kind === 'playerHasItem' ? has.item : target, source: src });
       }
     };
     for (const a of q.aliases.filter((x) => x.kind === 'ref')) {
@@ -295,8 +309,11 @@ export class QuestGraphService {
     throw new WorkspaceError(`Pick a placed object or a character (got ${v.typeName})`);
   }
 
-  /** "Player arrives in a cell" needs something in the cell to listen: a marker. */
-  markerIn(quest: FormKey, cell: FormKey): FormKey {
+  /**
+   * "Player arrives in a cell" needs something in the cell to listen: a marker. Outdoors it stands on the ground at
+   * `at` (where the place's people or enemies are) or the middle of the cell, and arriving means coming near it.
+   */
+  markerIn(quest: FormKey, cell: FormKey, at?: { x: number; y: number; z?: number }): FormKey {
     const world = new WorldService(this.ws);
     const qid = (this.ws.view(quest)?.editorId ?? 'Quest').replace(/[^A-Za-z0-9_]/g, '');
     const cid = (this.ws.view(cell)?.editorId ?? 'Cell').replace(/[^A-Za-z0-9_]/g, '');
@@ -305,6 +322,13 @@ export class QuestGraphService {
     if (existing) return existing;
     const base = this.ws.byEditorId('XMarker') ?? this.ws.search({ sigs: ['STAT'], query: 'XMarker', limit: 1 }).items[0]?.formKey;
     if (!base) throw new WorkspaceError('No XMarker static found to mark the arrival point');
+    const outside = world.cells().find((x) => x.formKey === cell);
+    if (outside && !outside.interior && outside.grid) {
+      const x = at?.x ?? outside.grid.x * 4096 + 2048;
+      const y = at?.y ?? outside.grid.y * 4096 + 2048;
+      const z = at?.z ?? world.groundHeight(cell, x, y) ?? 0;
+      return world.placeReference(cell, base, { position: { x, y, z } }, { persistent: true, editorId: want });
+    }
     const refs = world.references(cell).filter((r) => !r.deleted);
     const c = refs.reduce((acc, r) => ({ x: acc.x + r.transform.position.x / refs.length, y: acc.y + r.transform.position.y / refs.length, z: Math.min(acc.z, r.transform.position.z) }), { x: 0, y: 0, z: refs.length ? Infinity : 0 });
     const info = world.cells().find((x) => x.formKey === cell);
@@ -358,6 +382,27 @@ export class QuestGraphService {
       await this.quests.setStageFragment(quest, e.from, `${code.trim() ? `${code.trimEnd()}\n` : ''}SetStage(${e.to})`);
       return;
     }
+    if (e.kind === 'collect' || e.kind === 'wait') {
+      if (e.kind === 'wait' && e.from === null) throw new WorkspaceError('“Time passes” needs a stage to start from');
+      if (e.kind === 'collect' && !['MISC', 'BOOK', 'KEYM', 'WEAP', 'ARMO', 'ALCH', 'INGR', 'AMMO', 'SLGM', 'SCRL'].includes(this.ws.summary(e.item)?.sig ?? '')) throw new WorkspaceError('Pick an item to collect');
+      const alias = this.playerAlias(quest);
+      const host: TriggerHost = { kind: 'alias', quest, alias };
+      const { specs } = await this.triggers.list(host);
+      const count = e.kind === 'collect' ? Math.max(1, Math.round(e.count)) : 0;
+      const hours = e.kind === 'wait' ? Math.max(0.1, Math.round(e.hours * 10) / 10) : 0;
+      specs.push({
+        id: newTriggerId(),
+        name: e.kind === 'collect' ? `Has ${count} × ${this.name(e.item)}: stage ${e.to}` : `${hours} hours after stage ${e.from}: stage ${e.to}`,
+        event: e.kind === 'wait' ? { kind: 'wait', hours } : { kind: 'collect' },
+        conditions: [...(e.from === null ? [] : [{ kind: 'questStage' as const, quest, op: '==' as const, stage: e.from }]), ...(e.kind === 'collect' ? [{ kind: 'playerHasItem' as const, item: e.item, count }] : [])],
+        actions: [{ kind: 'setStage', quest, stage: e.to }],
+        once: true,
+      });
+      await this.triggers.set(host, specs);
+      // The earlier stage starts the clock, or checks what the player already has.
+      if (e.from !== null) await this.appendStageCode(quest, e.from, [this.watchLine(alias, e.kind === 'wait' ? hours : undefined)]);
+      return;
+    }
     if (e.kind === 'talk') {
       const qid = (q.editorId ?? 'Quest').replace(/[^A-Za-z0-9_]/g, '');
       const topic = this.quests.createTopic(quest, { editorId: this.ws.uniqueEditorId(`${qid}Talk${e.to}`), text: e.playerText });
@@ -375,6 +420,7 @@ export class QuestGraphService {
       if (e.kind !== 'arrive') throw new WorkspaceError('Pick an object or character for this, not a cell');
       target = this.markerIn(quest, target);
     }
+    const within = e.kind === 'arrive' ? this.arriveWithin(target) : undefined;
     if (e.kind === 'death' && tv.sig !== 'NPC_' && tv.sig !== 'ACHR') throw new WorkspaceError('“Killed” needs a character');
     const alias = this.aliasFor(quest, target);
     const host: TriggerHost = { kind: 'alias', quest, alias };
@@ -382,12 +428,47 @@ export class QuestGraphService {
     specs.push({
       id: newTriggerId(),
       name: `${e.from === null ? 'Any time' : `At stage ${e.from}`} → stage ${e.to}`,
-      event: { kind: e.kind },
+      event: within ? { kind: e.kind, within } : { kind: e.kind },
       conditions: e.from === null ? [] : [{ kind: 'questStage', quest, op: '==', stage: e.from }],
       actions: [{ kind: 'setStage', quest, stage: e.to }],
       once: true,
     });
     await this.triggers.set(host, specs);
+  }
+
+  /** The cell something stands in (outdoors, the one under it rather than the worldspace's persistent cell). */
+  cellOf(ref: FormKey): FormKey | undefined {
+    const v = this.ws.view(ref);
+    const cell = v?.parent.cell;
+    if (!cell) return undefined;
+    const world = new WorldService(this.ws);
+    const info = world.cells().find((x) => x.formKey === cell);
+    const pos = (v.data as { placement?: { position?: { x: number; y: number } } }).placement?.position;
+    if (!info?.persistentCell || !pos) return cell;
+    return world.cellAt(info.worldspace, { x: Math.floor(pos.x / 4096), y: Math.floor(pos.y / 4096) }) ?? cell;
+  }
+
+  /** The quest alias for the player (made the first time it's needed). */
+  playerAlias(quest: FormKey): number {
+    const player = this.ws.view(PLAYER_REF) ? PLAYER_REF : this.ws.byEditorId('PlayerRef');
+    if (!player) throw new WorkspaceError('The player reference (PlayerRef, from Skyrim.esm) isn’t loaded');
+    return this.aliasFor(quest, player);
+  }
+
+  /** The stage-script line that starts a wait on the player's alias, or makes it check the player's inventory now. */
+  watchLine(alias: number, hours?: number): string {
+    return hours === undefined ? `GetAlias(${alias}).RegisterForSingleUpdate(0.5)` : `GetAlias(${alias}).RegisterForSingleUpdateGameTime(${hours.toFixed(1)})`;
+  }
+
+  /** Arriving at something outdoors means coming within about 25 metres of it (its cell loads two cells away). */
+  arriveWithin(ref: FormKey): number | undefined {
+    const v = this.ws.view(ref);
+    const world = new WorldService(this.ws);
+    const pos = (v?.data as { placement?: { position?: { x: number; y: number } } } | undefined)?.placement?.position;
+    const cell = v?.parent.cell;
+    const info = cell ? world.cells().find((x) => x.formKey === cell) : undefined;
+    if (!info || info.interior || !pos) return undefined;
+    return 1750;
   }
 
   async removeEdge(quest: FormKey, edge: QuestEdge): Promise<void> {
@@ -415,10 +496,16 @@ export class QuestGraphService {
     }
     const host: TriggerHost = src.type === 'alias-trigger' ? { kind: 'alias', quest, alias: src.alias } : { kind: 'ref', ref: src.ref };
     const { specs } = await this.triggers.list(host);
+    const gone = specs.find((s) => s.id === src.triggerId);
     await this.triggers.set(
       host,
       specs.filter((s) => s.id !== src.triggerId),
     );
+    // A wait or a collection also has a line in the earlier stage's script.
+    if (src.type === 'alias-trigger' && (gone?.event.kind === 'wait' || gone?.event.kind === 'collect') && edge.from !== null) {
+      const rest = specs.filter((s) => s.id !== src.triggerId && s.event.kind === gone.event.kind && s.conditions.some((c) => c.kind === 'questStage' && c.stage === edge.from));
+      if (gone.event.kind === 'wait' || !rest.length) await this.removeStageLine(quest, edge.from, this.watchLine(src.alias, gone.event.kind === 'wait' ? gone.event.hours : undefined));
+    }
   }
 
   /** Add lines to a stage's script (keeping what's there). */
@@ -574,7 +661,8 @@ export class QuestGraphService {
       } else if (v.sig !== 'REFR' && v.sig !== 'ACHR') throw new WorkspaceError(`Pick a placed object (got ${v.typeName})`);
       const host: TriggerHost = { kind: 'ref', ref };
       const { specs } = await this.triggers.list(host);
-      specs.push({ id: newTriggerId(), name: `Start ${this.name(quest)}`, event: { kind: when.kind }, conditions: [], actions: [{ kind: 'startQuest', quest }], once: true });
+      const within = when.kind === 'arrive' ? this.arriveWithin(ref) : undefined;
+      specs.push({ id: newTriggerId(), name: `Start ${this.name(quest)}`, event: within ? { kind: when.kind, within } : { kind: when.kind }, conditions: [], actions: [{ kind: 'startQuest', quest }], once: true });
       await this.triggers.set(host, specs);
       return { ref };
     });
@@ -680,5 +768,9 @@ export function eventVerb(kind: QuestEdgeKind): string {
       return 'Read';
     case 'script':
       return 'Right away';
+    case 'collect':
+      return 'Collect';
+    case 'wait':
+      return 'Wait';
   }
 }

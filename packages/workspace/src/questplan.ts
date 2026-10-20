@@ -96,14 +96,14 @@ export const PlanEncounterSchema = z.object({
   key: Key,
   what: z.string().describe('The enemies: a type like "bandit", "draugr", "wolf", "skeever" or an Editor ID from the load order'),
   count: z.number().int().describe('How many (1–12)'),
-  locationKey: z.string().describe('Location key from this plan or Editor ID of an existing interior where they wait'),
+  locationKey: z.string().describe('Location key from this plan (indoors or outdoors) or Editor ID of an existing interior where they wait'),
   spot: z.string().nullable().describe('Where in that place, e.g. "by the fire"; null for spread around'),
 });
 
 export const PlanLocationSchema = z.object({
   key: Key,
   name: z.string().describe('Name shown in game, e.g. "Riverside Cave"'),
-  existing: z.string().nullable().describe('Editor ID of an existing interior from the load order list; null to create a new interior'),
+  existing: z.string().nullable().describe('Editor ID of an existing place from the load order list: an interior, or an outdoor cell from "Outdoor places" for somewhere outside (a camp, a road, standing stones); null to create a new interior'),
   description: z.string().describe('What the place is, in a few words'),
   layoutLike: z.string().nullable().describe('For a new interior: Editor ID of an existing interior from the load order whose rooms, furniture, lights and clutter are copied (pick one that fits: an inn, a house, a cave, a shop…); null leaves it empty'),
   doorFrom: z.string().nullable().describe('For a new interior: location key or Editor ID of the place the player enters it from (a door is put there and linked); null for no door'),
@@ -118,7 +118,10 @@ export const PlanItemSchema = z.object({
   value: z.number().nullable().describe('Price in gold; null to pick one'),
   startsWith: z.enum(['location', 'character', 'player', 'nowhere']).describe('Where the item is when the quest begins. location: lying somewhere (needed for anything the player must pick up or read); character: carried by a character (e.g. to hand over with [gives …]); player: the player has it; nowhere: given later'),
   startsAtKey: z.string().nullable().describe('Location or character key for startsWith location/character'),
-  spot: z.string().nullable().describe('Where in the location, e.g. "in the chest by the bed", "on the bar", "under the table"; null for a table'),
+  spot: z.string().nullable().describe('Where in the location, e.g. "in the chest by the bed", "on the bar", "under the table"; null for a table. For several copies, one place each, separated by ";"'),
+  copies: z.number().int().nullable().describe('How many there are when there is more than one (e.g. 3 for "three pages scattered in the mine"); null for one'),
+  text: z.string().nullable().describe('For a book, note, letter or notice: what it says, word for word from the author\'s text; null when the text doesn\'t say'),
+  lockedWith: z.string().nullable().describe('For an item inside a locked container (a strongbox, a chest): the key that opens it, as an item key from this plan; null when it isn\'t locked'),
 });
 
 export const PlanStageSchema = z.object({
@@ -140,8 +143,14 @@ export const PlanObjectiveSchema = z.object({
 export const PlanStepSchema = z.object({
   from: z.number().int().nullable().describe('Stage the player must be at (null = any time)'),
   to: z.number().int().describe('Stage this step sets'),
-  kind: z.enum(['talk', 'pickup', 'activate', 'death', 'arrive', 'read', 'equip', 'drop', 'script', 'clear']).describe('talk: a conversation line with [stage N] does it (add the tag too); pickup / read / equip / drop: the player does this with an item; activate: the player uses an item or character; death: a character dies; arrive: the player enters a location; clear: every enemy in an encounter is dead; script: right away after the "from" stage'),
-  targetKey: z.string().nullable().describe('Item key (pickup/drop/read/equip/activate), character key (death/activate), location key (arrive) or encounter key (clear: every enemy in the group is dead); null for talk and script'),
+  kind: z
+    .enum(['talk', 'pickup', 'activate', 'death', 'arrive', 'read', 'equip', 'drop', 'script', 'clear', 'wait'])
+    .describe(
+      'talk: a conversation line with [stage N] does it (add the tag too); pickup / read / equip / drop: the player does this with an item (pickup also counts taking it from someone, looting it or pickpocketing it); activate: the player uses an item or character; death: a character dies; arrive: the player enters (or comes near) a location; clear: every enemy in an encounter is dead; wait: some in-game hours after the "from" stage ("come back tomorrow"); script: right away after the "from" stage',
+    ),
+  targetKey: z.string().nullable().describe('Item key (pickup/drop/read/equip/activate), character key (death/activate), location key (arrive) or encounter key (clear: every enemy in the group is dead); null for talk, wait and script'),
+  count: z.number().int().nullable().describe('pickup: how many the player must have (3 for "find all three pages"); null for one'),
+  hours: z.number().nullable().describe('wait: in-game hours after the "from" stage (24 for "come back tomorrow"); otherwise null'),
   note: z.string().describe('What happens, in a few words'),
 });
 
@@ -251,6 +260,15 @@ export function normalizePlan(plan: QuestPlan): QuestPlan {
   for (const l of plan.locations ?? []) {
     if (l.layoutLike === undefined) l.layoutLike = null;
     if (l.doorFrom === undefined) l.doorFrom = null;
+  }
+  for (const i of plan.items ?? []) {
+    if (i.copies === undefined) i.copies = null;
+    if (i.text === undefined) i.text = null;
+    if (i.lockedWith === undefined) i.lockedWith = null;
+  }
+  for (const st of plan.steps ?? []) {
+    if (st.count === undefined) st.count = null;
+    if (st.hours === undefined) st.hours = null;
   }
   if (plan.startsWhen === undefined) plan.startsWhen = null;
   plan.animations ??= [];
@@ -512,7 +530,7 @@ export function repairPlan(plan: QuestPlan): string[] {
     const gatedAt = (stage: number) => plan.conversations.some((c) => new RegExp(`\\[if\\s+(?:stage\\s*)?(?:==?\\s*)?${stage}\\][^\\n]*(?:\\n\\s+[^\\n]*)*\\[stage\\s+\\d+\\]`, 'i').test(c.screenplay));
     const deadEnds = stagesOf.filter((x) => !x.completesQuest && !x.failsQuest && (reached.has(x.index) || x.index === start) && !plan.steps.some((st) => st.from === x.index) && !gatedAt(x.index));
     if (ends.length === 1 && deadEnds.length === 1 && deadEnds[0]!.index < ends[0]!.index) {
-      plan.steps.push({ from: deadEnds[0]!.index, to: ends[0]!.index, kind: 'script', targetKey: null, note: 'Goes straight on to the end' });
+      plan.steps.push({ from: deadEnds[0]!.index, to: ends[0]!.index, kind: 'script', targetKey: null, count: null, hours: null, note: 'Goes straight on to the end' });
       changes.push(`stage ${deadEnds[0]!.index} led nowhere and nothing reached stage ${ends[0]!.index}, which completes the quest: it now goes straight on from ${deadEnds[0]!.index} to ${ends[0]!.index}`);
     }
   }
@@ -709,11 +727,20 @@ export function validatePlan(input: QuestPlan): PlanIssue[] {
     if (e.count < 1 || e.count > 12) err(`${e.count} ${e.what}: use 1 to 12 enemies in a group`);
     if (!e.what.trim()) err(`An enemy group doesn't say what the enemies are`);
   }
-  const need: Record<PlanStep['kind'], string[]> = { clear: ['encounter'], talk: [], script: [], pickup: ['item'], drop: ['item'], read: ['item'], equip: ['item'], activate: ['item', 'character'], death: ['character'], arrive: ['location'] };
+  const need: Record<PlanStep['kind'], string[]> = { clear: ['encounter'], talk: [], script: [], wait: [], pickup: ['item'], drop: ['item'], read: ['item'], equip: ['item'], activate: ['item', 'character'], death: ['character'], arrive: ['location'] };
   for (const s of plan.steps ?? []) {
     if (!stages.has(s.to)) err(`A step sets stage ${s.to}, which doesn't exist`);
     if (s.from !== null && !stages.has(s.from)) err(`A step starts from stage ${s.from}, which doesn't exist`);
     if (need[s.kind].length && !isKind(s.targetKey, ...need[s.kind])) err(`The "${s.note || s.kind}" step needs a ${need[s.kind].join(' or ')} key, but has "${s.targetKey ?? 'none'}"`);
+    if (s.kind === 'wait' && s.from === null) err(`“${s.note || 'Wait'}” waits after a stage, but doesn't say which (from)`);
+    if (s.kind === 'wait' && !((s.hours ?? 0) > 0)) err(`“${s.note || 'Wait'}” needs the in-game hours to wait (24 for a day)`);
+    if (s.count !== null && s.count !== undefined && (s.count < 1 || s.count > 100)) err(`“${s.note || s.kind}” needs ${s.count} of something; use 1 to 100`);
+  }
+  for (const i of plan.items ?? []) {
+    if (i.copies !== null && i.copies !== undefined && (i.copies < 1 || i.copies > 20)) err(`${i.name}: ${i.copies} copies; use 1 to 20`);
+    if (i.lockedWith && !isKind(i.lockedWith, 'item')) err(`${i.name} is locked with “${i.lockedWith}”, which isn't an item in the plan`);
+    if (i.lockedWith && !(i.startsWith === 'location' && i.spot && /\b(in|inside)\b/i.test(i.spot))) warn(`${i.name} is locked with a key, but isn't put in a container (spot “in the …”), so nothing is locked`);
+    if (i.text?.trim() && i.kind !== 'book') warn(`${i.name} has text to read, but isn't a book, note or letter (kind book), so the text is left out`);
   }
   for (const r of plan.rewards ?? []) {
     if (!stages.has(r.atStage)) err(`A reward is given at stage ${r.atStage}, which doesn't exist`);

@@ -18,7 +18,8 @@
  * items between the speaker and the player (Item is an Editor ID or name;
  * "gold" means gold coins), [gesture wave] makes the speaker play an
  * animation as they start the line (see gestures.ts), [skill Archery x1]
- * trains the player's skill by that many levels.
+ * trains the player's skill by that many levels, [attacks] makes the speaker
+ * turn on the player when the line ends, and [leaves] makes them fade away.
  */
 import { EMOTIONS, conditionFunctionByName, newCondition, parseFormKey, type Condition, type FormKey } from '@tes5/esp';
 import { WorkspaceError, type Workspace } from './engine';
@@ -127,6 +128,12 @@ function twoStages(who: string, first: string, then: string): string {
   return `${who}'s lines in a row are said as one answer, but they set two stages (${first}, then ${then}), so only the last would count while both lines' gifts and rewards happen. If they're alternatives, give each its own PLAYER line to choose`;
 }
 
+/** Tags a response's later lines add: what it gives, takes, remembers and needs adds up; the rest is the last one's. */
+const ADDING = new Set(['gives', 'takes', 'if', 'remember', 'forget', 'skill', 'teaches', 'trains']);
+function mergeTags(into: Record<string, string>, more: Record<string, string>): void {
+  for (const [k, v] of Object.entries(more)) into[k] = ADDING.has(k) && into[k] && v ? `${into[k]};${v}` : v || (into[k] ?? v);
+}
+
 export function parseScreenplay(source: string): ParsedScreenplay {
   const topics: ScriptPlayerLine[] = [];
   const errors: ParsedScreenplay['errors'] = [];
@@ -183,7 +190,7 @@ export function parseScreenplay(source: string): ParsedScreenplay {
       if (current.kind === 'scene' && prev && prev.speaker.toLowerCase() === who.toLowerCase()) {
         if (text) prev.lines.push(text);
         if (tags.stage && prev.tags.stage && tags.stage !== prev.tags.stage) errors.push({ line: lineNo, message: twoStages(who, prev.tags.stage, tags.stage) });
-        Object.assign(prev.tags, tags);
+        mergeTags(prev.tags, tags);
       } else current.lines.push({ kind: 'npc', line: lineNo, indent, speaker: who, lines: text ? [text] : [], tags, choices: [] });
       return;
     }
@@ -192,13 +199,13 @@ export function parseScreenplay(source: string): ParsedScreenplay {
       errors.push({ line: lineNo, message: 'An NPC line needs a PLAYER line before it, or a GREETING:, IDLE: or SCENE: line above it' });
       return;
     }
-    // Consecutive lines by the same speaker (no choices in between) form one response
-    // (except after a [persuade] line, where the first answer is success and the next is failure).
+    // Consecutive lines by the same speaker (no choices in between) form one response (except after a [persuade]
+    // line, where the first answer is success and the next is failure, and a line marked [or]: another answer).
     const last = parent.responses[parent.responses.length - 1];
-    if (last && last.speaker.toLowerCase() === who.toLowerCase() && !last.choices.length && last.indent === indent && !('persuade' in parent.tags)) {
+    if (last && last.speaker.toLowerCase() === who.toLowerCase() && !last.choices.length && last.indent === indent && !('persuade' in parent.tags) && !('or' in tags)) {
       if (text) last.lines.push(text);
       if (tags.stage && last.tags.stage && tags.stage !== last.tags.stage) errors.push({ line: lineNo, message: twoStages(who, last.tags.stage, tags.stage) });
-      Object.assign(last.tags, tags);
+      mergeTags(last.tags, tags);
       return;
     }
     const block: ScriptNpcBlock = { kind: 'npc', line: lineNo, indent, speaker: who, lines: text ? [text] : [], tags, choices: [] };
@@ -449,6 +456,9 @@ export class DialogueService {
           code.push(`(${formExpression(g)} as GlobalVariable).SetValue(${value})`);
         }
       }
+      // [attacks]: the speaker turns on the player; [leaves]: they're gone for good (faded out) when the line ends.
+      if ('attacks' in r.tags) code.push('akSpeaker.SetRelationshipRank(Game.GetPlayer(), -4)', 'akSpeaker.SetActorValue("Aggression", 1)', 'akSpeaker.StartCombat(Game.GetPlayer())');
+      if ('leaves' in r.tags) code.push('akSpeaker.Disable(True)');
       if (code.length) await setInfoFragment(info, code.join('\n'), 'end');
       // A gesture plays as the line starts.
       if (r.tags.gesture) {

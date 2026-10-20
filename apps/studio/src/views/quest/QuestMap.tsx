@@ -49,8 +49,10 @@ export const EDGE_KINDS: Record<QuestEdgeKind, { icon: string; color: string; ti
   drop: { icon: '📦', color: '#b38f6b', title: 'Hand over / drop an item', needs: 'Which item (placed in the world)', sigs: ['REFR'], help: 'It leaves the player’s inventory.' },
   load: { icon: '👁', color: '#999', title: 'Something comes into view', needs: 'Which object', sigs: ['REFR', 'ACHR'], help: 'Its 3D loads near the player.' },
   script: { icon: '⚡', color: '#9aa0a6', title: 'Right away', help: 'As soon as the earlier stage is reached (stage script).' },
+  collect: { icon: '🧺', color: '#d6a35c', title: 'Collect items', needs: 'Which item', sigs: ['MISC', 'BOOK', 'KEYM', 'WEAP', 'ARMO', 'ALCH', 'INGR', 'AMMO', 'SLGM', 'SCRL'], help: 'The player has enough of an item, however they got it (“find all three pages”).' },
+  wait: { icon: '⏳', color: '#7aa7c7', title: 'Time passes', help: 'Some in-game hours after the earlier stage (“come back tomorrow”).' },
 };
-const PICKABLE: QuestEdgeKind[] = ['talk', 'pickup', 'activate', 'death', 'arrive', 'read', 'hit', 'equip', 'drop', 'script'];
+const PICKABLE: QuestEdgeKind[] = ['talk', 'pickup', 'collect', 'activate', 'death', 'arrive', 'read', 'hit', 'equip', 'drop', 'wait', 'script'];
 
 type StageData = { node: QuestStageNode; objectives: QuestGraph['objectives'] };
 
@@ -549,8 +551,10 @@ function ConnectionDialog({ quest, from, to, onClose }: { quest: FormKey; from: 
   const [playerText, setPlayerText] = useState('');
   const [npcText, setNpcText] = useState('');
   const [goodbye, setGoodbye] = useState(false);
+  const [count, setCount] = useState(1);
+  const [hours, setHours] = useState(24);
   const k = kind ? EDGE_KINDS[kind] : undefined;
-  const ready = kind === 'script' ? from !== null : kind === 'talk' ? !!npc && !!playerText.trim() && !!npcText.trim() : !!kind && !!target;
+  const ready = kind === 'script' || kind === 'wait' ? from !== null && (kind !== 'wait' || hours > 0) : kind === 'talk' ? !!npc && !!playerText.trim() && !!npcText.trim() : !!kind && !!target && (kind !== 'collect' || count >= 1);
   const create = async () => {
     if (!kind) return;
     const edge: NewQuestEdge =
@@ -558,7 +562,11 @@ function ConnectionDialog({ quest, from, to, onClose }: { quest: FormKey; from: 
         ? { from, to, kind, npc: npc!, playerText: playerText.trim(), npcText: npcText.split('\n').map((l) => l.trim()).filter(Boolean), goodbye }
         : kind === 'script'
           ? { from, to, kind }
-          : { from, to, kind: kind as Exclude<QuestEdgeKind, 'talk' | 'script'>, target: target! };
+          : kind === 'wait'
+            ? { from, to, kind, hours }
+            : kind === 'collect'
+              ? { from, to, kind, item: target!, count }
+              : { from, to, kind: kind as Exclude<QuestEdgeKind, 'talk' | 'script' | 'collect' | 'wait'>, target: target! };
     const ok = await engine((c) => c.call('addQuestEdge', quest, edge), { busy: 'Creating…', success: `Connected ${from === null ? 'any time' : `stage ${from}`} → stage ${to}` });
     if (ok) onClose();
   };
@@ -586,7 +594,7 @@ function ConnectionDialog({ quest, from, to, onClose }: { quest: FormKey; from: 
     >
       {!kind ? (
         <div className="kind-grid" data-testid="connection-kinds">
-          {PICKABLE.filter((x) => x !== 'script' || from !== null).map((x) => (
+          {PICKABLE.filter((x) => (x !== 'script' && x !== 'wait') || from !== null).map((x) => (
             <button key={x} className="kind-card" onClick={() => setKind(x)} style={{ borderColor: EDGE_KINDS[x].color }}>
               <div style={{ fontSize: 20 }}>{EDGE_KINDS[x].icon}</div>
               <div>{EDGE_KINDS[x].title}</div>
@@ -612,6 +620,15 @@ function ConnectionDialog({ quest, from, to, onClose }: { quest: FormKey; from: 
         </div>
       ) : kind === 'script' ? (
         <p className="dim">Stage {to} will be set as soon as stage {from} is. (A line is added to stage {from}’s script.)</p>
+      ) : kind === 'wait' ? (
+        <div className="col" style={{ gap: 8 }}>
+          <Field label="In-game hours" title="24 for “come back tomorrow”. Sleeping or waiting in game counts.">
+            <input className="input" type="number" min={1} max={720} value={hours} onChange={(e) => setHours(Math.max(0, Math.round(Number(e.target.value))))} data-testid="wait-hours" />
+          </Field>
+          <p className="dim small" style={{ margin: 0 }}>
+            Stage {to} is set {hours} in-game hour{hours === 1 ? '' : 's'} after stage {from} (if the quest is still at stage {from}). Stage {from}’s script starts the clock on a quest alias for the player.
+          </p>
+        </div>
       ) : (
         <div className="col" style={{ gap: 8 }}>
           <div>
@@ -620,8 +637,17 @@ function ConnectionDialog({ quest, from, to, onClose }: { quest: FormKey; from: 
           <Field label={k!.needs ?? 'Target'}>
             <FormPicker value={target} sigs={k!.sigs} onChange={setTarget} allowNone={false} placeholder="Search…" />
           </Field>
+          {kind === 'collect' && (
+            <Field label="How many" title="The stage is set once the player has at least this many.">
+              <input className="input" type="number" min={1} max={1000} value={count} onChange={(e) => setCount(Math.max(0, Math.round(Number(e.target.value))))} data-testid="collect-count" />
+            </Field>
+          )}
           <p className="dim small" style={{ margin: 0 }}>
-            {kind === 'arrive' ? 'A hidden marker is placed in the cell, given a quest alias, and a script on it sets the stage when the cell loads around the player.' : 'The quest gets an alias for it (or reuses one), with a generated script that sets the stage — only once, and only at the right stage.'}
+            {kind === 'arrive'
+              ? 'A hidden marker is placed in the cell, given a quest alias, and a script on it sets the stage when the player gets there (indoors when the cell loads, outdoors within about 25 metres).'
+              : kind === 'collect'
+                ? `A quest alias for the player watches their inventory${from === null ? '' : `, and checks again when stage ${from} is reached (they may already have them)`}.`
+                : 'The quest gets an alias for it (or reuses one), with a generated script that sets the stage — only once, and only at the right stage.'}
           </p>
         </div>
       )}

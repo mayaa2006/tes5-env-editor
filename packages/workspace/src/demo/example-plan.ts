@@ -51,7 +51,7 @@ export function exampleQuestPlan(): QuestPlan {
     ],
     locations: [{ key: 'tavern', name: 'The Demo Tavern', existing: 'DemoTavern', description: 'The tavern Brynja runs', layoutLike: null, doorFrom: null }],
     encounters: [],
-    items: [{ key: 'ring', name: "Brynja's Ring", kind: 'misc', existing: null, basedOn: null, value: 50, startsWith: 'location', startsAtKey: 'tavern', spot: 'on a table' }],
+    items: [{ key: 'ring', name: "Brynja's Ring", kind: 'misc', existing: null, basedOn: null, value: 50, startsWith: 'location', startsAtKey: 'tavern', spot: 'on a table', copies: null, text: null, lockedWith: null }],
     stages: [
       { index: 0, journal: '', startsQuest: true, completesQuest: false, failsQuest: false },
       { index: 10, journal: 'Brynja, the innkeeper of the Demo Tavern, has lost her mother’s ring. She asked me to look for it around the tavern.', startsQuest: false, completesQuest: false, failsQuest: false },
@@ -63,9 +63,9 @@ export function exampleQuestPlan(): QuestPlan {
       { index: 20, text: 'Return the ring to Brynja', shownAtStage: 20, completedAtStage: 100, targetKey: 'brynja' },
     ],
     steps: [
-      { from: 0, to: 10, kind: 'talk', targetKey: null, note: 'Brynja asks the player to find the ring' },
-      { from: 10, to: 20, kind: 'pickup', targetKey: 'ring', note: 'The player finds the ring' },
-      { from: 20, to: 100, kind: 'talk', targetKey: null, note: 'The player returns the ring' },
+      { from: 0, to: 10, kind: 'talk', targetKey: null, count: null, hours: null, note: 'Brynja asks the player to find the ring' },
+      { from: 10, to: 20, kind: 'pickup', targetKey: 'ring', count: null, hours: null, note: 'The player finds the ring' },
+      { from: 20, to: 100, kind: 'talk', targetKey: null, count: null, hours: null, note: 'The player returns the ring' },
     ],
     conversations: [
       {
@@ -202,8 +202,8 @@ export function exampleRescuePlan(): QuestPlan {
       { key: 'cave', name: 'Riverside Cave', existing: null, description: 'A damp bandit hideout up the river', layoutLike: 'EmbershardMine', doorFrom: null },
     ],
     items: [
-      { key: 'note', name: 'Plea for Help', kind: 'book', existing: null, basedOn: null, value: 0, startsWith: 'location', startsAtKey: 'inn', spot: 'on the bar' },
-      { key: 'bow', name: "Hrodulf's Hunting Bow", kind: 'weapon', existing: null, basedOn: 'Hunting Bow', value: 120, startsWith: 'character', startsAtKey: 'hrodulf', spot: null },
+      { key: 'note', name: 'Plea for Help', kind: 'book', existing: null, basedOn: null, value: 0, startsWith: 'location', startsAtKey: 'inn', spot: 'on the bar', copies: null, text: null, lockedWith: null },
+      { key: 'bow', name: "Hrodulf's Hunting Bow", kind: 'weapon', existing: null, basedOn: 'Hunting Bow', value: 120, startsWith: 'character', startsAtKey: 'hrodulf', spot: null, copies: null, text: null, lockedWith: null },
     ],
     encounters: [{ key: 'bandits', what: 'LvlBanditMelee1H', count: 4, locationKey: 'cave', spot: 'around the entrance' }],
     stages: [
@@ -222,13 +222,13 @@ export function exampleRescuePlan(): QuestPlan {
       { index: 30, text: 'Take Ylva back to Hrodulf', shownAtStage: 30, completedAtStage: 100, targetKey: 'hrodulf' },
     ],
     steps: [
-      { from: 0, to: 10, kind: 'arrive', targetKey: 'cave', note: 'The player enters the cave' },
-      { from: 10, to: 20, kind: 'clear', targetKey: 'bandits', note: 'Every bandit is dead' },
-      { from: 20, to: 30, kind: 'talk', targetKey: null, note: 'The player lets Skarn go' },
-      { from: 20, to: 25, kind: 'talk', targetKey: null, note: 'The player refuses to spare Skarn' },
-      { from: 25, to: 30, kind: 'death', targetKey: 'skarn', note: 'Skarn is killed' },
-      { from: 30, to: 100, kind: 'talk', targetKey: null, note: 'Ylva is home and Skarn was spared' },
-      { from: 30, to: 110, kind: 'talk', targetKey: null, note: 'Ylva is home and Skarn is dead' },
+      { from: 0, to: 10, kind: 'arrive', targetKey: 'cave', count: null, hours: null, note: 'The player enters the cave' },
+      { from: 10, to: 20, kind: 'clear', targetKey: 'bandits', count: null, hours: null, note: 'Every bandit is dead' },
+      { from: 20, to: 30, kind: 'talk', targetKey: null, count: null, hours: null, note: 'The player lets Skarn go' },
+      { from: 20, to: 25, kind: 'talk', targetKey: null, count: null, hours: null, note: 'The player refuses to spare Skarn' },
+      { from: 25, to: 30, kind: 'death', targetKey: 'skarn', count: null, hours: null, note: 'Skarn is killed' },
+      { from: 30, to: 100, kind: 'talk', targetKey: null, count: null, hours: null, note: 'Ylva is home and Skarn was spared' },
+      { from: 30, to: 110, kind: 'talk', targetKey: null, count: null, hours: null, note: 'Ylva is home and Skarn is dead' },
     ],
     conversations: [
       {
