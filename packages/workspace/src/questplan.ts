@@ -9,8 +9,9 @@
  * field is required (null when it doesn't apply) and nothing is recursive.
  */
 import { z } from 'zod';
-import { skillIndex } from './characteredit';
-import { lintScreenplay } from './dialoguelint';
+import { skillIndex } from './skills';
+import { parseScreenplay, type ScriptPlayerLine } from './dialogue';
+import { KNOWN_TAGS, lintScreenplay } from './dialoguelint';
 import { journalContextFromPlan, lintJournal } from './journal';
 
 export const RELATIONSHIP_RANKS = ['lover', 'ally', 'confidant', 'friend', 'acquaintance', 'rival', 'foe', 'enemy', 'archnemesis'] as const;
@@ -326,6 +327,42 @@ export function repairPlan(plan: QuestPlan): string[] {
       outfit.saveAs = editorId(outfit.saveAs);
     }
   }
+  // Tags the editor doesn't know would stop the build: near-misses are mended, inventions taken out.
+  const NEAR: Record<string, string> = { give: 'gives', giving: 'gives', take: 'takes', taking: 'takes', stages: 'stage', emotions: 'emotion', gestures: 'gesture', teach: 'teaches', train: 'trains', skills: 'skill', bye: 'goodbye', end: 'goodbye' };
+  for (const c of list(p.conversations)) {
+    if (typeof c.screenplay !== 'string') continue;
+    c.screenplay = c.screenplay.replace(/\[([a-z]+)((?:\s+[^\]]*)?)\]/gi, (m: string, tag: string, rest: string) => {
+      const to = NEAR[tag.toLowerCase()];
+      if (KNOWN_TAGS.has(tag.toLowerCase())) return m;
+      changes.push(to ? `[${tag}] → [${to}] in “${c.title}”` : `took ${m} out of “${c.title}” (not a tag the editor knows)`);
+      return to ? `[${to}${rest}]` : '';
+    });
+  }
+  // A line that moves the quest on with nothing limiting when it's offered: tied to the stage the plan's own talk step
+  // comes from ("The player chooses gold", 30 → 40, puts [if stage 30] on the line that sets 40).
+  const talkFrom = new Map<number, Set<number>>();
+  for (const st of list(p.steps))
+    if (st.kind === 'talk' && typeof st.to === 'number' && typeof st.from === 'number') talkFrom.set(st.to, new Set([...(talkFrom.get(st.to) ?? []), st.from]));
+  for (const c of list(p.conversations)) {
+    if (typeof c.screenplay !== 'string') continue;
+    const rows = c.screenplay.split(/\r?\n/);
+    const before = rows.join('\n');
+    const visit = (pl: ScriptPlayerLine, gated: boolean) => {
+      const own = gated || 'if' in pl.tags;
+      for (const r of pl.responses) {
+        const g = own || 'if' in r.tags;
+        const from = talkFrom.get(Number(r.tags.stage));
+        if (!g && r.tags.stage && from?.size === 1 && rows[pl.line - 1] !== undefined) {
+          const f = [...from][0]!;
+          rows[pl.line - 1] = `${rows[pl.line - 1]!.trimEnd()} [if stage ${f}]`;
+          changes.push(`“${pl.text}” in “${c.title}” is offered only at stage ${f}`);
+        }
+        for (const ch of r.choices) visit(ch, g || (!g && !!r.tags.stage && from?.size === 1));
+      }
+    };
+    for (const t of parseScreenplay(before).topics) visit(t, false);
+    if (rows.join('\n') !== before) c.screenplay = rows.join('\n');
+  }
   // "Fails if kept three days" written as a step that fails the quest right away, where a failure already does it.
   const failed = new Set(list(p.failures).map((f) => f.failStage));
   const steps = list(p.steps);
@@ -507,6 +544,7 @@ export function validatePlan(input: QuestPlan): PlanIssue[] {
   for (const c of plan.conversations ?? []) for (const m of c.screenplay.matchAll(/\[stage\s+(-?\d+)\]/gi)) said.add(Number(m[1]));
   const reached = new Set<number>([...said, ...(plan.steps ?? []).filter((st) => st.kind !== 'talk').map((st) => st.to), ...(plan.failures ?? []).map((f) => f.failStage)]);
   const ordered = [...(plan.stages ?? [])].sort((a, b) => a.index - b.index);
+  const startIndex = (ordered.find((x) => x.startsQuest) ?? ordered[0])?.index;
   for (const st of ordered.slice(1)) {
     if (st.startsQuest || reached.has(st.index)) continue;
     const talk = (plan.steps ?? []).find((x) => x.kind === 'talk' && x.to === st.index);
@@ -526,6 +564,22 @@ export function validatePlan(input: QuestPlan): PlanIssue[] {
   for (const st of plan.steps ?? [])
     if (st.kind === 'script' && st.from !== null && (plan.stages ?? []).find((x) => x.index === st.to)?.failsQuest)
       warn(`“${st.note || 'A step'}” fails the quest as soon as stage ${st.from} is reached (a “right away” step into a failing stage). Use a failure instead (a time limit, or someone dying)`);
+  // A line that moves the quest further on, offered whenever the player talks to them (no [if …] on it or on the
+  // answer), lets them skip ahead: "I'll take the gold. [stage 40]" chosen before the amulet is found.
+  const opening = new Set((plan.steps ?? []).filter((x) => x.kind === 'talk' && (x.from === null || x.from === startIndex)).map((x) => x.to));
+  for (const c of plan.conversations ?? []) {
+    const visit = (p: ScriptPlayerLine, gated: boolean) => {
+      const own = gated || 'if' in p.tags;
+      for (const r of p.responses) {
+        const g = own || 'if' in r.tags;
+        const sets = Number(r.tags.stage);
+        if (!g && Number.isFinite(sets) && r.tags.stage !== '' && !opening.has(sets) && stages.has(sets))
+          warn(`“${p.text}” (${c.title}) moves the quest to stage ${sets} whenever it's chosen, even before the quest gets there, so the player can skip ahead. Add [if stage N] for the stage it belongs to`);
+        for (const ch of r.choices) visit(ch, g);
+      }
+    };
+    for (const t of parseScreenplay(c.screenplay).topics) visit(t, false);
+  }
   // A quest running from the start shows its first journal entry before the player has met anyone.
   const first = ordered.find((x) => x.startsQuest) ?? ordered[0];
   if (plan.startsWithGame && first?.journal.trim() && !first.completesQuest)

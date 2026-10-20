@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { NodeFileSystem, NodeProcessRunner } from '@tes5/workspace/node';
-import { settleCharacters, validatePlan, type AiProvider, type QuestPlan } from '@tes5/workspace';
+import { normalizePlan, repairPlan, settleCharacters, validatePlan, type AiProvider, type QuestPlan } from '@tes5/workspace';
 import { decodeRecord, parsePlugin, type FormKey } from '@tes5/esp';
 import { EngineHost } from '../../src/engine/host';
 
@@ -138,7 +138,7 @@ if (rebuild) {
     const h = await game(id);
     // --as-planned: what planning does to a free AI's answer now (for plans saved by an older version).
     const text = QUESTS.find((q) => id.startsWith(q.id))?.text;
-    const mended = args.includes('--as-planned') && text ? settleCharacters(h.ws!, plan, text, true) : [];
+    const mended = args.includes('--as-planned') && text ? [...repairPlan(normalizePlan(plan)), ...settleCharacters(h.ws!, plan, text, true)] : [];
     const issues = validatePlan(plan).map((x) => `${x.severity}: ${x.message}`);
     const before = modScripts(h);
     const t0 = Date.now();

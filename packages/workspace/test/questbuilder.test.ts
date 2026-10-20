@@ -96,6 +96,19 @@ describe('plans that would get stuck', () => {
 });
 
 describe('plans that would play wrong', () => {
+  it('a line that moves the quest on whenever it is chosen, and the stage it gets tied to', () => {
+    const plan = exampleQuestPlan();
+    // Two endings chosen at stage 20, written with nothing limiting when they're offered.
+    plan.stages.push({ index: 110, journal: 'I kept the ring and Brynja trained me instead.', startsQuest: false, completesQuest: true, failsQuest: false });
+    plan.steps.push({ from: 20, to: 110, kind: 'talk', targetKey: null, note: 'The player asks for training instead' });
+    plan.conversations[0]!.screenplay += '\nPLAYER: Teach me instead.\nBRYNJA: Very well. [skill Speech x1] [stage 110] [goodbye]';
+    expect(validatePlan(plan).map((i) => i.message)).toContain("“Teach me instead.” (Brynja) moves the quest to stage 110 whenever it's chosen, even before the quest gets there, so the player can skip ahead. Add [if stage N] for the stage it belongs to");
+    // An AI's plan is mended from its own step: offered at stage 20 only.
+    expect(repairPlan(plan)).toContain('“Teach me instead.” in “Brynja” is offered only at stage 20');
+    expect(plan.conversations[0]!.screenplay).toContain('PLAYER: Teach me instead. [if stage 20]');
+    expect(validatePlan(plan).filter((i) => /whenever it's chosen/.test(i.message))).toEqual([]);
+  });
+
   it('a “right away” step into a failing stage', () => {
     const plan = exampleQuestPlan();
     plan.stages.push({ index: 90, journal: 'I kept the ring.', startsQuest: false, completesQuest: false, failsQuest: true });
@@ -105,6 +118,20 @@ describe('plans that would play wrong', () => {
     plan.failures.push({ kind: 'timeLimit', targetKey: null, days: 3, fromStage: 10, failStage: 90, note: 'Three days' });
     expect(repairPlan(plan)).toContain('left out 1 step(s) that would fail the quest right away (its failures already do that)');
     expect(plan.steps.some((st) => st.to === 90)).toBe(false);
+  });
+
+  it('mends tags the editor does not know in an AI plan, and trains skills from dialogue', async () => {
+    const plan = exampleQuestPlan();
+    plan.conversations[0]!.screenplay = plan.conversations[0]!.screenplay.replace('[gives gold x100]', '[give gold x100] [skill Archery levels 2] [wink]');
+    const changes = repairPlan(plan);
+    expect(changes).toEqual(expect.arrayContaining(['[give] → [gives] in “Brynja”', 'took [wink] out of “Brynja” (not a tag the editor knows)']));
+    expect(validatePlan(plan).filter((i) => i.severity === 'error')).toEqual([]);
+    const { builder, quests, scripts, ws } = await setup();
+    const r = await builder.build(plan);
+    const info = quests.quest(r.quest!).topics.flatMap((t) => t.infos).find((i) => i.responses.some((x) => x.text.includes('earned this')))!;
+    const code = await scripts.read((ws.view(info.formKey)!.data as any).scripts.fragments.fileName);
+    expect(code).toContain('Game.IncrementSkillBy("Marksman", 2)');
+    expect(code).toContain('AddItem(Game.GetFormFromFile(0x00000F, "Skyrim.esm"), 100)');
   });
 
   it('mends the slips of a plan written out by hand: lists left out, [] for none', () => {

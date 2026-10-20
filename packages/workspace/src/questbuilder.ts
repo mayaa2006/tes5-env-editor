@@ -8,7 +8,8 @@
 import { FACE_MORPHS, QuestFlag, RecordFlags, SKILLS, parseFormKey, type FormKey } from '@tes5/esp';
 import { joinPath } from './fs';
 import { WorkspaceError, type Workspace } from './engine';
-import { CharacterEditor, skillIndex } from './characteredit';
+import { CharacterEditor } from './characteredit';
+import { skillIndex } from './skills';
 import { ITEM_SIGS, formExpression, resolveItem, type DialogueService } from './dialogue';
 import { rng, type EnvironmentService } from './environment';
 import { emptyMorphs, FEMALE_FLAG, type NpcService } from './npc';

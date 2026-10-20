@@ -17,12 +17,14 @@
  * [emotion happy] sets the emotion, [gives Item x2] / [takes Item x1] move
  * items between the speaker and the player (Item is an Editor ID or name;
  * "gold" means gold coins), [gesture wave] makes the speaker play an
- * animation as they start the line (see gestures.ts).
+ * animation as they start the line (see gestures.ts), [skill Archery x1]
+ * trains the player's skill by that many levels.
  */
 import { EMOTIONS, conditionFunctionByName, newCondition, parseFormKey, type Condition, type FormKey } from '@tes5/esp';
 import { WorkspaceError, type Workspace } from './engine';
 import { choiceGlobal, clauseConditions, parseIf, type IfClause } from './dialogueif';
 import { gestureCode } from './gestures';
+import { skillTag } from './skills';
 import { writeScene } from './scenes';
 import { MISC_TOPICS, type QuestService } from './quest';
 
@@ -415,6 +417,14 @@ export class DialogueService {
           if (ref && tag === 'gives' && held.holder === speaker) code.push(`akSpeaker.RemoveItem(${ref}, 1, False, Game.GetPlayer())`);
           else if (ref && tag === 'takes') code.push(`Game.GetPlayer().RemoveItem(${ref}, 1, False, akSpeaker)`);
           else code.push(`Game.GetPlayer().${verb}(${formExpression(item)}, ${count})`);
+        }
+      }
+      // [skill Archery x1] (or [teaches …], [trains …]): the speaker trains the player.
+      for (const tag of ['skill', 'teaches', 'trains'] as const) {
+        for (const v of (r.tags[tag] ?? '').split(';').map((x) => x.trim()).filter(Boolean)) {
+          const t = skillTag(v);
+          if (!t) throw new WorkspaceError(`Line ${r.line}: [${tag} ${v}]: “${v}” isn't a skill (try Archery, One-handed, Speech, Destruction…)`);
+          code.push(`Game.IncrementSkillBy("${t.skill}", ${t.levels})`);
         }
       }
       // [remember NAME] / [forget NAME]: a choice the quest keeps for later lines and endings.
