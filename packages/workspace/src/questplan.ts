@@ -363,6 +363,72 @@ export function repairPlan(plan: QuestPlan): string[] {
     for (const t of parseScreenplay(before).topics) visit(t, false);
     if (rows.join('\n') !== before) c.screenplay = rows.join('\n');
   }
+  // Extras that don't say what they need (an event with nothing to act on, an animation by nobody, a reward of an
+  // item that isn't in the plan) would stop the build: they're left out, with a note.
+  const stageSet = new Set(list(p.stages).map((x) => x.index).filter((x): x is number => typeof x === 'number'));
+  const keyOf = (kind: Obj[]) => new Set(kind.map((x) => x.key).filter((x): x is string => typeof x === 'string'));
+  const charKeys = keyOf(list(p.characters));
+  const itemKeys = keyOf(list(p.items));
+  const blank = (v: unknown) => typeof v !== 'string' || !v.trim();
+  const NEEDS_TARGET = ['hostile', 'friendly', 'unlock', 'lock', 'show', 'hide', 'moveTo', 'kill'];
+  const NEEDS_WHAT = ['spawn', 'sound', 'weather', 'message', 'startQuest'];
+  if (Array.isArray(p.events)) {
+    const ok = list(p.events).filter(
+      (e) => stageSet.has(e.atStage as number) && !(NEEDS_TARGET.includes(e.kind as string) && blank(e.targetKey)) && !(NEEDS_WHAT.includes(e.kind as string) && blank(e.what)) && !((e.kind === 'moveTo' || e.kind === 'movePlayer') && blank(e.toKey)),
+    );
+    for (const e of list(p.events).filter((x) => !ok.includes(x))) changes.push(`left out the event “${(e.note as string) || (e.kind as string)}” (it doesn't say what it acts on, or its stage doesn't exist)`);
+    p.events = ok;
+  }
+  if (Array.isArray(p.animations)) {
+    const ok = list(p.animations).filter((a) => stageSet.has(a.atStage as number) && charKeys.has(a.characterKey as string));
+    if (ok.length < list(p.animations).length) changes.push(`left out ${list(p.animations).length - ok.length} animation(s) by nobody in the plan, or at a stage that doesn't exist`);
+    p.animations = ok;
+  }
+  for (const r of list(p.rewards)) if (typeof r.itemKey === 'string' && !itemKeys.has(r.itemKey)) (changes.push(`a reward of “${r.itemKey}”, which isn't an item in the plan, gives only its gold`), (r.itemKey = null));
+  // A failure has to set a stage that fails the quest (one that completes it would hand out the reward instead).
+  for (const f of list(p.failures)) {
+    const st = list(p.stages).find((x) => x.index === f.failStage);
+    if (st && st.failsQuest === true) continue;
+    if (st && st.completesQuest !== true) {
+      st.failsQuest = true;
+      continue;
+    }
+    const index = Math.max(0, ...stageSet) + 100 - ((Math.max(0, ...stageSet) + 100) % 100);
+    stageSet.add(index);
+    (p.stages as Obj[]).push({ index, journal: f.kind === 'timeLimit' ? 'I took too long, and it was too late to finish what I was asked to do.' : 'Someone I needed is dead, and I can no longer finish what I was asked to do.', startsQuest: false, completesQuest: false, failsQuest: true });
+    changes.push(`“${(f.note as string) || 'a failure'}” sets the new stage ${index}, which fails the quest${st ? ` (stage ${f.failStage} completes it)` : ''}`);
+    f.failStage = index;
+  }
+  // An item a character holds that the player must hand on ([takes …] / [if has …] elsewhere), with no line where
+  // the holder gives it: they hand it over on their first line that moves the quest on (taking the job).
+  const convs = list(p.conversations).filter((c) => typeof c.screenplay === 'string');
+  const all = convs.map((c) => c.screenplay as string).join('\n');
+  const tagRe = (verbs: string, key: string) => new RegExp(`\\[(?:${verbs})\\s+${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s*[x×]\\s*\\d+)?\\]`, 'i');
+  for (const i of list(p.items)) {
+    if (i.startsWith !== 'character' || typeof i.key !== 'string' || typeof i.startsAtKey !== 'string') continue;
+    if (!tagRe('takes|if\\s+has', i.key).test(all) || tagRe('gives', i.key).test(all)) continue;
+    if (list(p.steps).some((st) => st.kind === 'pickup' && st.targetKey === i.key)) continue;
+    const holder = list(p.characters).find((c) => c.key === i.startsAtKey);
+    if (!holder) continue;
+    const names = new Set([holder.key, holder.name].filter((n): n is string => typeof n === 'string').map((n) => n.toLowerCase()));
+    // The holder's answer on the earliest exchange that moves the quest on (taking the job), not one that takes the item.
+    let best: { conv: Obj; line: number; stage: number } | undefined;
+    for (const c of convs) {
+      const visit = (pl: ScriptPlayerLine) => {
+        for (const r of pl.responses) {
+          const stage = Number(r.tags.stage || pl.tags.stage);
+          if (names.has(r.speaker.toLowerCase()) && Number.isFinite(stage) && !('takes' in r.tags) && (!best || stage < best.stage)) best = { conv: c, line: r.line, stage };
+          for (const ch of r.choices) visit(ch);
+        }
+      };
+      for (const t of parseScreenplay(c.screenplay as string).topics) visit(t);
+    }
+    if (!best) continue;
+    const rows = (best.conv.screenplay as string).split(/\r?\n/);
+    rows[best.line - 1] = `${rows[best.line - 1]!.trimEnd()} [gives ${i.key} x1]`;
+    best.conv.screenplay = rows.join('\n');
+    changes.push(`${holder.name as string} hands over ${(i.name as string) || i.key} when the job is taken (${best.conv.title as string})`);
+  }
   // "Fails if kept three days" written as a step that fails the quest right away, where a failure already does it.
   const failed = new Set(list(p.failures).map((f) => f.failStage));
   const steps = list(p.steps);
@@ -462,6 +528,36 @@ export function emptyPlan(): QuestPlan {
   };
 }
 
+/**
+ * The stages lines of dialogue move the quest to. A line only offered at the stage it sets ("[if stage 20] … [stage 20]")
+ * moves nothing, so it doesn't count.
+ */
+export function stagesSaid(plan: QuestPlan): Set<number> {
+  const out = new Set<number>();
+  const only = (v: string | undefined) => {
+    for (const part of (v ?? '').split(';')) {
+      const m = /^\s*(?:stage\s*)?(?:==?\s*)?(-?\d+)\s*$/i.exec(part);
+      if (m) return Number(m[1]);
+    }
+    return undefined;
+  };
+  for (const c of plan.conversations ?? []) {
+    const parsed = parseScreenplay(c.screenplay);
+    const visit = (pl: ScriptPlayerLine, gate: number | undefined) => {
+      const g = only(pl.tags.if) ?? gate;
+      for (const r of pl.responses) {
+        const rg = only(r.tags.if) ?? g;
+        for (const v of [r.tags.stage, pl.tags.stage]) if (v && Number.isFinite(Number(v)) && Number(v) !== rg) out.add(Number(v));
+        for (const ch of r.choices) visit(ch, rg);
+      }
+    };
+    for (const t of parsed.topics) visit(t, undefined);
+    // Greetings, chatter and scenes can set stages too.
+    for (const b of parsed.blocks) for (const l of b.lines) if (l.tags.stage && Number.isFinite(Number(l.tags.stage)) && Number(l.tags.stage) !== (only(l.tags.if) ?? only(b.tags.if))) out.add(Number(l.tags.stage));
+  }
+  return out;
+}
+
 /** Problems that would stop (errors) or weaken (warnings) a build. */
 export function validatePlan(input: QuestPlan): PlanIssue[] {
   // Plans written before a field existed are checked as if it were empty.
@@ -540,8 +636,7 @@ export function validatePlan(input: QuestPlan): PlanIssue[] {
   }
   // Every stage after the first must be reachable: a step, a line of dialogue or a failure sets it. A talk step
   // only says a line does it; without that line's [stage N] nothing does.
-  const said = new Set<number>();
-  for (const c of plan.conversations ?? []) for (const m of c.screenplay.matchAll(/\[stage\s+(-?\d+)\]/gi)) said.add(Number(m[1]));
+  const said = stagesSaid(plan);
   const reached = new Set<number>([...said, ...(plan.steps ?? []).filter((st) => st.kind !== 'talk').map((st) => st.to), ...(plan.failures ?? []).map((f) => f.failStage)]);
   const ordered = [...(plan.stages ?? [])].sort((a, b) => a.index - b.index);
   const startIndex = (ordered.find((x) => x.startsQuest) ?? ordered[0])?.index;

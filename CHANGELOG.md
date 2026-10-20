@@ -13,7 +13,7 @@ Each version here is published as a Windows installer and portable exe on the [r
 - **New quest items look like what they are.** An item is copied from one named like it ("Hulda's Ring" from a ring) instead of the first misc item in the load order (an Aetherium Crest). The copy doesn't keep any scripts the original had for its own quest. New clothing and armour with no name match are copied from armour again; before, they became misc items.
 - **Plans that would leave the quest stuck, or let the player skip it, go back to the AI.** New checks:
   - a step that happens "in a conversation" with no line of dialogue that sets its stage;
-  - an item the player must hand over (or have) but never gets;
+  - an item the player must hand over (or have) but never gets, or has to pick up from someone who never hands it over or dies;
   - a character taking a quest item on a line that doesn't move the quest on, so the player can't finish;
   - a line that sets the stage that killing the wolves (or picking something up, or arriving somewhere) should reach, so the player can talk their way past it;
   - a journal entry on the first stage of a quest that runs from the start, which would show in the journal before the player has met anyone;

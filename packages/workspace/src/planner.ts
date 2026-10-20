@@ -20,7 +20,7 @@ import type { FormKey } from '@tes5/esp';
 import { GESTURES } from './gestures';
 import { z } from 'zod';
 import type { JournalContext, JournalDraft } from './journal';
-import { PLAN_EVENT_KINDS, QuestPlanSchema, keepAskedChanges, normalizePlan, repairPlan, validatePlan, type PlanIssue, type QuestPlan } from './questplan';
+import { PLAN_EVENT_KINDS, QuestPlanSchema, keepAskedChanges, normalizePlan, repairPlan, stagesSaid, validatePlan, type PlanIssue, type QuestPlan } from './questplan';
 import { lintScreenplay } from './dialoguelint';
 import { aiName, chatSend, type AiProvider } from './aiproviders';
 import { WorldService } from './world';
@@ -434,7 +434,7 @@ export class QuestPlanner {
     const keys = plan.characters.map((c) => c.key.toUpperCase()).join(', ');
     for (const st of plan.steps.filter((x) => x.kind === 'talk')) {
       const tag = new RegExp(`\\[stage\\s+${st.to}\\]`, 'i');
-      if (plan.conversations.some((c) => tag.test(c.screenplay))) continue;
+      if (stagesSaid(plan).has(st.to)) continue;
       try {
         const out = await this.run(
           {
@@ -584,7 +584,7 @@ function planBrief(plan: QuestPlan, source: string): string {
 }
 
 /** Problems worth one more round with the AI: errors, and gaps that leave the quest stuck. */
-function blockingIssues(issues: PlanIssue[]): PlanIssue[] {
+export function blockingIssues(issues: PlanIssue[]): PlanIssue[] {
   return issues.filter((i) => i.severity === 'error' || /^(Nothing moves the quest|Nothing starts the quest|No stage completes|The player needs|The player loses|A line in .* sets stage|The quest starts with the game, so stage|.* fails the quest as soon as stage|.* whenever it's chosen, even before|The player has to pick up)/.test(i.message));
 }
 

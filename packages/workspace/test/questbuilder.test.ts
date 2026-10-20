@@ -121,6 +121,43 @@ describe('plans that would play wrong', () => {
     expect(validatePlan(plan).some((i) => i.message.startsWith('The player has to pick up'))).toBe(false);
   });
 
+  it('mends extras that would stop an AI plan building, and a failure that would complete the quest', () => {
+    const plan = exampleQuestPlan();
+    plan.events = [{ atStage: 100, kind: 'startQuest', targetKey: null, toKey: null, what: null, count: null, note: 'Player receives gold' }];
+    plan.animations = [{ atStage: 20, characterKey: 'nobody', gesture: 'wave' }];
+    plan.failures = [{ kind: 'timeLimit', targetKey: null, days: 3, fromStage: 10, failStage: 100, note: 'Three days' }];
+    expect(validatePlan(plan).some((i) => i.severity === 'error')).toBe(true);
+    const changes = repairPlan(plan);
+    expect(changes).toEqual(
+      expect.arrayContaining([
+        'left out the event “Player receives gold” (it doesn\'t say what it acts on, or its stage doesn\'t exist)',
+        'left out 1 animation(s) by nobody in the plan, or at a stage that doesn\'t exist',
+        '“Three days” sets the new stage 200, which fails the quest (stage 100 completes it)',
+      ]),
+    );
+    expect(plan.stages.find((x) => x.index === 200)).toMatchObject({ failsQuest: true, completesQuest: false });
+    expect(validatePlan(plan).filter((i) => i.severity === 'error')).toEqual([]);
+  });
+
+  it('has the holder hand over an item the player must deliver, when the job is taken', () => {
+    const plan = exampleQuestPlan();
+    // Brynja keeps the ring and Eirik takes it from the player: Brynja hands it over when the job is taken.
+    plan.items[0] = { ...plan.items[0]!, startsWith: 'character', startsAtKey: 'brynja', spot: null };
+    plan.steps = plan.steps.filter((st) => st.kind !== 'pickup');
+    plan.conversations[0]!.screenplay = plan.conversations[0]!.screenplay.replace('[takes ring x1] ', '');
+    plan.conversations[1]!.screenplay += '\nPLAYER: Brynja sent this. [if stage 10]\nEIRIK: Ah, the ring. [takes ring x1] [stage 20] [goodbye]';
+    expect(validatePlan(plan).some((i) => i.message.startsWith("The player needs Brynja's Ring"))).toBe(true);
+    expect(repairPlan(plan)).toContain("Brynja hands over Brynja's Ring when the job is taken (Brynja)");
+    expect(plan.conversations[0]!.screenplay).toContain("BRYNJA: Thank you. Try the tables, I was clearing them all morning. [goodbye] [gives ring x1]");
+    expect(validatePlan(plan).some((i) => i.message.startsWith('The player needs'))).toBe(false);
+  });
+
+  it('a line only offered at the stage it sets moves nothing', () => {
+    const plan = exampleQuestPlan();
+    plan.conversations[0]!.screenplay = plan.conversations[0]!.screenplay.replace('PLAYER: I found your ring. [if stage 20]', 'PLAYER: I found your ring. [if stage 100]');
+    expect(validatePlan(plan).map((i) => i.message)).toContain('Nothing moves the quest to stage 100: “The player returns the ring” happens in a conversation, but no line has [stage 100]. Add [stage 100] to the line that does it');
+  });
+
   it('a “right away” step into a failing stage', () => {
     const plan = exampleQuestPlan();
     plan.stages.push({ index: 90, journal: 'I kept the ring.', startsQuest: false, completesQuest: false, failsQuest: true });

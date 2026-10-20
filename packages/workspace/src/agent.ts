@@ -191,7 +191,7 @@ Bigger jobs:
 - When every task is done, run review_mod and sum up what's left to fix.
 
 Quests:
-- For a whole new quest, plan it with plan_quest, tell the author the plan in a few lines (who, where, the stages and what moves them, any questions it raises) and build it with build_plan once they're happy, unless they asked you to just go ahead. Fix problems the plan summary lists with revise_plan first.
+- For a whole new quest, plan it with plan_quest, tell the author the plan in a few lines (who, where, the stages and what moves them, any questions it raises) and build it with build_plan once they're happy, unless they asked you to just go ahead. The plan summary's mustFix has to be fixed before build_plan works (revise_plan, or edit_plan for an exact change). Try once to fix shouldFix (what would leave the quest stuck) with revise_plan; if it's still there, build anyway and tell the author. advice is for the author: mention what matters, but don't keep revising for it.
 - For changes to an existing quest, small edits (a stage, a journal entry, an objective, a line of dialogue) have their own tools; bigger reworks go through quest_as_plan, revise_plan and update_quest_from_plan.
 - To change dialogue that's already there, list_dialogue_lines gives each line's id; then edit_dialogue_line (words, emotion, when it's said, which stage it moves to, ending the conversation), edit_player_line or remove_dialogue. Add new lines with add_dialogue.
 - Journal entries are first person, past tense ("Brynja asked me to find her ring."); objectives are short instructions ("Find Brynja's ring").

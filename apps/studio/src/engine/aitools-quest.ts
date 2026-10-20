@@ -6,7 +6,7 @@
  */
 import { z } from 'zod';
 import type { FormKey } from '@tes5/esp';
-import { QuestPlanSchema, QuestPlanner, WorkspaceError, lintScreenplay, normalizePlan, planCatalog, repairPlan, settleCharacters, validatePlan, type AgentTool, type AiProvider, type PlanIssue, type PlanResolution, type QuestPlan } from '@tes5/workspace';
+import { QuestPlanSchema, QuestPlanner, WorkspaceError, blockingIssues, lintScreenplay, normalizePlan, planCatalog, repairPlan, settleCharacters, validatePlan, type AgentTool, type AiProvider, type PlanIssue, type PlanResolution, type QuestPlan } from '@tes5/workspace';
 import type { EngineHost } from './host';
 
 /** How much of the load order the planner lists: everything for Claude, less for a free AI (it reads it slowly). */
@@ -38,7 +38,11 @@ function brief(id: string, plan: QuestPlan, issues: PlanIssue[], resolution: Pla
     whatMovesIt: plan.steps.map((s) => `${s.from ?? 'any time'} → ${s.to}: ${s.kind}${s.targetKey ? ` ${s.targetKey}` : ''} (${s.note})`),
     conversations: plan.conversations.map((c) => `${c.title}: ${c.screenplay.split('\n').length} lines`),
     events: plan.events.map((e) => `at ${e.atStage}: ${e.kind} ${e.targetKey ?? e.what ?? ''}`),
-    problems: issues.map((i) => `${i.severity}: ${i.message}`),
+    // What stops the build, what would leave the quest stuck, and the rest (for the author).
+    mustFix: issues.filter((i) => i.severity === 'error').map((i) => i.message),
+    shouldFix: blockingIssues(issues).filter((i) => i.severity !== 'error').map((i) => i.message),
+    advice: issues.filter((i) => i.severity !== 'error' && !blockingIssues([i]).length).map((i) => i.message),
+    readyToBuild: !issues.some((i) => i.severity === 'error'),
     questions: plan.questions,
   };
 }
@@ -106,7 +110,11 @@ export function questTools(host: EngineHost, ctx: QuestToolContext): AgentTool<a
         const next = await planner().revise(p.plan, i.change, catalog(`${p.source ?? ''}\n${i.change}`), p.source);
         settleCharacters(ws(), next, `${p.source ?? ''}\n${i.change}`, ctx.ai.kind !== 'claude');
         const id = keep(next, { source: p.source, quest: p.quest });
-        return { data: review(id) };
+        const was = blockingIssues(validatePlan(p.plan)).map((x) => x.message).sort().join('|');
+        const now = review(id);
+        const same = was && [...now.mustFix, ...now.shouldFix].sort().join('|') === was;
+        // A small model can revise in circles: say so, and what to do instead.
+        return { data: same ? { ...now, next: now.readyToBuild ? 'The revision fixed nothing: build it now and tell the author what is left.' : 'The revision fixed nothing: use edit_plan for the exact change (show_plan gives the plan), or tell the author what is wrong.' } : now };
       },
     },
     {
