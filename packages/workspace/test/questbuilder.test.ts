@@ -183,6 +183,15 @@ describe('plans that would play wrong', () => {
     expect(code).toContain('AddItem(Game.GetFormFromFile(0x00000F, "Skyrim.esm"), 100)');
   });
 
+  it('mends a key used twice in an AI plan: an item listed as a character too', () => {
+    const plan = exampleQuestPlan();
+    plan.characters.push({ ...plan.characters[1]!, key: 'ring', name: "Brynja's Ring", existing: 'Gold Ring', routine: [], outfit: null });
+    plan.items.push({ ...plan.items[0]! });
+    expect(validatePlan(plan).map((i) => i.message)).toContain('The key "ring" is used twice');
+    expect(repairPlan(plan)).toEqual(expect.arrayContaining(["left out the character “Brynja's Ring”, which is the item of the same name", 'a second “ring” in items is now “ring2”']));
+    expect(validatePlan(plan).filter((i) => i.severity === 'error')).toEqual([]);
+  });
+
   it('mends the slips of a plan written out by hand: lists left out, [] for none', () => {
     const plan = exampleQuestPlan() as any;
     delete plan.events;
@@ -1005,6 +1014,7 @@ BRYNJA: You found it! Take this, with my thanks. [takes ring x1] [gives gold x10
     const planner = new QuestPlanner({ ai: { kind: 'ollama', model: 'qwen3' }, send: async (p) => (sent.push(p), sent.length <= 3 ? reply(JSON.stringify(replies[sent.length - 1])) : reply('not json')) });
     const plan = await planner.plan('Brynja lost her ring; Eirik has a key.', 'document', 'catalog');
     expect(sent[2].messages[0].content).toContain('Nothing in the dialogue makes this happen yet: “Eirik gives the player a key” (stage 10 → stage 15)');
+    expect(sent[2].messages[0].content).toContain("then EIRIK's answer, ending with [stage 15]");
     expect(plan.conversations.find((c) => c.title === 'Eirik')!.screenplay.endsWith(lines)).toBe(true);
     expect(validatePlan(plan).filter((i) => i.message.includes('stage 15'))).toEqual([]);
   });

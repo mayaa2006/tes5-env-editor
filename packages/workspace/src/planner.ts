@@ -442,6 +442,10 @@ export class QuestPlanner {
     for (const st of plan.steps.filter((x) => x.kind === 'talk')) {
       const tag = new RegExp(`\\[stage\\s+${st.to}\\]`, 'i');
       if (stagesSaid(plan).has(st.to)) continue;
+      // Who it happens with, when the step names them ("Player gives the sword to Proventus").
+      const esc = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const named = plan.characters.find((c) => [c.key, c.name, c.name.split(/\s+/)[0]!].some((n) => n.length > 2 && new RegExp(`\\b${esc(n)}\\b`, 'i').test(st.note)));
+      const answer = named ? `then ${named.key.toUpperCase()}'s answer` : 'then the answer from the character it happens with';
       try {
         const out = await this.run(
           {
@@ -452,7 +456,7 @@ export class QuestPlanner {
             messages: [
               {
                 role: 'user',
-                content: `${brief}\n\nNothing in the dialogue makes this happen yet: “${st.note}” (${st.from === null ? '' : `stage ${st.from} → `}stage ${st.to}). Write just that short exchange: a PLAYER line${st.from === null ? '' : ` with [if stage ${st.from}]`}, then the answer from the character it happens with, ending with [stage ${st.to}] and [goodbye]. If an item changes hands, use [gives KEY x1] or [takes KEY x1] with the item's key. Speakers: PLAYER and ${keys}.`,
+                content: `${brief}\n\nNothing in the dialogue makes this happen yet: “${st.note}” (${st.from === null ? '' : `stage ${st.from} → `}stage ${st.to}). Write just that short exchange: a PLAYER line${st.from === null ? '' : ` with [if stage ${st.from}]`}, ${answer}, ending with [stage ${st.to}] and [goodbye]. If an item changes hands, use [gives KEY x1] or [takes KEY x1] with the item's key. Speakers: PLAYER and ${keys}.`,
               },
             ],
           },
@@ -462,7 +466,7 @@ export class QuestPlanner {
         if (!tag.test(text) || errors(text) > 0) continue;
         const who = [...text.matchAll(/^\s*([^:\n[\]]+?)\s*:/gm)].map((m) => m[1]!.trim().toLowerCase()).find((n) => n !== 'player');
         const c = plan.characters.find((x) => x.key.toLowerCase() === who || x.name.toLowerCase() === who);
-        if (!c) continue;
+        if (!c || (named && c !== named)) continue;
         const conv = plan.conversations.find((x) => x.title.toLowerCase() === c.name.toLowerCase());
         if (conv) conv.screenplay = `${conv.screenplay.trimEnd()}\n${text}`;
         else plan.conversations.push({ title: c.name, screenplay: text });

@@ -272,6 +272,31 @@ export function repairPlan(plan: QuestPlan): string[] {
   type Obj = Record<string, unknown>;
   const list = (v: unknown): Obj[] => (Array.isArray(v) ? v.filter((x): x is Obj => !!x && typeof x === 'object') : []);
   const p = plan as unknown as Obj;
+  // The same key twice: a "character" that is really one of the plan's items (it never speaks and stands nowhere) is
+  // dropped; two entries in one list get told apart.
+  {
+    const itemKeys = new Set(list(p.items).map((i) => String(i.key)));
+    const said = list(p.conversations).map((c) => (typeof c.screenplay === 'string' ? c.screenplay : '')).join('\n').toLowerCase();
+    const speaks = (c: Obj) => [c.key, c.name].some((n) => typeof n === 'string' && new RegExp(`^\\s*${n.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*:`, 'm').test(said));
+    const before = list(p.characters);
+    const kept = before.filter((c) => !(itemKeys.has(String(c.key)) && !speaks(c)));
+    for (const c of before.filter((x) => !kept.includes(x))) changes.push(`left out the character “${String(c.name ?? c.key)}”, which is the item of the same name`);
+    if (kept.length < before.length) p.characters = kept;
+    for (const field of ['characters', 'locations', 'items', 'encounters'] as const) {
+      const seen = new Set<string>();
+      for (const e of list(p[field])) {
+        const k = e.key;
+        if (typeof k !== 'string') continue;
+        let n = 1;
+        while (seen.has(n === 1 ? k : `${k}${n}`)) n++;
+        if (n > 1) {
+          changes.push(`a second “${k}” in ${field} is now “${k}${n}”`);
+          e.key = `${k}${n}`;
+        }
+        seen.add(n === 1 ? k : `${k}${n}`);
+      }
+    }
+  }
   const entries = [...list(p.characters), ...list(p.locations), ...list(p.items), ...list(p.encounters)].filter((e) => typeof e.key === 'string' && e.key);
   const keys = new Set(entries.map((e) => e.key as string));
   const lookup = new Map(entries.map((e) => [(e.key as string).toLowerCase(), e.key as string]));
