@@ -218,6 +218,12 @@ const INFO_SAY_ONCE = 0x4;
 export interface ScreenplayHooks {
   aliasFor?: (quest: FormKey, npc: FormKey) => number;
   appendStageCode?: (quest: FormKey, stage: number, lines: string[]) => Promise<void>;
+  /**
+   * A quest item the quest follows (made in a character's inventory when it starts): its alias and who
+   * carries it. [gives …] by that character and [takes …] then hand over that very item, not a new copy,
+   * so its quest marker and whatever listens for it being picked up or dropped follow it.
+   */
+  questItem?: (item: FormKey) => { alias: number; holder: FormKey } | undefined;
 }
 
 function pascalWords(text: string): string {
@@ -404,7 +410,11 @@ export class DialogueService {
       ] as const) {
         for (const v of (r.tags[tag] ?? '').split(';').filter((x) => x.trim())) {
           const { item, count } = this.itemTag(v, r.line);
-          code.push(`Game.GetPlayer().${verb}(${formExpression(item)}, ${count})`);
+          const held = count === 1 ? hooks.questItem?.(item) : undefined;
+          const ref = held && `(GetOwningQuest().GetAlias(${held.alias}) as ReferenceAlias).GetReference()`;
+          if (ref && tag === 'gives' && held.holder === speaker) code.push(`akSpeaker.RemoveItem(${ref}, 1, False, Game.GetPlayer())`);
+          else if (ref && tag === 'takes') code.push(`Game.GetPlayer().RemoveItem(${ref}, 1, False, akSpeaker)`);
+          else code.push(`Game.GetPlayer().${verb}(${formExpression(item)}, ${count})`);
         }
       }
       // [remember NAME] / [forget NAME]: a choice the quest keeps for later lines and endings.

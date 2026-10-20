@@ -45,7 +45,7 @@ How to plan:
 - Read everything the author wrote. Keep their names, lines and intent. Where they leave something out, decide it the way an experienced Skyrim quest designer would, and record each such decision in "assumptions" in one short sentence. Put real choices only the author can make in "questions" (at most five), and still make a sensible choice for each in the plan.
 - Prefer characters, places and items that already exist in the load order (listed below) when the author names them or clearly means them; set "existing" to their Editor ID. Otherwise set "existing" to null and a new one is created.
 - Keys are short lowercase identifiers ("brynja", "cellar", "ring") used to refer to entries inside the plan. Every key is unique across characters, locations and items.
-- A new place (existing null) is a new interior. Set layoutLike to the Editor ID of an interior from the list below that fits it (an inn for an inn, a house for a home, a cave or ruin for a hideout): its rooms, furniture, lights and clutter are copied, so it's ready to use. Set doorFrom to where the player walks in from (a location key, or an existing cell's Editor ID), and a linked door is added there.
+- A new place (existing null) is a new interior. Set layoutLike to the Editor ID of an interior from the list below that fits it (an inn for an inn, a house for a home, a cave or ruin for a hideout): its rooms, furniture, lights and clutter are copied, so it's ready to use. Set doorFrom to where the player walks in from (a location key, an existing interior, or one of the outdoor places listed, e.g. a farm's exterior for a new farmhouse), and a linked door is added there.
 - New characters need a location to stand in (a location key); characters that already exist stay where they are (locationKey null).
 - Characters can be changed as well as used. When the author says a character (new or existing) wears something, carries something, belongs to a group, has a class or level, can or can't die, or looks a certain way, put it in outfit, inventory, factions, className, level, essential and look. For existing characters, only fill in what the text asks to change and leave the rest null or empty. "Save it as an outfit" means outfit.saveAs gets an Editor ID.
 - Describe every new character's look (build, height, hair, hair colour, facial hair, eyes, scars) from the text, choosing what fits their role when the text says nothing; for a new character that is "like" someone existing, set basedOn.
@@ -60,7 +60,7 @@ How to plan:
 - Objectives are short instructions ("Find Brynja's ring", "Return the ring to Brynja"). Show each at the stage where it starts and complete it at the stage where it's done. Point the marker (targetKey) at the character, item or location involved.
 - Steps say what moves the quest from one stage to the next: talk (a line in a conversation, see below), pickup/read/equip/drop/activate (an item key), death/activate (a character key), arrive (a location key), or script (immediately after the "from" stage).
 - Items the player must pick up, read or activate must start in a location (startsWith "location"), so the game can tell when it happens. Items handed over in dialogue use the [gives …] and [takes …] tags instead.
-- Rewards are gold and/or items given at a stage (usually the final one).
+- Rewards are gold, items and/or training in a skill (skill and how many levels, e.g. someone teaching the player Archery) given at a stage (usually the final one).
 - Endings: when the player's choices lead to different outcomes, give each outcome its own stage with completesQuest true, its own closing journal entry and its own rewards; the conversation line that decides it sets that stage.
 - Failure: when the quest can be lost, add a stage with failsQuest true and a journal entry saying what went wrong, and add a failure: "death" if it fails when a character dies (targetKey), "timeLimit" if it must be done within some in-game days (days, fromStage where the clock starts). At most one time limit.
 - Events are what happens in the world when a stage is reached, outside dialogue: enemies appear (spawn, with an enemy type like "bandit" or "draugr" and how many), a character turns on the player or calms down (hostile / friendly), a door or chest unlocks or locks, something appears or vanishes (show / hide; shown things start hidden), someone moves somewhere (moveTo), someone dies (kill), the screen fades to black and back (fade, e.g. for time passing or being knocked out; moves at the same stage happen in the dark), a sound plays, the weather changes, a message shows, another quest starts (startQuest, for questlines), or the player is moved (movePlayer). Add one wherever the text says something happens ("bandits ambush you", "the door unlocks", "he draws his sword"). Pair a hostile character or spawned enemies with a death step when killing them moves the quest on.
@@ -130,6 +130,17 @@ function entryWords(...names: (string | undefined)[]): string[] {
   return [...out];
 }
 
+/** Editor IDs of things made for one dungeon, DLC, quest or test, or for creatures. */
+const SPECIFIC = /^(dun|dlc\d|cc[A-Z]{3}|cc_|MQ\d|MS\d|DA\d|C0\d|CW|DB\d|TG\d|MG\d|BYOH|Test|AAA|Favor|WE\d|WI|Cr[A-Z]|.*Creature)|Vampire|Child|Unique/i;
+/** The races players pick from: what most characters are. */
+const PLAYABLE_RACE = /^(Nord|Imperial|Breton|Redguard|HighElf|DarkElf|WoodElf|Orc|Argonian|Khajiit)Race$/i;
+
+/** 2 for a playable race or a man's or woman's voice, 1 for other everyday entries, 0 for specific ones. */
+function everyday(editorId?: string): number {
+  if (!editorId || SPECIFIC.test(editorId)) return 0;
+  return PLAYABLE_RACE.test(editorId) || /^(Male|Female)[A-Z]/.test(editorId) ? 2 : 1;
+}
+
 /** How strongly an entry matches the text: its full name in the text counts most, then shared words. */
 function relevance(text: string, words: Set<string>, name?: string, editorId?: string): number {
   let score = 0;
@@ -144,8 +155,11 @@ function relevance(text: string, words: Set<string>, name?: string, editorId?: s
  * entries it mentions come first (characters with their race, sex, voice,
  * class and factions), so a short list still holds what the quest is about.
  */
-export function planCatalog(ws: Workspace, opts: { limit?: number; text?: string } = {}): string {
+export function planCatalog(ws: Workspace, opts: { limit?: number; text?: string; short?: number } = {}): string {
   const limit = opts.limit ?? 300;
+  // Voice types, races, classes, factions, outfits and enemies: what the text mentions comes first, and the builder
+  // matches loose names ("Nord", "bandit") itself, so a free AI that reads slowly can be given fewer of them.
+  const short = opts.short ?? limit;
   const text = (opts.text ?? '').toLowerCase();
   const words = textWords(text);
   const label = (s: { editorId?: string; name?: string; formKey: string }) => (s.name && s.name !== s.editorId ? `${s.editorId ?? s.formKey} "${s.name}"` : (s.editorId ?? s.formKey));
@@ -157,12 +171,16 @@ export function planCatalog(ws: Workspace, opts: { limit?: number; text?: string
     if (factions.length) parts.push(`factions ${factions.join(', ')}`);
     return parts.filter(Boolean).join(', ');
   };
+  // After what the text mentions and what's in your plugin: everyday entries before ones made for a creature, a dungeon,
+  // a DLC or one quest, so a list that's cut short still has Nord, MaleNord and Citizen rather than atronachs.
   const rank = <T extends { name?: string; editorId?: string; inActive?: boolean }>(items: T[]): (T & { score: number })[] =>
-    items.map((s) => ({ ...s, score: text ? relevance(text, words, s.name, s.editorId) : 0 })).sort((a, b) => b.score - a.score || Number(b.inActive) - Number(a.inActive));
-  const list = (sigs: string[], filter: (name?: string, edid?: string) => boolean = (n) => !!n, detail = false) => {
+    items
+      .map((s) => ({ ...s, score: text ? relevance(text, words, s.name, s.editorId) : 0, everyday: everyday(s.editorId) }))
+      .sort((a, b) => b.score - a.score || Number(b.inActive) - Number(a.inActive) || b.everyday - a.everyday);
+  const list = (sigs: string[], filter: (name?: string, edid?: string) => boolean = (n) => !!n, detail = false, max = short) => {
     const items = rank(ws.search({ sigs, limit: 100_000 }).items.filter((s) => !s.deleted && filter(s.name, s.editorId)));
-    const shown = items.slice(0, limit).map((s) => (detail && s.score > 0 ? `${label(s)} (${details(s.formKey)})` : label(s)));
-    return `${shown.join('\n') || '(none)'}${items.length > limit ? `\n…and ${items.length - limit} more` : ''}`;
+    const shown = items.slice(0, max).map((s) => (detail && s.score > 0 ? `${label(s)} (${details(s.formKey)})` : label(s)));
+    return `${shown.join('\n') || '(none)'}${items.length > max ? `\n…and ${items.length - max} more` : ''}`;
   };
   const yours = ws
     .search({ sigs: ['QUST'], limit: 100_000 })
@@ -170,13 +188,23 @@ export function planCatalog(ws: Workspace, opts: { limit?: number; text?: string
     .slice(0, limit)
     .map((s) => (s.name ? `${s.editorId} "${s.name}"` : s.editorId!));
   const world = new WorldService(ws);
-  const cells = rank(world.cells({ interiorOnly: true }).filter((c) => c.name))
+  const all = world.cells();
+  const cells = rank(all.filter((c) => c.interior && c.name))
     .slice(0, limit)
     .map((c) => `${c.editorId ?? c.formKey} "${c.name}"`);
+  // Outdoor cells have no names, only Editor IDs (PelagiaFarmExterior, RiverwoodEdge01): the ones the text is about,
+  // for the outside door of a new interior ("a farmhouse outside Whiterun").
+  const outside = text
+    ? rank(all.filter((c) => !c.interior && c.editorId && !/^test/i.test(c.editorId)))
+        .filter((c) => c.score > 0)
+        .slice(0, 20)
+        .map((c) => c.editorId!)
+    : [];
   return [
-    `Characters (Editor ID "Name"${text ? ', with details for the ones your text seems to mention' : ''}):\n${list(['NPC_'], undefined, true)}`,
+    `Characters (Editor ID "Name"${text ? ', with details for the ones your text seems to mention' : ''}):\n${list(['NPC_'], undefined, true, limit)}`,
     `Interior locations:\n${cells.join('\n') || '(none)'}`,
-    `Voice types:\n${list(['VTYP'], (_, e) => !!e)}`,
+    ...(outside.length ? [`Outdoor places (Editor IDs, for doorFrom: where a new interior's door goes outside):\n${outside.join('\n')}`] : []),
+    `Voice types:\n${list(['VTYP'], (_, e) => !!e, false, limit)}`,
     `Races:\n${list(['RACE'])}`,
     `Classes:\n${list(['CLAS'])}`,
     `Factions:\n${list(['FACT'])}`,
@@ -473,7 +501,7 @@ function planBrief(plan: QuestPlan, source: string): string {
 
 /** Problems worth one more round with the AI: errors, and gaps that leave the quest stuck. */
 function blockingIssues(issues: PlanIssue[]): PlanIssue[] {
-  return issues.filter((i) => i.severity === 'error' || /^(Nothing moves the quest|Nothing starts the quest|No stage completes)/.test(i.message));
+  return issues.filter((i) => i.severity === 'error' || /^(Nothing moves the quest|Nothing starts the quest|No stage completes|The player needs)/.test(i.message));
 }
 
 const JournalDraftSchema = z.object({

@@ -9,6 +9,11 @@ import type { FormKey } from '@tes5/esp';
 import { QuestPlanSchema, QuestPlanner, WorkspaceError, lintScreenplay, planCatalog, validatePlan, type AgentTool, type AiProvider, type PlanIssue, type PlanResolution, type QuestPlan } from '@tes5/workspace';
 import type { EngineHost } from './host';
 
+/** How much of the load order the planner lists: everything for Claude, less for a free AI (it reads it slowly). */
+export function catalogLimits(ai: AiProvider): { limit: number; short: number } {
+  return ai.kind === 'claude' ? { limit: 300, short: 300 } : { limit: 120, short: 40 };
+}
+
 /** What the quest tools share within one conversation: the AI to plan with, plans made so far, quests touched. */
 export interface QuestToolContext {
   ai: AiProvider;
@@ -70,7 +75,7 @@ export function questTools(host: EngineHost, ctx: QuestToolContext): AgentTool<a
   const label = (k: FormKey) => ws().summary(k)?.editorId ?? k;
   const link = (k: FormKey) => ({ tab: 'quest' as const, key: k, label: `${label(k)} in Quests` });
   const planner = () => new QuestPlanner({ ai: ctx.ai });
-  const catalog = (text: string) => planCatalog(ws(), { text, limit: ctx.ai.kind === 'claude' ? 300 : 120 });
+  const catalog = (text: string) => planCatalog(ws(), { text, ...catalogLimits(ctx.ai) });
   const stageOf = (q: FormKey, s: number) => host.quest(q).stages.find((x) => x.index === s);
 
   return [
@@ -130,16 +135,26 @@ export function questTools(host: EngineHost, ctx: QuestToolContext): AgentTool<a
       name: 'build_plan',
       group: 'quest',
       writes: true,
-      description: 'Build a new quest (and its characters, places, items, dialogue…) from a plan, as one undo step. Check the plan has no errors first. For a plan made from an existing quest, use update_quest_from_plan instead.',
+      description:
+        'Build the quest (and its characters, places, items, dialogue…) from a plan, as one undo step. Check the plan has no errors first. A plan of a quest that already exists (built from an earlier version of the plan, or read with quest_as_plan) updates that quest instead of making a second one.',
       input: z.object({ planId: z.string() }),
       summary: (i) => `Build the quest from ${i.planId}`,
       run: async (i) => {
         const p = planOf(i.planId);
-        if (p.quest) throw new WorkspaceError(`${i.planId} is a plan of an existing quest: use update_quest_from_plan`);
         const errors = validatePlan(p.plan).filter((x) => x.severity === 'error');
         if (errors.length) throw new WorkspaceError(`Fix these first (revise_plan or edit_plan): ${errors.map((e) => e.message).join('; ')}`);
+        // Built already (this plan, or the one it revises): change that quest rather than add a copy of it.
+        if (p.quest && ws().exists(p.quest)) {
+          const u = await host.updateQuestFromPlan(p.quest, p.plan);
+          ctx.touched.add(p.quest);
+          return { data: { quest: p.quest, updatedExisting: true, updated: u.updated, created: u.created.map((c) => `${c.kind}: ${c.label}`), warnings: u.warnings, notes: u.notes }, link: link(p.quest), note: `Updated ${label(p.quest)}` };
+        }
         const r = await host.buildQuestPlan(p.plan);
-        if (r.quest) ctx.touched.add(r.quest);
+        if (r.quest) {
+          ctx.touched.add(r.quest);
+          // Revisions of this plan now update the quest it made.
+          ctx.plans.set(i.planId, { ...p, quest: r.quest });
+        }
         return {
           data: { quest: r.quest, editorId: r.editorId, created: r.created.map((c) => `${c.kind}: ${c.label}`), changed: r.changed.map((c) => `${c.label}: ${c.changes.join(', ')}`), dialogue: r.dialogue, notes: r.notes, warnings: r.warnings },
           ...(r.quest ? { link: link(r.quest) } : {}),

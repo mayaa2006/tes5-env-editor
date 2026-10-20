@@ -38,7 +38,7 @@ describe('updating a quest from a revised plan', () => {
     next.conversations[0]!.screenplay = next.conversations[0]!.screenplay.replace('Got any work for me?', 'Anything I can help with?');
     next.characters.push({ ...next.characters[1]!, key: 'sigrid', name: 'Sigrid', sex: 'female', voice: 'FemaleCommoner', outfit: null, routine: [], spot: null, look: null, factions: [], inventory: [] });
     next.characters[1]!.factions = [...next.characters[1]!.factions, { faction: 'Merchants', rank: 0 }];
-    next.rewards = [{ atStage: 100, gold: 50, itemKey: null }];
+    next.rewards = [{ atStage: 100, gold: 50, itemKey: null, skill: null }];
 
     const preview = await builder.previewUpdate(quest, next);
     expect(preview).toEqual(["Rewrite stage 10's journal entry", 'Add stage 30', 'Change Eirik', 'Add Sigrid', 'Update the objectives', 'Add “Straight after finding it”', 'Rewrite the conversation “Brynja”', 'Update the rewards']);

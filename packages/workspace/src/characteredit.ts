@@ -452,6 +452,10 @@ export class CharacterEditor {
       if (p) {
         byType.set(type, p);
         if (text) changed.push(`${type.toLowerCase()}: ${p.name ?? p.editorId}`);
+      } else if (type === 'Hair' && text && NONE.test(text.trim())) {
+        // No bald "hair" for their race: bald is no hair at all.
+        if (byType.get(type)) changed.push('no hair');
+        byType.set(type, undefined);
       } else if (text) ctx.note(`${c.name}: no ${type.toLowerCase()} like “${text}” for their race and sex.`);
     }
     let hairColor = a.hairColor;

@@ -165,7 +165,7 @@ describe('quest builder', () => {
     plan.characters[1]!.locationKey = 'cellar';
     plan.items.push({ key: 'note', name: 'Crumpled Note', kind: 'book', existing: null, basedOn: null, value: 1, startsWith: 'character', startsAtKey: 'eirik', spot: null });
     plan.items.push({ key: 'charm', name: 'Lucky Charm', kind: 'misc', existing: null, basedOn: null, value: 10, startsWith: 'player', startsAtKey: null, spot: null });
-    plan.rewards.push({ atStage: 100, gold: 25, itemKey: 'charm' });
+    plan.rewards.push({ atStage: 100, gold: 25, itemKey: 'charm', skill: { skill: 'Archery', levels: 2 } });
     plan.steps.push({ from: 10, to: 20, kind: 'read', targetKey: 'note', note: 'Read the note' });
     plan.steps.push({ from: 0, to: 10, kind: 'talk', targetKey: null, note: 'duplicate' });
     plan.steps.push({ from: 20, to: 20, kind: 'talk', targetKey: null, note: 'Nobody says this' });
@@ -177,18 +177,60 @@ describe('quest builder', () => {
     expect(r.notes.some((n) => n.includes('Old Cellar is a new, empty interior'))).toBe(true);
     const eirik = ws.byEditorId('CellarQuestEirik')!;
     const note = ws.byEditorId('CellarQuestCrumpledNote')!;
-    expect((ws.view(eirik)!.data as any).items).toEqual([{ item: { item: ws.byEditorId('DemoBottle'), count: 2 } }, { item: { item: note, count: 1 } }]);
+    // The note Eirik carries is one the quest follows (reading it moves it on): it's made in his inventory when
+    // the quest starts, through an alias, rather than added to his own inventory.
+    expect((ws.view(eirik)!.data as any).items).toEqual([{ item: { item: ws.byEditorId('DemoBottle'), count: 2 } }]);
     // Fallback: there's no book in the demo to copy, so it's a misc item.
     expect(ws.summary(note)!.sig).toBe('MISC');
     expect(r.notes.some((n) => n.includes('Crumpled Note should be a book'))).toBe(true);
-    expect(r.warnings.some((w) => w.includes('“Read the note” (read) can\'t be detected'))).toBe(true);
+    expect((await graphs.graph(r.quest!)).edges.find((e) => e.kind === 'read')).toMatchObject({ from: 10, to: 20, target: note });
     expect(r.warnings.some((w) => w.includes('Nothing said in a conversation sets stage 50'))).toBe(true);
     const start = await graphs.fragmentCode(r.quest!, 0);
     expect(start).toMatch(/Game\.GetPlayer\(\)\.AddItem\(Game\.GetFormFromFile\(0x[0-9A-F]{6}, "Built\.esp"\), 1\)/);
     const end = await graphs.fragmentCode(r.quest!, 100);
     expect(end).toContain('SetObjectiveCompleted(20)');
     expect(end).toContain('AddItem(Game.GetFormFromFile(0x00000F, "Skyrim.esm"), 25)');
+    expect(end).toContain('Game.IncrementSkillBy("Marksman", 2)');
     expect(r.problems).toContain('Nothing leads to stage 50.');
+    // A skill that isn't one is caught before building.
+    plan.rewards[0]!.skill = { skill: 'Juggling', levels: 1 };
+    expect(validatePlan(plan).map((i) => i.message)).toContain('A reward trains “Juggling”, which isn\'t a skill (try Archery, One-handed, Speech, Destruction…)');
+  });
+
+  it('follows quest items characters carry: taken from their body, handed over, delivered', async () => {
+    const { ws, builder, graphs, quests, scripts } = await setup();
+    const plan = exampleQuestPlan();
+    // Eirik has the ring; killing him and taking it moves the quest on, and Brynja takes it back.
+    plan.items[0] = { ...plan.items[0]!, startsWith: 'character', startsAtKey: 'eirik', spot: null };
+    plan.steps = plan.steps.map((st) => (st.kind === 'pickup' ? { ...st, note: 'Take the ring from Eirik' } : st));
+    plan.conversations = [
+      { title: 'Brynja', screenplay: "PLAYER: Got any work for me? [if stage 0]\nBRYNJA: Eirik stole my ring. Get it back. [stage 10] [goodbye]\nPLAYER: Here's your ring. [if stage 20] [if has ring x1]\nBRYNJA: Thank you! [takes ring x1] [gives gold x100] [stage 100] [goodbye]" },
+      { title: 'Eirik', screenplay: 'PLAYER: Hand over the ring. [if stage 10]\nEIRIK: Fine, take it. [gives ring x1] [goodbye]' },
+    ];
+    expect(validatePlan(plan).filter((i) => i.severity === 'error')).toEqual([]);
+    const r = await builder.build(plan, { seed: 1 });
+    expect(r.warnings.filter((w) => /can't be detected/.test(w))).toEqual([]);
+    const eirik = ws.byEditorId('InnkeeperRingQuestEirik')!;
+    const ring = ws.byEditorId('InnkeeperRingQuestBrynjaSRing')!;
+    // Not added to his own inventory: made in it by an alias when the quest starts.
+    expect(((ws.view(eirik)!.data as any).items ?? []).some((i: any) => i.item.item === ring)).toBe(false);
+    const q = quests.quest(r.quest!);
+    const ringAlias = q.aliases.find((a) => (a.fill as any).object === ring)!;
+    const eirikAlias = q.aliases.find((a) => (a.fill as any).actor === eirik)!;
+    expect(ringAlias.fill).toMatchObject({ object: ring, at: { alias: eirikAlias.id, create: 0x8000 } });
+    expect((await graphs.graph(r.quest!)).edges.find((e) => e.kind === 'pickup')).toMatchObject({ from: 10, to: 20, target: ring });
+    expect(r.created.some((c) => c.label === "Brynja's Ring, carried by Eirik (InnkeeperRingQuestEirik) (given to them when the quest starts)")).toBe(true);
+    // He hands over that very ring, and Brynja takes it; [if has ring] is about it too.
+    const code = async (said: string) => {
+      const info = quests.quest(r.quest!).topics.flatMap((t) => t.infos).find((i) => i.responses.some((x) => x.text.includes(said)))!;
+      return scripts.read((ws.view(info.formKey)!.data as any).scripts.fragments.fileName);
+    };
+    const ref = `(GetOwningQuest().GetAlias(${ringAlias.id}) as ReferenceAlias).GetReference()`;
+    expect(await code('Fine, take it.')).toContain(`akSpeaker.RemoveItem(${ref}, 1, False, Game.GetPlayer())`);
+    expect(await code('Thank you!')).toContain(`Game.GetPlayer().RemoveItem(${ref}, 1, False, akSpeaker)`);
+    expect(await code('Thank you!')).toContain('AddItem(Game.GetFormFromFile(0x00000F, "Skyrim.esm"), 100)');
+    const asks = quests.quest(r.quest!).topics.find((t) => t.text === "Here's your ring.")!;
+    expect(asks.infos[0]!.conditions.some((c) => c.param1 === ring)).toBe(true);
   });
 
   it('lays out a new place like an existing one and puts a door to it', async () => {
@@ -559,8 +601,8 @@ describe('quest builder', () => {
   });
 
   it('turns plan keys into Editor IDs in screenplays', () => {
-    const out = rewriteScreenplay('PLAYER: Hi [if stage 10]\nBRYNJA: Here. [gives ring x2] [takes gold x5]\n  EIRIK: Hm. [gives Unknown]', new Map([['brynja', 'DemoInnkeeper'], ['eirik', 'QEirik']]), new Map([['ring', 'QRing']]));
-    expect(out).toBe('PLAYER: Hi [if stage 10]\nDemoInnkeeper: Here. [gives QRing x2] [takes gold x5]\n  QEirik: Hm. [gives Unknown]');
+    const out = rewriteScreenplay('PLAYER: Hi [if stage 10] [if has ring x1]\nBRYNJA: Here. [gives ring x2] [takes gold x5] [if not has Ring]\n  EIRIK: Hm. [gives Unknown]', new Map([['brynja', 'DemoInnkeeper'], ['eirik', 'QEirik']]), new Map([['ring', 'QRing']]));
+    expect(out).toBe('PLAYER: Hi [if stage 10] [if has QRing x1]\nDemoInnkeeper: Here. [gives QRing x2] [takes gold x5] [if not has QRing]\n  QEirik: Hm. [gives Unknown]');
   });
 });
 
@@ -598,6 +640,14 @@ describe('quest planner', () => {
     expect(chars[2]).toMatch(/^…and \d+ more$/);
     // Without a text: the old order, and no details.
     expect(planCatalog(ws, { limit: 1 }).split('\n')[1]).not.toContain('(');
+    // Outdoor places the text is about, for a new interior's door outside; none when it mentions none.
+    const outside = planCatalog(ws, { text: 'A hunter builds a cabin in the valley.' }).split('\n\n').find((x) => x.startsWith('Outdoor places'));
+    expect(outside?.split('\n').slice(1)).toEqual(expect.arrayContaining(['DemoValley1_0']));
+    expect(catalog).not.toContain('Outdoor places');
+    // Shorter secondary lists for a free AI; characters keep the main limit.
+    const brief = planCatalog(ws, { limit: 50, short: 1 }).split('\n\n');
+    expect(brief.find((x) => x.startsWith('Factions'))!.split('\n')).toEqual(['Factions:', expect.any(String), expect.stringMatching(/^…and \d+ more$/)]);
+    expect(brief[0]!.split('\n').length).toBeGreaterThan(3);
   });
 
   it('gives a free AI a worked example to copy and a checklist; Claude does without', async () => {

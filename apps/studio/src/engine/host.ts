@@ -124,7 +124,7 @@ import {
 } from '@tes5/workspace';
 import { aiTools } from './aitools';
 import { offerTools } from './aitools-topics';
-import { questProblems, type QuestToolContext } from './aitools-quest';
+import { catalogLimits, questProblems, type QuestToolContext } from './aitools-quest';
 import type { CleanOptions } from '@tes5/cleaner';
 
 export interface SessionInfo {
@@ -1234,7 +1234,7 @@ export class EngineHost {
   /** Claude plans a quest from a design document or a conversation. */
   async planQuest(source: string, mode: PlannerMode, ai: AiProvider | string) {
     const a = await this.resolveAi(ai);
-    const plan = await new QuestPlanner({ ai: a }).plan(source, mode, planCatalog(this.requireWs(), { text: source, limit: catalogLimit(a) }));
+    const plan = await new QuestPlanner({ ai: a }).plan(source, mode, planCatalog(this.requireWs(), { text: source, ...catalogLimits(a) }));
     return { plan, ...this.reviewQuestPlan(plan) };
   }
 
@@ -1242,7 +1242,7 @@ export class EngineHost {
   async reviseQuestPlan(plan: QuestPlan, feedback: string, ai: AiProvider | string, source?: string) {
     const a = await this.resolveAi(ai);
     const text = `${source ?? ''}\n${feedback}\n${plan.characters.map((c) => `${c.name} ${c.existing ?? ''}`).join('\n')}\n${plan.locations.map((l) => `${l.name} ${l.existing ?? ''}`).join('\n')}`;
-    const next = await new QuestPlanner({ ai: a }).revise(plan, feedback, planCatalog(this.requireWs(), { text, limit: catalogLimit(a) }), source);
+    const next = await new QuestPlanner({ ai: a }).revise(plan, feedback, planCatalog(this.requireWs(), { text, ...catalogLimits(a) }), source);
     return { plan: next, ...this.reviewQuestPlan(next) };
   }
 
@@ -1830,10 +1830,6 @@ export type EngineMethod = {
 
 /** An AI choice, or (as before) just a Claude API key. */
 /** Free AIs have less room to read: a shorter load-order list (the entries your text mentions still come first). */
-function catalogLimit(ai: AiProvider): number {
-  return ai.kind === 'claude' ? 300 : 120;
-}
-
 function asAi(ai: AiProvider | string): AiProvider {
   return typeof ai === 'string' ? { kind: 'claude', apiKey: ai } : ai;
 }

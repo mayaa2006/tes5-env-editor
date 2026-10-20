@@ -136,6 +136,13 @@ export class ScriptService {
       const text = await this.read(n);
       const s = parse(text).script;
       if (s.extends) queue.push(s.extends);
+      // Types its functions and properties give back or take (GetActorReference() is an Actor): calls on them
+      // are checked against their members, which are only known once they're loaded.
+      for (const f of [...s.functions, ...s.states.flatMap((st) => st.functions)]) {
+        if (f.returnType) queue.push(f.returnType.lower);
+        for (const p of f.params) queue.push(p.type.lower);
+      }
+      for (const p of s.properties) queue.push(p.type.lower);
     }
   }
 

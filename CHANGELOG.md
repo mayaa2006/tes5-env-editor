@@ -2,6 +2,21 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.36.0
+
+- **Free AIs now make whole quests in the AI tab.** Asked to make a quest, a free AI (the built-in one, Ollama or a free online service) was shown the tools for editing a quest a piece at a time but not the quest planner. So it made the quest a stage and a line at a time, ran out of steps, and left a quest that nothing moved on. Now, when you ask for a new quest, it gets the planner. The planner makes the whole quest (characters, places, items, stages, journal, objectives, what moves it on, dialogue), tells you what it will build, and builds it when you say so. The first message the AI reads is a quarter of the size it was, so a PC without a strong graphics card answers about four times sooner. A model you've already downloaded is used without pressing **Use** first.
+- **Quests can use items a character carries.** Examples: "kill the bandit leader and take the amulet from his body", or "she hands you the sword to take to her father". When the quest starts, the item is made in that character's inventory. Taking it, looting it, reading it or dropping it moves the quest on, and its quest marker points at it. `[gives …]` and `[takes …]` in dialogue hand over that same item, not a new copy. Before, the quest couldn't tell any of this happened, so the rest of the quest could never be reached. The character's own record is also no longer changed to carry it.
+- **Rewards can be training in a skill**, as in "Faendal teaches you archery": the player goes up one or more levels in the skill at a stage.
+- **Doors outdoors for new interiors.** The planner now sees the outdoor places your text mentions (in Skyrim, outdoor cells have Editor IDs such as PelagiaFarmExterior or RiverwoodEdge01). So a new farmhouse "outside Whiterun" gets a linked door out there, with a note to move it into place.
+- **Plans that would leave the quest stuck go back to the AI.** Two new checks: a step that happens "in a conversation" with no line of dialogue that sets its stage, and an item the player must hand over (or have) but never gets. The planner sends both back to the AI to fix before you see the plan, and the plan review shows them too. Both were in a quest Qwen3.5 4B planned on Skyrim's data.
+- **Building a revised plan updates the quest instead of making a second one.** After building, the AI sometimes revised the plan and built it again, which left two copies of the quest in your plugin. Now a plan remembers the quest it made, and building it (or a revision of it) again only applies the differences.
+- **A shorter load-order list for free AIs.** It now leads with what's useful (the ten playable races, everyday voices and classes, the factions and outfits your text is about) instead of giants, atronachs and creature voices in alphabetical order. That cuts about a fifth of what a free AI reads before planning, and characters still get the full list.
+- **The release check says when a quest needs a character who isn't placed anywhere in the world.** That alias can't be filled, so the quest wouldn't start.
+- **Fixed:** a quest plan whose dialogue used `[if has ring]` (the planner is told to use it) failed to build with "no item called ring".
+- **Fixed:** the Papyrus checker reported "PlayIdle is not a function on Actor" in quest scripts that act on a character alias. It hadn't loaded the types that functions return.
+- New characters described as bald get no hair when their race has no bald hair style, and the note "they stand where they're placed until you give them AI packages" is no longer shown for characters given a routine.
+- **Tried on Skyrim's own data:** RESULTS
+
 ## 0.35.1
 
 - **Fixed: the screen could go black when the built-in AI made a quest.** Asking for a quest gives the AI its biggest job, and on some PCs the graphics card is kept busy so long that Windows resets it, which leaves the editor's window black. The built-in AI now works the graphics card in smaller pieces and leaves 1.5 GB of its memory free for the window. If the card still fails, the AI moves to the processor and says so, and the window is drawn again with your work still open.

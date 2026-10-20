@@ -9,6 +9,7 @@
  * field is required (null when it doesn't apply) and nothing is recursive.
  */
 import { z } from 'zod';
+import { skillIndex } from './characteredit';
 import { lintScreenplay } from './dialoguelint';
 import { journalContextFromPlan, lintJournal } from './journal';
 
@@ -193,6 +194,10 @@ export const PlanRewardSchema = z.object({
   atStage: z.number().int().describe('Stage number at which the player gets it (usually the final one)'),
   gold: z.number().int().nullable().describe('Gold to give; null for none'),
   itemKey: z.string().nullable().describe('Item key from this plan to give; null for none'),
+  skill: z
+    .object({ skill: z.string().describe('The skill, e.g. "Archery", "One-handed", "Speech"'), levels: z.number().int().describe('How many levels it goes up: usually 1, at most 10') })
+    .nullable()
+    .describe('Training in a skill (someone teaches the player as a reward); null for none'),
 });
 
 export const QuestPlanSchema = z.object({
@@ -245,6 +250,7 @@ export function normalizePlan(plan: QuestPlan): QuestPlan {
   if (plan.startsWhen === undefined) plan.startsWhen = null;
   plan.animations ??= [];
   plan.rewards ??= [];
+  for (const r of plan.rewards) if (r.skill === undefined) r.skill = null;
   return plan;
 }
 
@@ -433,12 +439,40 @@ export function validatePlan(input: QuestPlan): PlanIssue[] {
   for (const r of plan.rewards ?? []) {
     if (!stages.has(r.atStage)) err(`A reward is given at stage ${r.atStage}, which doesn't exist`);
     if (r.itemKey && !isKind(r.itemKey, 'item')) err(`A reward gives "${r.itemKey}", which isn't an item in the plan`);
+    if (r.skill && skillIndex(r.skill.skill) < 0) err(`A reward trains “${r.skill.skill}”, which isn't a skill (try Archery, One-handed, Speech, Destruction…)`);
+    if (r.skill && !(r.skill.levels >= 1 && r.skill.levels <= 10)) err(`A reward trains ${r.skill.skill} by ${r.skill.levels} levels; use 1 to 10`);
   }
-  // Every stage after the first must be reachable: a step, a line of dialogue or a failure sets it.
-  const reached = new Set<number>([...(plan.steps ?? []).map((st) => st.to), ...(plan.failures ?? []).map((f) => f.failStage)]);
-  for (const c of plan.conversations ?? []) for (const m of c.screenplay.matchAll(/\[stage\s+(-?\d+)\]/gi)) reached.add(Number(m[1]));
+  // Every stage after the first must be reachable: a step, a line of dialogue or a failure sets it. A talk step
+  // only says a line does it; without that line's [stage N] nothing does.
+  const said = new Set<number>();
+  for (const c of plan.conversations ?? []) for (const m of c.screenplay.matchAll(/\[stage\s+(-?\d+)\]/gi)) said.add(Number(m[1]));
+  const reached = new Set<number>([...said, ...(plan.steps ?? []).filter((st) => st.kind !== 'talk').map((st) => st.to), ...(plan.failures ?? []).map((f) => f.failStage)]);
   const ordered = [...(plan.stages ?? [])].sort((a, b) => a.index - b.index);
-  for (const st of ordered.slice(1)) if (!st.startsQuest && !reached.has(st.index)) warn(`Nothing moves the quest to stage ${st.index}: add a step, or a [stage ${st.index}] tag on a line of dialogue`);
+  for (const st of ordered.slice(1)) {
+    if (st.startsQuest || reached.has(st.index)) continue;
+    const talk = (plan.steps ?? []).find((x) => x.kind === 'talk' && x.to === st.index);
+    warn(
+      talk
+        ? `Nothing moves the quest to stage ${st.index}: “${talk.note || 'talk'}” happens in a conversation, but no line has [stage ${st.index}]. Add [stage ${st.index}] to the line that does it`
+        : `Nothing moves the quest to stage ${st.index}: add a step, or a [stage ${st.index}] tag on a line of dialogue`,
+    );
+  }
+  // Items the player has to have ([takes …], [if has …]) must reach them somehow.
+  const lines = (plan.conversations ?? []).map((c) => c.screenplay).join('\n');
+  const tagged = (verbs: string, i: PlanItem) => [i.key, i.name].some((n) => n && new RegExp(`\\[(?:${verbs})\\s+${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s*[x×]\\s*\\d+)?\\]`, 'i').test(lines));
+  for (const i of plan.items ?? []) {
+    if (i.kind === 'gold' || !tagged('takes|if\\s+has', i)) continue;
+    const gets =
+      i.startsWith === 'player' ||
+      i.startsWith === 'location' ||
+      tagged('gives', i) ||
+      (plan.rewards ?? []).some((r) => r.itemKey === i.key) ||
+      (plan.steps ?? []).some((st) => st.kind === 'pickup' && st.targetKey === i.key);
+    if (!gets)
+      warn(
+        `The player needs ${i.name} ([takes ${i.key}] or [if has ${i.key}]) but never gets it: put it somewhere to pick up (startsWith "location" and a pickup step), have its owner hand it over with [gives ${i.key} x1], or give it as a reward`,
+      );
+  }
   // The conversations, as they'll be imported.
   const speakers = (plan.characters ?? []).flatMap((c) => [c.key, c.name, ...(c.existing ? [c.existing] : [])]);
   for (const c of plan.conversations ?? [])
