@@ -213,6 +213,70 @@ describe('plans that would play wrong', () => {
     expect(validatePlan(plan).some((i) => i.message.includes('stage 200'))).toBe(false);
   });
 
+  it('mends what a free AI wrote for a written quest: copies as separate items, the start as a step, a doubled spawn and reward', () => {
+    // As Qwen3.5 4B planned "Lines on a Map": three page items in the mine, picked up 20 → 30, 30 → 30, 30 → 30; the
+    // notice that starts the quest read again as its first step; bandits spawned where an encounter waits; gold paid
+    // by a reward and by the line that ends the quest.
+    const plan = exampleQuestPlan();
+    plan.locations.push({ key: 'mine', name: 'Embershard Mine', existing: 'EmbershardMine01', description: 'A bandit mine', layoutLike: null, doorFrom: null });
+    plan.items = [
+      { key: 'notice', name: 'Wanted Notice', kind: 'book', existing: null, basedOn: null, value: null, startsWith: 'location', startsAtKey: 'tavern', spot: 'on the board', copies: null, text: 'Cartographer wanted.', lockedWith: null },
+      ...['by the forge', 'in a chest', 'on a table near the back'].map((spot, n) => ({ key: `mapPage${n + 1}`, name: 'Torn Map Page', kind: 'misc' as const, existing: null, basedOn: null, value: null, startsWith: 'location' as const, startsAtKey: 'mine', spot, copies: null, text: null, lockedWith: null })),
+    ];
+    plan.encounters = [{ key: 'bandits', what: 'LvlBanditMelee', count: 3, locationKey: 'mine', spot: null }];
+    plan.startsWithGame = false;
+    plan.startsWhen = { kind: 'read', targetKey: 'notice', quest: null, stage: null };
+    plan.objectives = [
+      { index: 10, text: 'Find the map pages', shownAtStage: 10, completedAtStage: 20, targetKey: 'mapPage1' },
+      { index: 11, text: 'Find the map pages', shownAtStage: 10, completedAtStage: 20, targetKey: 'mapPage2' },
+      { index: 20, text: 'Return to Brynja', shownAtStage: 20, completedAtStage: 100, targetKey: 'brynja' },
+    ];
+    plan.steps = [
+      { from: 0, to: 10, kind: 'read', targetKey: 'notice', count: null, hours: null, note: 'The player reads the notice' },
+      { from: 10, to: 20, kind: 'pickup', targetKey: 'mapPage1', count: null, hours: null, note: 'First page' },
+      { from: 20, to: 20, kind: 'pickup', targetKey: 'mapPage2', count: null, hours: null, note: 'Second page' },
+      { from: 20, to: 20, kind: 'pickup', targetKey: 'mapPage3', count: null, hours: null, note: 'Third page' },
+      { from: 20, to: 100, kind: 'talk', targetKey: null, count: null, hours: null, note: 'The player returns' },
+    ];
+    plan.events = [{ atStage: 10, kind: 'spawn', targetKey: null, toKey: null, what: 'LvlBanditAmbushMeleeNordM', count: 3, note: 'Bandits appear in Embershard Mine' }];
+    plan.rewards = [{ atStage: 100, gold: 100, itemKey: null, skill: null }];
+    plan.conversations[0]!.screenplay = plan.conversations[0]!.screenplay.replace('[takes ring x1] ', '');
+    const changes = repairPlan(plan);
+    expect(changes).toEqual(
+      expect.arrayContaining([
+        '3 items called “Torn Map Page” in one place are now one item with 3 copies, found by one step that counts them',
+        'the step “The player reads the notice” is what starts the quest, so the quest goes straight on from stage 0 to 10',
+        "left out the spawn “Bandits appear in Embershard Mine”: the plan's encounter already has them waiting",
+        'the reward of 100 gold at stage 100 is left out: the line that reaches that stage already pays it',
+      ]),
+    );
+    expect(plan.items.map((i) => i.key)).toEqual(['notice', 'mapPage1']);
+    expect(plan.items[1]).toMatchObject({ copies: 3, spot: 'by the forge; in a chest; on a table near the back' });
+    expect(plan.steps.map((s) => `${s.from}→${s.to} ${s.kind} ${s.targetKey ?? ''} ${s.count ?? ''}`.trim())).toEqual(['0→10 script', '10→20 pickup mapPage1 3', '20→100 talk']);
+    expect(plan.objectives.map((o) => o.targetKey)).toEqual(['mapPage1', 'brynja']);
+    expect(plan.events).toEqual([]);
+    expect(plan.rewards).toEqual([]);
+    expect(validatePlan(plan).filter((i) => i.severity === 'error')).toEqual([]);
+  });
+
+  it('leaves alone items of one name in different places, an ambush away from the encounter, and gold no line pays', () => {
+    const plan = exampleQuestPlan();
+    plan.items.push({ ...plan.items[0]!, key: 'ring2', startsAtKey: 'cellar' });
+    plan.locations.push({ key: 'cellar', name: 'Cellar', existing: null, description: 'Under the tavern', layoutLike: 'DemoTavern', doorFrom: 'tavern' });
+    plan.encounters = [
+      { key: 'rats', what: 'skeever', count: 2, locationKey: 'cellar', spot: null },
+      { key: 'thugs', what: 'bandit', count: 2, locationKey: 'cellar', spot: null },
+    ];
+    // Bandits wait in the cellar; these come for the player wherever they are.
+    plan.events = [{ atStage: 20, kind: 'spawn', targetKey: null, toKey: null, what: 'LvlBanditMelee', count: 2, note: 'Thieves come for the ring on the road' }];
+    plan.rewards = [{ atStage: 20, gold: 25, itemKey: null, skill: null }];
+    const changes = repairPlan(plan);
+    expect(changes.filter((c) => /copies|spawn|reward/.test(c))).toEqual([]);
+    expect(plan.items).toHaveLength(2);
+    expect(plan.events).toHaveLength(1);
+    expect(plan.rewards).toHaveLength(1);
+  });
+
   it('mends a key used twice in an AI plan: an item listed as a character too', () => {
     const plan = exampleQuestPlan();
     plan.characters.push({ ...plan.characters[1]!, key: 'ring', name: "Brynja's Ring", existing: 'Gold Ring', routine: [], outfit: null });

@@ -72,7 +72,18 @@ export function splitQuestline(text: string): Questline | null {
 
 /** One quest of a questline as the planner reads it: what they all share, then this quest. */
 export function questlineSource(line: Questline, i: number): string {
-  return `${line.shared}\n\n## ${line.parts[i]!.title}\n\n${line.parts[i]!.text}`.trim();
+  const part = line.parts[i]!;
+  // The cast as this quest needs it: someone the quest never names is only mentioned, so the AI doesn't plan them.
+  const named = (name: string) => [name, name.split(/\s+/)[0]!].some((n) => n.length > 2 && new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(part.text));
+  const absent: string[] = [];
+  const rows = line.shared.split(/\r?\n/).flatMap((row) => {
+    const who = /^\s*[-*+]\s+\*\*([^*:]+?)\*\*/.exec(row)?.[1]?.trim();
+    if (!who || named(who)) return [row];
+    absent.push(who);
+    return absent.length === 1 ? ['\u0000'] : [];
+  });
+  const shared = rows.join('\n').replace('\u0000', `- Also in the questline, not in this quest: ${absent.join(', ')}.`);
+  return `${shared}\n\n## ${part.title}\n\n${part.text}`.trim();
 }
 
 /** Choices a plan's dialogue remembers ([remember NAME]). */

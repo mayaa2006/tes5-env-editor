@@ -542,12 +542,118 @@ export function repairPlan(plan: QuestPlan): string[] {
     p.steps = kept;
     changes.push(`left out ${steps.length - kept.length} step(s) that would fail the quest right away (its failures already do that)`);
   }
+  // The same thing in one place written as separate items ("Torn Map Page" three times in the mine): one item with
+  // copies, one spot each, and their pickup steps one step that counts them.
+  {
+    const groups = new Map<string, Obj[]>();
+    for (const i of list(p.items)) {
+      if (typeof i.name !== 'string' || !i.name.trim() || i.startsWith !== 'location' || typeof i.startsAtKey !== 'string' || i.existing || i.lockedWith) continue;
+      const k = `${i.name.trim().toLowerCase()}\u0000${i.startsAtKey}\u0000${String(i.kind)}`;
+      groups.set(k, [...(groups.get(k) ?? []), i]);
+    }
+    for (const same of groups.values()) {
+      if (same.length < 2) continue;
+      const [first, ...rest] = same as [Obj, ...Obj[]];
+      const restKeys = new Set(rest.map((x) => x.key as string));
+      const all = new Set([first.key as string, ...restKeys]);
+      const total = same.reduce((n, x) => n + (typeof x.copies === 'number' && x.copies > 1 ? x.copies : 1), 0);
+      const spots = same.flatMap((x) => (typeof x.spot === 'string' && x.spot.trim() ? x.spot.split(';').map((s) => s.trim()).filter(Boolean) : []));
+      first.copies = total;
+      first.spot = spots.length ? spots.join('; ') : null;
+      p.items = list(p.items).filter((x) => !restKeys.has(x.key as string));
+      // Everything that pointed at a copy points at the one item.
+      const point = (o: Obj, field: string) => {
+        if (typeof o[field] === 'string' && restKeys.has(o[field] as string)) o[field] = first.key;
+      };
+      for (const o of list(p.objectives)) point(o, 'targetKey');
+      for (const s of list(p.steps)) point(s, 'targetKey');
+      for (const e of list(p.events)) point(e, 'targetKey');
+      for (const r of list(p.rewards)) point(r, 'itemKey');
+      if (p.startsWhen && typeof p.startsWhen === 'object') point(p.startsWhen as Obj, 'targetKey');
+      const objectives = list(p.objectives);
+      const seenObjective = new Set<string>();
+      p.objectives = objectives.filter((o) => {
+        if (o.targetKey !== first.key) return true;
+        const k = `${String(o.shownAtStage)}:${String(o.completedAtStage)}`;
+        return seenObjective.has(k) ? false : (seenObjective.add(k), true);
+      });
+      // Picking up each copy in turn (20 → 30, 30 → 30, 30 → 30) is one step: all of them, from the first one's stage.
+      const pickups = list(p.steps).filter((s) => s.kind === 'pickup' && all.has(s.targetKey as string));
+      if (pickups.length > 1) {
+        const from = pickups.map((s) => s.from).find((f) => typeof f === 'number') ?? null;
+        const to = Math.max(...pickups.map((s) => (typeof s.to === 'number' ? s.to : -Infinity)));
+        const keep = pickups.find((s) => s.to === to && s.from !== s.to) ?? pickups[0]!;
+        Object.assign(keep, { from, to, count: total });
+        p.steps = list(p.steps).filter((s) => !pickups.includes(s) || s === keep);
+      } else if (pickups.length === 1) pickups[0]!.count = Math.max(total, typeof pickups[0]!.count === 'number' ? pickups[0]!.count : 0);
+      changes.push(`${rest.length + 1} items called “${first.name as string}” in one place are now one item with ${total} copies${pickups.length ? ', found by one step that counts them' : ''}`);
+    }
+  }
+  // A step that sets the stage it starts from does nothing.
+  if (Array.isArray(p.steps)) {
+    const steps = list(p.steps);
+    const kept = steps.filter((s) => !(typeof s.from === 'number' && s.from === s.to));
+    if (kept.length < steps.length) {
+      p.steps = kept;
+      changes.push(`left out ${steps.length - kept.length} step(s) that would set the stage they start from`);
+    }
+  }
+  // The thing that starts the quest written again as its first step ("reads the notice", 0 → 10): the quest starts on
+  // that very read, so the step goes straight on.
+  const start = p.startsWhen as Obj | null | undefined;
+  if (start && typeof start.kind === 'string' && typeof start.targetKey === 'string' && ['arrive', 'read', 'pickup', 'activate'].includes(start.kind)) {
+    const indexes = list(p.stages).filter((s) => typeof s.index === 'number');
+    const firstIndex = indexes.find((s) => s.startsQuest === true)?.index ?? (indexes.length ? Math.min(...indexes.map((s) => s.index as number)) : undefined);
+    for (const s of list(p.steps)) {
+      if (s.from !== firstIndex || s.targetKey !== start.targetKey || !(s.kind === start.kind || (start.kind === 'read' && s.kind === 'pickup') || (start.kind === 'pickup' && s.kind === 'read'))) continue;
+      changes.push(`the step “${(s.note as string) || (s.kind as string)}” is what starts the quest, so the quest goes straight on from stage ${String(s.from)} to ${String(s.to)}`);
+      Object.assign(s, { kind: 'script', targetKey: null, count: null });
+    }
+  }
+  // Enemies spawned in the place where the plan already has them waiting (an encounter of the same kind there): the
+  // encounter is what the player meets, and a spawn would put a second group next to the player. An ambush somewhere
+  // else (on the road) is kept.
+  if (Array.isArray(p.events) && list(p.encounters).length) {
+    const word = (v: string) => (v.match(/bandit|draugr|wolf|wolves|skeever|spider|bear|troll|falmer|forsworn|vampire|necromancer|skeleton|mage|warlock|dwarven|centurion|sphere|spriggan|hagraven|giant|mammoth|sabre|horker|mudcrab|chaurus|thalmor|imperial|stormcloak|dragon/i)?.[0] ?? v).toLowerCase().replace(/^wolves$/, 'wolf');
+    const placeNames = (key: unknown) => {
+      const l = list(p.locations).find((x) => x.key === key);
+      return [key, l?.name, l?.existing].filter((n): n is string => typeof n === 'string' && n.length > 2).map((n) => n.toLowerCase());
+    };
+    const doubles = (e: Obj) =>
+      e.kind === 'spawn' &&
+      typeof e.what === 'string' &&
+      list(p.encounters).some((x) => word(String(x.what ?? '')) === word(e.what as string) && (e.targetKey === x.locationKey || placeNames(x.locationKey).some((n) => String(e.note ?? '').toLowerCase().includes(n))));
+    const events = list(p.events);
+    const kept = events.filter((e) => !doubles(e));
+    for (const e of events.filter((x) => !kept.includes(x))) changes.push(`left out the spawn “${(e.note as string) || (e.what as string)}”: the plan's encounter already has them waiting`);
+    if (kept.length < events.length) p.events = kept;
+  }
+  changes.push(...doubledRewards(plan));
   const stages = list(p.stages).filter((s) => typeof s.index === 'number');
   if (stages.length && !stages.some((s) => s.startsQuest === true)) {
     const first = stages.reduce((a, b) => ((b.index as number) < (a.index as number) ? b : a));
     first.startsQuest = true;
     changes.push(`stage ${first.index} starts the quest`);
   }
+  return changes;
+}
+
+/**
+ * Gold paid twice: a reward at a stage where the line that sets that stage already hands the gold over ([gives gold
+ * x150] [stage 40]). The line is what the author wrote, so the reward's gold is taken off. Returns what was changed.
+ */
+export function doubledRewards(plan: QuestPlan): string[] {
+  const rows = (Array.isArray(plan.conversations) ? plan.conversations : []).flatMap((c) => (typeof c?.screenplay === 'string' ? c.screenplay.split(/\r?\n/) : []));
+  const changes: string[] = [];
+  if (!Array.isArray(plan.rewards)) return changes;
+  for (const r of plan.rewards) {
+    if (!r || typeof r.gold !== 'number' || r.gold <= 0) continue;
+    const pays = rows.some((row) => /\[gives\s+gold\b/i.test(row) && new RegExp(`\\[stage\\s+${r.atStage}\\]`, 'i').test(row));
+    if (!pays) continue;
+    changes.push(`the reward of ${r.gold} gold at stage ${r.atStage} is left out: the line that reaches that stage already pays it`);
+    r.gold = null;
+  }
+  plan.rewards = plan.rewards.filter((r) => !r || r.gold !== null || r.itemKey || r.skill);
   return changes;
 }
 

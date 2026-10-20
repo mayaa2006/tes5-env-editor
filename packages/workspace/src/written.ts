@@ -146,10 +146,22 @@ export function findDialogue(text: string): { blocks: WrittenBlock[]; prose: str
       tags: [],
     }));
     blocks.push({ id: blocks.length + 1, header: sceneHead ? [lastProse, sceneHead[1]].filter(Boolean).join(' ') : lastProse, scene: !!sceneHead, speaker: run.find((r) => r.line.speaker.toLowerCase() === main)?.line.speaker ?? main, lines, tags: [] });
-    prose.push(`(The conversation${blocks.length > 1 ? ` ${blocks.length}` : ''} written out here is kept word for word.)`);
+    prose.push(outline(blocks[blocks.length - 1]!));
     i = j;
   }
   return { blocks, prose: prose.join('\n') };
+}
+
+/**
+ * What stands in for a written conversation when the AI plans the quest around it: who it's with, how long it is, the
+ * player's choices and every line with a direction (shortened), so the stages and talk steps can be planned without
+ * the AI copying the words out.
+ */
+function outline(b: WrittenBlock): string {
+  const short = (t: string) => (t.length > 70 ? `${t.slice(0, 67).trimEnd()}…` : t);
+  const rows = b.lines.filter((l) => l.player || l.notes.length).map((l) => `  ${'  '.repeat(l.level)}${l.player ? 'PLAYER' : l.speaker.toUpperCase()}: "${short(l.text)}"${l.notes.length ? ` (${l.notes.join('; ')})` : ''}`);
+  const who = b.scene ? `a scene with ${[...new Set(b.lines.map((l) => l.speaker))].join(', ')}` : `with ${b.speaker}`;
+  return [`(Conversation ${b.id}, ${who}: ${b.lines.length} lines written out by the author, added to the plan word for word afterwards. The player's choices and the lines with directions:`, ...rows, ')'].join('\n');
 }
 
 /**

@@ -20,7 +20,7 @@ import type { FormKey } from '@tes5/esp';
 import { GESTURES } from './gestures';
 import { z } from 'zod';
 import type { JournalContext, JournalDraft } from './journal';
-import { PLAN_EVENT_KINDS, QuestPlanSchema, keepAskedChanges, normalizePlan, repairPlan, stagesSaid, validatePlan, type PlanIssue, type QuestPlan } from './questplan';
+import { PLAN_EVENT_KINDS, QuestPlanSchema, doubledRewards, keepAskedChanges, normalizePlan, repairPlan, stagesSaid, validatePlan, type PlanIssue, type QuestPlan } from './questplan';
 import { lintScreenplay } from './dialoguelint';
 import { aiName, chatSend, type AiProvider } from './aiproviders';
 import { WorldService } from './world';
@@ -371,7 +371,8 @@ export class QuestPlanner {
    * quest stuck gets one more round, and (free AIs) missing exchanges and journal entries are written.
    */
   private async planWritten(source: string, catalog: string, blocks: WrittenBlock[], context: string): Promise<QuestPlan> {
-    const params = this.request([{ role: 'user', content: `${MODES.document}${context ? `\n\n${context}` : ''}\n\n<source>\n${source.trim()}\n</source>\n\n${WRITTEN_NOTE}${this.free ? `\n\n${WRITTEN_CHECKLIST}` : ''}` }], catalog, source);
+    // The conversations go in as an outline (choices and directions): the AI plans around them without copying them.
+    const params = this.request([{ role: 'user', content: `${MODES.document}${context ? `\n\n${context}` : ''}\n\n<source>\n${findDialogue(source).prose.trim()}\n</source>\n\n${WRITTEN_NOTE}${this.free ? `\n\n${WRITTEN_CHECKLIST}` : ''}` }], catalog, source);
     this.onStep?.('planning the stages, characters and places');
     let plan = normalizePlan(await this.run<QuestPlan>(params));
     addSpeakers(plan, blocks, catalog);
@@ -381,6 +382,8 @@ export class QuestPlanner {
     if (unsaid.length) await this.addWrittenDialogue(plan, blocks, context, unsaid);
     if (blockingIssues(validatePlan(plan)).length) this.onStep?.('fixing what would leave the quest stuck');
     plan = await this.fixLogic(params, plan, true);
+    const paid = doubledRewards(plan);
+    if (paid.length) plan.assumptions = [...(plan.assumptions ?? []), ...paid.map((x) => x[0]!.toUpperCase() + x.slice(1))];
     if (this.free) {
       this.onStep?.('filling gaps in the dialogue and journal');
       const brief = planBrief(plan, source);
@@ -705,7 +708,7 @@ const AnnotationSchema = z.object({
 });
 
 /** Told to the planner when the author's conversations are written out. */
-const WRITTEN_NOTE = `The conversations the author wrote out (lines like "NAME: words", with the player's choices under them) are added to the plan afterwards, word for word, with their tags. Don't copy them into "conversations": write there only lines the author describes without writing them out (a greeting described in a sentence, what someone says during the day), or leave it empty. Plan the stages and the talk steps for what those conversations do (taking the job, agreeing to go, each ending); a talk step's note says which line does it.`;
+const WRITTEN_NOTE = `The conversations the author wrote out are shown above only as outlines "(Conversation N, with …)": they are added to the plan afterwards, word for word, with their tags. Don't write them into "conversations": write there only lines the author describes without writing them out (a greeting described in a sentence, what someone says during the day), or leave it empty. Plan the stages and the talk steps for what those conversations do (taking the job, agreeing to go, each ending); a talk step's note says which line does it.`;
 
 /** How the AI turns an author's directions into tags. */
 const ANNOTATE_RULES = `You add tags to dialogue a Skyrim quest's author has already written, so the quest works. The words stay exactly as they are: you only say which tags go on which numbered lines. Answer in the JSON format given.
