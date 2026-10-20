@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { ChatAgentModel, ClaudeAgentModel, claudeMessages, newAgentSession, runAgentTurn, sessionTitle, textCalls, type AgentEvent, type AgentModel, type AgentReply, type AgentTool } from '../src';
+import { ChatAgentModel, ClaudeAgentModel, claudeMessages, newAgentSession, runAgentTurn, sessionTitle, textCalls, type AgentEvent, type AgentMessage, type AgentModel, type AgentReply, type AgentTool } from '../src';
 
 /** A model that answers from a script, recording what it was sent. */
 function scripted(replies: AgentReply[], free = false): AgentModel & { seen: { messages: unknown[] }[] } {
@@ -104,6 +104,19 @@ describe('the AI workspace loop', () => {
     // "broken" was never offered, but a model that knows its name can still use it.
     expect((s.messages[4] as any).results.map((x: any) => x.status)).toEqual(['done', 'error']);
     expect(r.changes).toEqual(['Change to x']);
+  });
+
+  it('makes the first step for the model when the offer says so (a free AI asked for a quest gets it planned)', async () => {
+    log.length = 0;
+    const seen: AgentMessage[][] = [];
+    const model: AgentModel = { name: 'Small', free: true, provider: 'test', reply: async (req) => (seen.push(structuredClone(req.messages)), { text: 'Here is the plan.', calls: [], stop: 'end' }) };
+    const s = newAgentSession();
+    const r = await runAgentTurn(model, s, { text: 'Make a quest' }, tools, { offer: { tools: [tools[0]!], topics: {}, first: { name: 'look', input: { what: 'Make a quest' } } } });
+    expect(log).toEqual(['look Make a quest undefined']);
+    // The model is asked once, with the call and its result already there.
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.map((m) => m.role)).toEqual(['user', 'assistant', 'tool']);
+    expect(r.text).toBe('Here is the plan.');
   });
 
   it("doesn't make the same change twice in a turn", async () => {

@@ -126,6 +126,8 @@ describe('the built-in AI', () => {
     // A graphics card gets small pieces of work and keeps 1.5 GB free for the app's window.
     let api = await ai.ensure('tiny');
     expect(await argsOf(api)).toEqual(expect.arrayContaining(['-ub', '256', '--fit-target', '1536']));
+    // Memory for reusing past prompts is capped (8 GB by default).
+    expect(await argsOf(api)).toEqual(expect.arrayContaining(['--cache-ram', '512']));
     expect(await argsOf(api)).not.toContain('--device');
     expect(ai.status().prefer).toBe('auto');
 

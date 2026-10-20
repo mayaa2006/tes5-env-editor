@@ -62,8 +62,13 @@ export function questTools(host: EngineHost, ctx: QuestToolContext): AgentTool<a
     return key;
   };
   const planOf = (id: string) => {
-    const p = ctx.plans.get(id);
-    if (!p) throw new WorkspaceError(`There's no plan "${id}" in this conversation. Make one with plan_quest or quest_as_plan.`);
+    // By id, or by the plan's title or Editor ID (the latest one): small models pass what they've read.
+    const want = id.trim().toLowerCase();
+    const p = ctx.plans.get(id.trim()) ?? [...ctx.plans.values()].reverse().find((x) => x.plan.title.toLowerCase() === want || x.plan.editorId.toLowerCase() === want);
+    if (!p) {
+      const have = [...ctx.plans].map(([k, v]) => `${k} (“${v.plan.title}”)`).join(', ');
+      throw new WorkspaceError(`There's no plan "${id}" in this conversation. ${have ? `Plans here: ${have}.` : 'Make one with plan_quest or quest_as_plan.'}`);
+    }
     return p;
   };
   const keep = (plan: QuestPlan, extra: { source?: string; quest?: FormKey } = {}) => {
@@ -166,7 +171,8 @@ export function questTools(host: EngineHost, ctx: QuestToolContext): AgentTool<a
         if (r.quest) {
           ctx.touched.add(r.quest);
           // Revisions of this plan now update the quest it made.
-          ctx.plans.set(i.planId, { ...p, quest: r.quest });
+          const id = [...ctx.plans].find(([, v]) => v === p)?.[0] ?? i.planId;
+          ctx.plans.set(id, { ...p, quest: r.quest });
         }
         return {
           data: { quest: r.quest, editorId: r.editorId, created: r.created.map((c) => `${c.kind}: ${c.label}`), changed: r.changed.map((c) => `${c.label}: ${c.changes.join(', ')}`), dialogue: r.dialogue, problems: r.problems, notes: r.notes, warnings: r.warnings },

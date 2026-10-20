@@ -273,6 +273,11 @@ export interface AgentHooks {
 export interface ToolOffer {
   tools: AgentTool[];
   topics: Record<string, { about: string; tools: AgentTool[] }>;
+  /**
+   * The first step, made for the model before it's asked anything: a free AI asked for a new quest gets it planned
+   * (small models otherwise describe a plan in words and never call the planner), then goes on from the plan.
+   */
+  first?: { name: string; input: unknown };
 }
 
 /** The tool that adds a topic's tools to what the model sees, for the rest of the turn. */
@@ -342,6 +347,19 @@ export async function runAgentTurn(
   let text = '';
   const system = `${AGENT_RULES}`;
   try {
+    const first = hooks.offer?.first;
+    if (first && byName.has(first.name)) {
+      const call: AgentToolCall = { id: newCallId(), name: first.name, input: first.input };
+      session.messages.push({ role: 'assistant', text: '', calls: [call], provider: model.provider });
+      const r = await runTool(call, byName.get(call.name), model, hooks, resultMax, sid);
+      calls++;
+      results.push(r);
+      if (r.writes && r.status === 'done') changes.push(r.summary);
+      if (r.status === 'done') read.add(`${call.name} ${JSON.stringify(call.input ?? {}).toLowerCase()}`);
+      emit({ type: 'result', session: sid, result: r });
+      session.messages.push({ role: 'tool', results: [r] });
+      if (hooks.signal?.aborted) throw new AgentStopped();
+    }
     for (let round = 0; round < maxRounds; round++) {
       if (hooks.signal?.aborted) throw new AgentStopped();
       const reply = await model.reply({ system, messages: session.messages, tools: more ? [...offered, more] : tools, onText: (d) => emit({ type: 'text', session: sid, delta: d }), signal: hooks.signal });

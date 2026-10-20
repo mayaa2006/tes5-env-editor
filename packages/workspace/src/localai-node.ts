@@ -172,7 +172,9 @@ export class LocalAi {
     // On a graphics card: smaller pieces of work (Windows resets a card that's busy for over 2 s at a time, which blacks out
     // every window on it) and 1.5 GB left free for the app's own window. On the processor: no graphics card at all.
     const device = processor ? ['--device', 'none'] : ['-ub', '256', '--fit-target', '1536'];
-    const args = ['-m', this.modelPath(m), '--host', '127.0.0.1', '--port', String(port), '-c', String(m.context), '-np', '1', '--jinja', '--reasoning', 'off', '--no-webui', ...device];
+    // Past prompts kept in memory to reuse are capped at 512 MB (llama.cpp keeps up to 8 GB by default, which grew the
+    // runner to over 12 GB in a long session; the models offered can't reuse them anyway).
+    const args = ['-m', this.modelPath(m), '--host', '127.0.0.1', '--port', String(port), '-c', String(m.context), '-np', '1', '--jinja', '--reasoning', 'off', '--no-webui', '--cache-ram', '512', ...device];
     const child = spawn(exe, args, { cwd: dirname(exe), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     const log: string[] = [];
     const keep = (d: Buffer) => {

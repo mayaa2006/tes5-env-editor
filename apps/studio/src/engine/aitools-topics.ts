@@ -101,6 +101,7 @@ export function offerTools(all: AgentTool[], session: AgentSession, text: string
   if (!topics.size) topics.add('checks');
   const shown = new Set([...ALWAYS, ...extra, ...[...topics].flatMap((k) => TOOL_TOPICS[k]!.tools)]);
   return {
+    ...(asksForNewQuest(text) && byName.has('plan_quest') && !session.messages.some((m) => m.role === 'assistant' && m.calls.some((c) => c.name === 'plan_quest')) ? { first: { name: 'plan_quest', input: { text } } } : {}),
     tools: all.filter((t) => shown.has(t.name)),
     topics: Object.fromEntries(
       Object.entries(TOOL_TOPICS)

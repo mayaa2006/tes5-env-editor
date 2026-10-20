@@ -84,10 +84,13 @@ for (const size of [
     await page.getByTestId('ai-done').click();
     await page.getByRole('checkbox', { name: 'Ask before each change' }).uncheck();
 
-    // Asked for a quest, it's given the planner, not the tools for building one stage and line at a time.
+    // Asked for a quest, it's planned straight away (small models otherwise describe a plan in words), and the AI is
+    // given the planner's tools, not the ones for building a quest a stage and a line at a time.
     await page.getByTestId('ai-input').fill("Make a quest: Brynja at the tavern has lost her mother's ring. Eirik saw where it fell. The player brings it back and Brynja pays 100 gold.");
     await page.getByTestId('ai-send').click();
     await expect(page.getByTestId('ai-msg-assistant').last()).toContainText('Shall I build it?');
+    // The planner ran before the AI was first asked: its first request already has the plan in it.
+    expect(JSON.stringify(agent[0].messages)).toContain('plan_quest');
     const offered = (agent[0].tools as any[]).map((t) => t.function.name);
     expect(offered).toEqual(expect.arrayContaining(['plan_quest', 'revise_plan', 'build_plan', 'check_quest', 'more_tools']));
     expect(offered).not.toContain('create_quest');

@@ -52,10 +52,14 @@ describe('the tools a free AI is shown', () => {
       expect(names(o.tools), text).not.toContain('create_quest');
       expect(names(o.tools), text).not.toContain('add_dialogue');
       expect(Object.keys(o.topics)).toContain('quests');
+      // The first step plans it, from what the author wrote.
+      expect(o.first).toEqual({ name: 'plan_quest', input: { text } });
     }
     // Changes to a quest aren't new quests.
-    for (const text of ['Add a stage to the quest', 'Make a quest stage that gives 100 gold', 'Change the quest dialogue so Hulda is angrier'])
+    for (const text of ['Add a stage to the quest', 'Make a quest stage that gives 100 gold', 'Change the quest dialogue so Hulda is angrier']) {
       expect(names(offerTools(tools, session, text).tools), text).not.toContain('plan_quest');
+      expect(offerTools(tools, session, text).first).toBeUndefined();
+    }
     // Saying "build it" afterwards keeps the planner.
     session.messages.push({ role: 'user', text: 'Make a quest: a ring' }, { role: 'assistant', text: '', calls: [{ id: 'a', name: 'plan_quest', input: {} }] });
     expect(names(offerTools(tools, session, 'Looks good, go ahead').tools)).toContain('build_plan');
