@@ -6,15 +6,25 @@
  */
 import { z } from 'zod';
 import type { FormKey } from '@tes5/esp';
-import { QuestPlanSchema, QuestPlanner, WorkspaceError, lintScreenplay, planCatalog, validatePlan, type AgentTool, type AiProvider, type PlanIssue, type PlanResolution, type QuestPlan } from '@tes5/workspace';
+import { QuestPlanSchema, QuestPlanner, WorkspaceError, blockingIssues, lintScreenplay, normalizePlan, planCatalog, repairPlan, settleCharacters, validatePlan, type AgentTool, type AiProvider, type PlanIssue, type PlanResolution, type QuestPlan } from '@tes5/workspace';
 import type { EngineHost } from './host';
+
+/** How much of the load order the planner lists: everything for Claude, less for a free AI (it reads it slowly). */
+export function catalogLimits(ai: AiProvider): { limit: number; short: number } {
+  return ai.kind === 'claude' ? { limit: 300, short: 300 } : { limit: 120, short: 40 };
+}
 
 /** What the quest tools share within one conversation: the AI to plan with, plans made so far, quests touched. */
 export interface QuestToolContext {
   ai: AiProvider;
   plans: Map<string, { plan: QuestPlan; source?: string; quest?: FormKey }>;
   touched: Set<FormKey>;
+  /** Revisions asked for in this turn: small models can revise in circles, minutes at a time. */
+  revisions?: number;
 }
+
+/** Revisions of a plan allowed in one turn of the conversation. */
+const MAX_REVISIONS = 2;
 
 const Form = z.string().describe('Editor ID or FormKey of the quest');
 const Stage = z.number().int().min(0).max(65535);
@@ -33,7 +43,11 @@ function brief(id: string, plan: QuestPlan, issues: PlanIssue[], resolution: Pla
     whatMovesIt: plan.steps.map((s) => `${s.from ?? 'any time'} → ${s.to}: ${s.kind}${s.targetKey ? ` ${s.targetKey}` : ''} (${s.note})`),
     conversations: plan.conversations.map((c) => `${c.title}: ${c.screenplay.split('\n').length} lines`),
     events: plan.events.map((e) => `at ${e.atStage}: ${e.kind} ${e.targetKey ?? e.what ?? ''}`),
-    problems: issues.map((i) => `${i.severity}: ${i.message}`),
+    // What stops the build, what would leave the quest stuck, and the rest (for the author).
+    mustFix: issues.filter((i) => i.severity === 'error').map((i) => i.message),
+    shouldFix: blockingIssues(issues).filter((i) => i.severity !== 'error').map((i) => i.message),
+    advice: issues.filter((i) => i.severity !== 'error' && !blockingIssues([i]).length).map((i) => i.message),
+    readyToBuild: !issues.some((i) => i.severity === 'error'),
     questions: plan.questions,
   };
 }
@@ -53,8 +67,13 @@ export function questTools(host: EngineHost, ctx: QuestToolContext): AgentTool<a
     return key;
   };
   const planOf = (id: string) => {
-    const p = ctx.plans.get(id);
-    if (!p) throw new WorkspaceError(`There's no plan "${id}" in this conversation. Make one with plan_quest or quest_as_plan.`);
+    // By id, or by the plan's title or Editor ID (the latest one): small models pass what they've read.
+    const want = id.trim().toLowerCase();
+    const p = ctx.plans.get(id.trim()) ?? [...ctx.plans.values()].reverse().find((x) => x.plan.title.toLowerCase() === want || x.plan.editorId.toLowerCase() === want);
+    if (!p) {
+      const have = [...ctx.plans].map(([k, v]) => `${k} (“${v.plan.title}”)`).join(', ');
+      throw new WorkspaceError(`There's no plan "${id}" in this conversation. ${have ? `Plans here: ${have}.` : 'Make one with plan_quest or quest_as_plan.'}`);
+    }
     return p;
   };
   const keep = (plan: QuestPlan, extra: { source?: string; quest?: FormKey } = {}) => {
@@ -69,8 +88,8 @@ export function questTools(host: EngineHost, ctx: QuestToolContext): AgentTool<a
   };
   const label = (k: FormKey) => ws().summary(k)?.editorId ?? k;
   const link = (k: FormKey) => ({ tab: 'quest' as const, key: k, label: `${label(k)} in Quests` });
-  const planner = () => new QuestPlanner({ ai: ctx.ai });
-  const catalog = (text: string) => planCatalog(ws(), { text, limit: ctx.ai.kind === 'claude' ? 300 : 120 });
+  const planner = (signal?: AbortSignal) => new QuestPlanner({ ai: ctx.ai, signal });
+  const catalog = (text: string) => planCatalog(ws(), { text, ...catalogLimits(ctx.ai) });
   const stageOf = (q: FormKey, s: number) => host.quest(q).stages.find((x) => x.index === s);
 
   return [
@@ -82,8 +101,9 @@ export function questTools(host: EngineHost, ctx: QuestToolContext): AgentTool<a
         "Plan a whole new quest (characters, places, items, stages, journal, objectives, what moves it on, dialogue, events, rewards) from a description, the way Quests → From writing does. Nothing is built yet: you get a plan id and a summary with problems to check. Also plans creating or changing characters, places and items without a quest. Describe everything the author asked for in 'text', in your own words if they told you over several messages.",
       input: z.object({ text: z.string().describe('The quest as the author describes it: who, where, what the player does, how it ends'), mode: z.enum(['document', 'conversation']).nullable().optional().describe("'conversation' when the text is a conversation to build a quest around; otherwise 'document'") }),
       summary: () => 'Plan a quest',
-      run: async (i) => {
-        const plan = await planner().plan(i.text, i.mode ?? 'document', catalog(i.text));
+      run: async (i, c) => {
+        const plan = await planner(c?.signal).plan(i.text, i.mode ?? 'document', catalog(i.text));
+        settleCharacters(ws(), plan, i.text, ctx.ai.kind !== 'claude');
         const id = keep(plan, { source: i.text });
         return { data: review(id), note: `Planned “${plan.title}”` };
       },
@@ -95,11 +115,19 @@ export function questTools(host: EngineHost, ctx: QuestToolContext): AgentTool<a
       description: 'Change a plan as described in words ("make Eirik the thief", "add a reward of 200 gold"). Returns the new plan id and summary.',
       input: z.object({ planId: z.string(), change: z.string().describe('What to change, in words') }),
       summary: (i) => `Revise ${i.planId}`,
-      run: async (i) => {
+      run: async (i, c) => {
         const p = planOf(i.planId);
-        const next = await planner().revise(p.plan, i.change, catalog(`${p.source ?? ''}\n${i.change}`), p.source);
+        if ((ctx.revisions ?? 0) >= MAX_REVISIONS)
+          throw new WorkspaceError(`That's ${MAX_REVISIONS} revisions in this turn. Don't revise again now: build the latest plan with build_plan if nothing in mustFix is left, or tell the author what's still wrong and let them decide.`);
+        ctx.revisions = (ctx.revisions ?? 0) + 1;
+        const next = await planner(c?.signal).revise(p.plan, i.change, catalog(`${p.source ?? ''}\n${i.change}`), p.source);
+        settleCharacters(ws(), next, `${p.source ?? ''}\n${i.change}`, ctx.ai.kind !== 'claude');
         const id = keep(next, { source: p.source, quest: p.quest });
-        return { data: review(id) };
+        const was = blockingIssues(validatePlan(p.plan)).map((x) => x.message).sort().join('|');
+        const now = review(id);
+        const same = JSON.stringify(next) === JSON.stringify(p.plan) || (was && [...now.mustFix, ...now.shouldFix].sort().join('|') === was);
+        // A small model can revise in circles: say so, and what to do instead.
+        return { data: same ? { ...now, next: now.readyToBuild ? 'The revision fixed nothing: build it now and tell the author what is left.' : 'The revision fixed nothing: use edit_plan for the exact change (show_plan gives the plan), or tell the author what is wrong.' } : now };
       },
     },
     {
@@ -120,7 +148,10 @@ export function questTools(host: EngineHost, ctx: QuestToolContext): AgentTool<a
       summary: (i) => `Edit ${i.planId}`,
       run: (i) => {
         const p = planOf(i.planId);
-        const parsed = QuestPlanSchema.safeParse(i.plan);
+        // The slips a model makes writing out a whole plan (a list left out, [] for "none") are mended first.
+        const raw = normalizePlan(structuredClone(i.plan) as unknown as QuestPlan);
+        repairPlan(raw);
+        const parsed = QuestPlanSchema.safeParse(raw);
         if (!parsed.success) throw new WorkspaceError(`The plan doesn't match the format: ${parsed.error.issues.slice(0, 6).map((x) => `${x.path.join('.')}: ${x.message}`).join('; ')}`);
         const id = keep(parsed.data, { source: p.source, quest: p.quest });
         return { data: review(id) };
@@ -130,18 +161,29 @@ export function questTools(host: EngineHost, ctx: QuestToolContext): AgentTool<a
       name: 'build_plan',
       group: 'quest',
       writes: true,
-      description: 'Build a new quest (and its characters, places, items, dialogue…) from a plan, as one undo step. Check the plan has no errors first. For a plan made from an existing quest, use update_quest_from_plan instead.',
+      description:
+        'Build the quest (and its characters, places, items, dialogue…) from a plan, as one undo step. Check the plan has no errors first. A plan of a quest that already exists (built from an earlier version of the plan, or read with quest_as_plan) updates that quest instead of making a second one.',
       input: z.object({ planId: z.string() }),
       summary: (i) => `Build the quest from ${i.planId}`,
       run: async (i) => {
         const p = planOf(i.planId);
-        if (p.quest) throw new WorkspaceError(`${i.planId} is a plan of an existing quest: use update_quest_from_plan`);
         const errors = validatePlan(p.plan).filter((x) => x.severity === 'error');
         if (errors.length) throw new WorkspaceError(`Fix these first (revise_plan or edit_plan): ${errors.map((e) => e.message).join('; ')}`);
+        // Built already (this plan, or the one it revises): change that quest rather than add a copy of it.
+        if (p.quest && ws().exists(p.quest)) {
+          const u = await host.updateQuestFromPlan(p.quest, p.plan);
+          ctx.touched.add(p.quest);
+          return { data: { quest: p.quest, updatedExisting: true, updated: u.updated, created: u.created.map((c) => `${c.kind}: ${c.label}`), warnings: u.warnings, notes: u.notes }, link: link(p.quest), note: `Updated ${label(p.quest)}` };
+        }
         const r = await host.buildQuestPlan(p.plan);
-        if (r.quest) ctx.touched.add(r.quest);
+        if (r.quest) {
+          ctx.touched.add(r.quest);
+          // Revisions of this plan now update the quest it made.
+          const id = [...ctx.plans].find(([, v]) => v === p)?.[0] ?? i.planId;
+          ctx.plans.set(id, { ...p, quest: r.quest });
+        }
         return {
-          data: { quest: r.quest, editorId: r.editorId, created: r.created.map((c) => `${c.kind}: ${c.label}`), changed: r.changed.map((c) => `${c.label}: ${c.changes.join(', ')}`), dialogue: r.dialogue, notes: r.notes, warnings: r.warnings },
+          data: { quest: r.quest, editorId: r.editorId, created: r.created.map((c) => `${c.kind}: ${c.label}`), changed: r.changed.map((c) => `${c.label}: ${c.changes.join(', ')}`), dialogue: r.dialogue, problems: r.problems, notes: r.notes, warnings: r.warnings },
           ...(r.quest ? { link: link(r.quest) } : {}),
           note: `Built ${p.plan.title}`,
         };

@@ -210,6 +210,7 @@ export class ReleaseService {
     }
 
     // Quests: map problems and aliases that can't fill.
+    let placedActors: Set<string> | undefined;
     for (const { record, key } of own) {
       if (record.sig !== 'QUST') continue;
       try {
@@ -224,6 +225,14 @@ export class ReleaseService {
         const targets = Object.values(al.fill).filter((v): v is FormKey => typeof v === 'string' && v.includes(':'));
         if (al.fillType === 'none' && !optional) add({ severity: 'warning', category: 'quests', message: `${label(key)}: alias “${al.name}” has no way to be filled`, detail: 'A required alias that can\'t fill stops the quest from starting.', form: key });
         for (const t of targets) if (!this.ws.exists(t)) add({ severity: 'error', category: 'quests', message: `${label(key)}: alias “${al.name}” points to ${t}, which doesn't exist`, detail: 'The alias can\'t fill, so the quest won\'t start.', form: key });
+        // A unique character fills an alias only if they're placed somewhere in the world.
+        const actor = al.fillType === 'uniqueActor' ? (al.fill.actor as FormKey | undefined) : undefined;
+        const who = actor ? this.ws.summary(actor) : undefined;
+        if (who && !optional) {
+          placedActors ??= new Set(this.ws.search({ sigs: ['ACHR'], limit: 1_000_000 }).items.filter((r) => !r.deleted && r.base).map((r) => r.base!.toLowerCase()));
+          if (![who.editorId, who.name].some((n) => n && placedActors!.has(n.toLowerCase())))
+            add({ severity: 'error', category: 'quests', message: `${label(key)}: alias “${al.name}” needs ${label(actor!)}, who isn't placed anywhere in the world`, detail: "The alias can't fill, so the quest won't start. Place them in the World tab (or from the Characters tab), or tick the alias's Optional flag.", form: key });
+        }
       }
       // Dialogue problems (lines nobody answers, choices never offered, stages that don't exist, …).
       try {

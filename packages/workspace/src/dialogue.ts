@@ -17,12 +17,14 @@
  * [emotion happy] sets the emotion, [gives Item x2] / [takes Item x1] move
  * items between the speaker and the player (Item is an Editor ID or name;
  * "gold" means gold coins), [gesture wave] makes the speaker play an
- * animation as they start the line (see gestures.ts).
+ * animation as they start the line (see gestures.ts), [skill Archery x1]
+ * trains the player's skill by that many levels.
  */
 import { EMOTIONS, conditionFunctionByName, newCondition, parseFormKey, type Condition, type FormKey } from '@tes5/esp';
 import { WorkspaceError, type Workspace } from './engine';
 import { choiceGlobal, clauseConditions, parseIf, type IfClause } from './dialogueif';
 import { gestureCode } from './gestures';
+import { skillTag } from './skills';
 import { writeScene } from './scenes';
 import { MISC_TOPICS, type QuestService } from './quest';
 
@@ -120,6 +122,11 @@ function parseTags(text: string): { text: string; tags: Record<string, string> }
   return { text: clean, tags };
 }
 
+/** Lines in a row by one speaker are one answer: two stages set there would lose the first (and do both lines' rest). */
+function twoStages(who: string, first: string, then: string): string {
+  return `${who}'s lines in a row are said as one answer, but they set two stages (${first}, then ${then}), so only the last would count while both lines' gifts and rewards happen. If they're alternatives, give each its own PLAYER line to choose`;
+}
+
 export function parseScreenplay(source: string): ParsedScreenplay {
   const topics: ScriptPlayerLine[] = [];
   const errors: ParsedScreenplay['errors'] = [];
@@ -175,6 +182,7 @@ export function parseScreenplay(source: string): ParsedScreenplay {
       const prev = current.lines[current.lines.length - 1];
       if (current.kind === 'scene' && prev && prev.speaker.toLowerCase() === who.toLowerCase()) {
         if (text) prev.lines.push(text);
+        if (tags.stage && prev.tags.stage && tags.stage !== prev.tags.stage) errors.push({ line: lineNo, message: twoStages(who, prev.tags.stage, tags.stage) });
         Object.assign(prev.tags, tags);
       } else current.lines.push({ kind: 'npc', line: lineNo, indent, speaker: who, lines: text ? [text] : [], tags, choices: [] });
       return;
@@ -189,6 +197,7 @@ export function parseScreenplay(source: string): ParsedScreenplay {
     const last = parent.responses[parent.responses.length - 1];
     if (last && last.speaker.toLowerCase() === who.toLowerCase() && !last.choices.length && last.indent === indent && !('persuade' in parent.tags)) {
       if (text) last.lines.push(text);
+      if (tags.stage && last.tags.stage && tags.stage !== last.tags.stage) errors.push({ line: lineNo, message: twoStages(who, last.tags.stage, tags.stage) });
       Object.assign(last.tags, tags);
       return;
     }
@@ -218,6 +227,12 @@ const INFO_SAY_ONCE = 0x4;
 export interface ScreenplayHooks {
   aliasFor?: (quest: FormKey, npc: FormKey) => number;
   appendStageCode?: (quest: FormKey, stage: number, lines: string[]) => Promise<void>;
+  /**
+   * A quest item the quest follows (made in a character's inventory when it starts): its alias and who
+   * carries it. [gives …] by that character and [takes …] then hand over that very item, not a new copy,
+   * so its quest marker and whatever listens for it being picked up or dropped follow it.
+   */
+  questItem?: (item: FormKey) => { alias: number; holder: FormKey } | undefined;
 }
 
 function pascalWords(text: string): string {
@@ -404,7 +419,19 @@ export class DialogueService {
       ] as const) {
         for (const v of (r.tags[tag] ?? '').split(';').filter((x) => x.trim())) {
           const { item, count } = this.itemTag(v, r.line);
-          code.push(`Game.GetPlayer().${verb}(${formExpression(item)}, ${count})`);
+          const held = count === 1 ? hooks.questItem?.(item) : undefined;
+          const ref = held && `(GetOwningQuest().GetAlias(${held.alias}) as ReferenceAlias).GetReference()`;
+          if (ref && tag === 'gives' && held.holder === speaker) code.push(`akSpeaker.RemoveItem(${ref}, 1, False, Game.GetPlayer())`);
+          else if (ref && tag === 'takes') code.push(`Game.GetPlayer().RemoveItem(${ref}, 1, False, akSpeaker)`);
+          else code.push(`Game.GetPlayer().${verb}(${formExpression(item)}, ${count})`);
+        }
+      }
+      // [skill Archery x1] (or [teaches …], [trains …]): the speaker trains the player.
+      for (const tag of ['skill', 'teaches', 'trains'] as const) {
+        for (const v of (r.tags[tag] ?? '').split(';').map((x) => x.trim()).filter(Boolean)) {
+          const t = skillTag(v);
+          if (!t) throw new WorkspaceError(`Line ${r.line}: [${tag} ${v}]: “${v}” isn't a skill (try Archery, One-handed, Speech, Destruction…)`);
+          code.push(`Game.IncrementSkillBy("${t.skill}", ${t.levels})`);
         }
       }
       // [remember NAME] / [forget NAME]: a choice the quest keeps for later lines and endings.

@@ -44,7 +44,8 @@ export interface AgentTool<I = any> {
   input: z.ZodType<I>;
   /** What the call does, in a few plain words ("Add stage 20 to MyQuest"). */
   summary(input: I): string;
-  run(input: I): Promise<AgentToolOutput> | AgentToolOutput;
+  /** `signal` is aborted when the author presses Stop: tools that wait on something slow (an AI request) pass it on. */
+  run(input: I, ctx?: { signal?: AbortSignal }): Promise<AgentToolOutput> | AgentToolOutput;
 }
 
 /** What a tool hands back: data for the AI, and optionally a short line and a link for the author. */
@@ -191,7 +192,7 @@ Bigger jobs:
 - When every task is done, run review_mod and sum up what's left to fix.
 
 Quests:
-- For a whole new quest, plan it with plan_quest, tell the author the plan in a few lines (who, where, the stages and what moves them, any questions it raises) and build it with build_plan once they're happy, unless they asked you to just go ahead. Fix problems the plan summary lists with revise_plan first.
+- For a whole new quest, plan it with plan_quest, tell the author the plan in a few lines (who, where, the stages and what moves them, any questions it raises) and build it with build_plan once they're happy, unless they asked you to just go ahead. The plan summary's mustFix has to be fixed before build_plan works (revise_plan, or edit_plan for an exact change). Try once to fix shouldFix (what would leave the quest stuck) with revise_plan; if it's still there, build anyway and tell the author. advice is for the author: mention what matters, but don't keep revising for it.
 - For changes to an existing quest, small edits (a stage, a journal entry, an objective, a line of dialogue) have their own tools; bigger reworks go through quest_as_plan, revise_plan and update_quest_from_plan.
 - To change dialogue that's already there, list_dialogue_lines gives each line's id; then edit_dialogue_line (words, emotion, when it's said, which stage it moves to, ending the conversation), edit_player_line or remove_dialogue. Add new lines with add_dialogue.
 - Journal entries are first person, past tense ("Brynja asked me to find her ring."); objectives are short instructions ("Find Brynja's ring").
@@ -273,6 +274,11 @@ export interface AgentHooks {
 export interface ToolOffer {
   tools: AgentTool[];
   topics: Record<string, { about: string; tools: AgentTool[] }>;
+  /**
+   * The first step, made for the model before it's asked anything: a free AI asked for a new quest gets it planned
+   * (small models otherwise describe a plan in words and never call the planner), then goes on from the plan.
+   */
+  first?: { name: string; input: unknown };
 }
 
 /** The tool that adds a topic's tools to what the model sees, for the rest of the turn. */
@@ -342,6 +348,19 @@ export async function runAgentTurn(
   let text = '';
   const system = `${AGENT_RULES}`;
   try {
+    const first = hooks.offer?.first;
+    if (first && byName.has(first.name)) {
+      const call: AgentToolCall = { id: newCallId(), name: first.name, input: first.input };
+      session.messages.push({ role: 'assistant', text: '', calls: [call], provider: model.provider });
+      const r = await runTool(call, byName.get(call.name), model, hooks, resultMax, sid);
+      calls++;
+      results.push(r);
+      if (r.writes && r.status === 'done') changes.push(r.summary);
+      if (r.status === 'done') read.add(`${call.name} ${JSON.stringify(call.input ?? {}).toLowerCase()}`);
+      emit({ type: 'result', session: sid, result: r });
+      session.messages.push({ role: 'tool', results: [r] });
+      if (hooks.signal?.aborted) throw new AgentStopped();
+    }
     for (let round = 0; round < maxRounds; round++) {
       if (hooks.signal?.aborted) throw new AgentStopped();
       const reply = await model.reply({ system, messages: session.messages, tools: more ? [...offered, more] : tools, onText: (d) => emit({ type: 'text', session: sid, delta: d }), signal: hooks.signal });
@@ -491,7 +510,7 @@ async function runTool(call: AgentToolCall, tool: AgentTool | undefined, model: 
   }
   hooks.onEvent?.({ type: 'call', session: sid, id: call.id, name: call.name, summary, writes: tool.writes, status: 'running' });
   try {
-    const run = () => Promise.resolve(tool.run(parsed.data));
+    const run = () => Promise.resolve(tool.run(parsed.data, { signal: hooks.signal }));
     const out = tool.writes && hooks.transaction ? await hooks.transaction(`AI: ${summary}`, run) : await run();
     return { id: call.id, name: call.name, content: clip(stringify(out.data ?? 'Done.'), max), summary, writes: tool.writes, status: 'done', ...(out.note ? { note: out.note } : {}), ...(out.link ? { link: out.link } : {}) };
   } catch (e) {

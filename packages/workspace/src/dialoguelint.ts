@@ -8,6 +8,7 @@
  * Release check) and on a screenplay before it's imported or built (the
  * script editor and the quest-from-writing review).
  */
+import { skillTag } from './skills';
 import type { FormKey } from '@tes5/esp';
 import type { DialogueService } from './dialogue';
 import { parseScreenplay, type ScriptPlayerLine } from './dialogue';
@@ -30,7 +31,7 @@ export interface DialogueLint {
 export const PLAYER_LINE_MAX = 80;
 /** Responses longer than this make a long, hard-to-read subtitle (and one long voice file). */
 export const RESPONSE_LINE_MAX = 150;
-const KNOWN_TAGS = new Set(['goodbye', 'stage', 'if', 'emotion', 'gives', 'takes', 'gesture', 'once', 'persuade', 'at', 'start', 'remember', 'forget']);
+export const KNOWN_TAGS = new Set(['goodbye', 'stage', 'if', 'emotion', 'gives', 'takes', 'gesture', 'once', 'persuade', 'at', 'start', 'remember', 'forget', 'skill', 'teaches', 'trains']);
 const PLACEHOLDER = /\b(TODO|TBD|FIXME|XXX|lorem ipsum)\b|\{\{|\}\}|<[A-Z ]+>/;
 
 /** A conversation in a neutral shape, from records or from a screenplay. */
@@ -114,7 +115,9 @@ export function lintScreenplay(source: string, ctx: { stages?: number[]; speaker
   // Tags the importer doesn't know are silently dropped, so a typo loses the stage change.
   source.split(/\r?\n/).forEach((raw, i) => {
     for (const m of raw.matchAll(/\[([a-z]+)(?:\s+[^\]]*)?\]/gi)) {
-      if (!KNOWN_TAGS.has(m[1]!.toLowerCase())) out.push({ severity: 'error', message: `Unknown tag ${m[0]}`, detail: 'Tags: [stage N], [if …], [goodbye], [once], [persuade N], [emotion …], [gives …], [takes …], [gesture …], [remember NAME], [forget NAME]; on a SCENE: line, [at stage N] or [start].', line: i + 1 });
+      const tag = m[1]!.toLowerCase();
+      if (!KNOWN_TAGS.has(tag)) out.push({ severity: 'error', message: `Unknown tag ${m[0]}`, detail: 'Tags: [stage N], [if …], [goodbye], [once], [persuade N], [emotion …], [gives …], [takes …], [gesture …], [skill NAME xN], [remember NAME], [forget NAME]; on a SCENE: line, [at stage N] or [start].', line: i + 1 });
+      else if ((tag === 'skill' || tag === 'teaches' || tag === 'trains') && !skillTag(m[0].slice(tag.length + 1, -1))) out.push({ severity: 'error', message: `${m[0]}: that isn't a skill`, detail: 'Skills: One-handed, Two-handed, Archery, Block, Smithing, Heavy Armor, Light Armor, Pickpocket, Lockpicking, Sneak, Alchemy, Speech, Alteration, Conjuration, Destruction, Illusion, Restoration, Enchanting.', line: i + 1 });
     }
     if (/\[[^\]]*$/.test(raw)) out.push({ severity: 'error', message: 'A tag is missing its closing ]', line: i + 1 });
   });

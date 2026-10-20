@@ -295,6 +295,27 @@ describe('quests, dialogue and scripts', () => {
     const diags = await scripts.check(await scripts.read('DemoChestScript'));
     expect(diags.filter((d) => d.severity === 'error')).toEqual([]);
   });
+
+  it("knows a type's functions when it's only reached through a return value", async () => {
+    // With the game's own sources installed: a quest fragment calls PlayIdle on GetActorReference()'s Actor
+    // without naming Actor, which used to be reported as "not a function on Actor".
+    const { ws, fs, demo } = await openDemo();
+    const put = async (name: string, text: string) => {
+      await fs.mkdir(`${demo.dataDir}/Source/Scripts`);
+      await fs.writeFile(`${demo.dataDir}/Source/Scripts/${name}.psc`, new TextEncoder().encode(text));
+      ws.vfs.addLoose(demo.dataDir, `Source/Scripts/${name}.psc`);
+    };
+    await put('Form', 'Scriptname Form Hidden\nInt Function GetFormID() native\n');
+    await put('ObjectReference', 'Scriptname ObjectReference extends Form Hidden\nFunction Enable(Bool abFadeIn = False) native\n');
+    await put('Actor', 'Scriptname Actor extends ObjectReference Hidden\nBool Function PlayIdle(Idle akIdle) native\n');
+    await put('ReferenceAlias', 'Scriptname ReferenceAlias extends Alias Hidden\nActor Function GetActorReference() native\n');
+    const scripts = new ScriptService(ws);
+    scripts.refresh();
+    const src = 'Scriptname ZZFragment extends Quest Hidden\nReferenceAlias Property Alias_Eirik Auto\nFunction Fragment_0()\nAlias_Eirik.GetActorReference().PlayIdle(None)\nEndFunction\n';
+    expect((await scripts.check(src)).filter((d) => d.severity === 'error')).toEqual([]);
+    // A function that really isn't there is still caught (the game's own sources are the whole chain, so the checker is sure).
+    expect((await scripts.check(src.replace('PlayIdle', 'Dance'))).map((d) => d.message)).toContain('"Dance" is not a function on Actor');
+  });
 });
 
 describe('saving and cleaning', () => {

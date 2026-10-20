@@ -32,6 +32,12 @@ export function LocalAiFields() {
   const toast = useStore((st) => st.toast);
   const [status, setStatus] = useLocalAi();
   const [busy, setBusy] = useState(false);
+  // A model already on this PC is used without pressing Use first (the first one listed, when none is picked or the picked one was removed).
+  useEffect(() => {
+    if (!status?.installed.length || status.installed.includes(s.localModel)) return;
+    const first = LOCAL_MODELS.find((m) => status.installed.includes(m.id));
+    if (first) update({ localModel: first.id });
+  }, [status, s.localModel, update]);
   const call = async (method: 'localAiInstall' | 'localAiRemove' | 'localAiStart' | 'localAiStop' | 'localAiSetDevice', ...args: unknown[]) => {
     try {
       const r = (await (client as unknown as { call(m: string, ...a: unknown[]): Promise<unknown> } | null)?.call(method, ...args)) as LocalAiStatus | undefined;

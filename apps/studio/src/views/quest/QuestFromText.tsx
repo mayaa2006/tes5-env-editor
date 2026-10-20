@@ -449,7 +449,7 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
               <li key={`r${i}`}>
                 <Icon name="flag" size={12} />
                 <span>
-                  At stage {r.atStage} the player gets {[r.gold && `${r.gold} gold`, r.itemKey && nameOf(r.itemKey)].filter(Boolean).join(' and ')}
+                  At stage {r.atStage} the player gets {[r.gold && `${r.gold} gold`, r.itemKey && nameOf(r.itemKey), r.skill && `${r.skill.levels} level${r.skill.levels === 1 ? '' : 's'} of ${r.skill.skill} training`].filter(Boolean).join(' and ')}
                 </span>
               </li>
             ))}

@@ -37,8 +37,12 @@ describe('pre-release check', () => {
     // A one-way door.
     const door = world.placeReference(tavern, k('DemoDoor'), { position: { x: 0, y: 400, z: 0 } }, { persistent: true });
     ws.editRecord(door, (d) => ({ ...d, teleport: { door: k('DemoTavernDoorRef'), placement: { position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 } }, noAlarm: 0 } }));
-    // A new character with no voice type.
-    ws.createRecord('NPC_', { editorId: 'SilentBob', name: 'Bob' });
+    // A new character with no voice type, whom a quest needs but who isn't placed anywhere.
+    const bob = ws.createRecord('NPC_', { editorId: 'SilentBob', name: 'Bob' });
+    const q2 = quests.createQuest('NeedsBobQuest', 'Needs Bob');
+    quests.addReferenceAlias(q2, 'Bob', { uniqueActor: bob });
+    // Someone placed in the demo world is fine.
+    quests.addReferenceAlias(q2, 'Brynja', { uniqueActor: k('DemoInnkeeper') });
 
     const r = await release.check();
     const text = r.findings.map((f) => `${f.severity}|${f.category}|${f.message}`);
@@ -49,6 +53,8 @@ describe('pre-release check', () => {
     has(/^error\|quests\|ReleaseQuest: alias “Ghost” points to 000FFF:DemoWorld\.esm/);
     has(/^warning\|world\|Door .* doesn't lead back/);
     has(/^warning\|characters\|SilentBob has no voice type/);
+    has(/^error\|quests\|NeedsBobQuest: alias “Bob” needs SilentBob, who isn't placed anywhere in the world/);
+    expect(text.filter((t) => /alias “Brynja”/.test(t))).toEqual([]);
     expect(r.counts.error).toBeGreaterThanOrEqual(2);
     expect(r.findings[0]!.severity).toBe('error');
     expect(r.findings.find((f) => /float/.test(f.message))!.fix).toEqual({ kind: 'dropToSurface', refs: [floating] });

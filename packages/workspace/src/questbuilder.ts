@@ -5,10 +5,11 @@
  * aliases), the conversations (through the screenplay importer) and the
  * rewards. It's one undo step; if anything fails, nothing is left behind.
  */
-import { FACE_MORPHS, QuestFlag, RecordFlags, parseFormKey, type FormKey } from '@tes5/esp';
+import { FACE_MORPHS, QuestFlag, RecordFlags, SKILLS, parseFormKey, type FormKey } from '@tes5/esp';
 import { joinPath } from './fs';
 import { WorkspaceError, type Workspace } from './engine';
 import { CharacterEditor } from './characteredit';
+import { skillIndex } from './skills';
 import { ITEM_SIGS, formExpression, resolveItem, type DialogueService } from './dialogue';
 import { rng, type EnvironmentService } from './environment';
 import { emptyMorphs, FEMALE_FLAG, type NpcService } from './npc';
@@ -115,6 +116,21 @@ interface BuildSession {
   /** New interiors made in this build: their copied load doors (or empty). */
   newPlaces: Map<string, { loadDoors: FormKey[]; empty?: boolean }>;
   report: QuestBuildReport;
+}
+
+/** Whether the quest follows an item (a step or start listens for it, an objective points at it, an event acts on it). */
+function followed(plan: QuestPlan, key: string): boolean {
+  return (
+    plan.steps.some((st) => st.targetKey === key && st.kind !== 'talk' && st.kind !== 'script') ||
+    plan.objectives.some((o) => o.targetKey === key) ||
+    plan.startsWhen?.targetKey === key ||
+    (plan.events ?? []).some((e) => e.targetKey === key)
+  );
+}
+
+/** Whether an item has something to show in the world (armour keeps it per body: male and female models). */
+function hasModel(d: any): boolean {
+  return /\.nif/i.test(JSON.stringify([d?.model, d?.maleModel, d?.femaleModel]));
 }
 
 function startStageOf(plan: QuestPlan): number {
@@ -263,11 +279,31 @@ export class QuestBuilder {
     return best?.key;
   }
 
-  private itemTemplate(kind: PlanItem['kind']): FormKey | undefined {
+  /**
+   * What a new item is copied from (its model): the plainest item of its kind named like it ("Hulda's Ring" →
+   * Gold Ring, which in Skyrim is jewellery rather than a misc item), else the first of its kind with a model.
+   */
+  private itemTemplate(kind: PlanItem['kind'], name = ''): FormKey | undefined {
+    const words = (name.toLowerCase().match(/[a-z]{3,}/g) ?? []).filter((w) => !/s$/.test(w) || w.length > 4);
+    if (words.length) {
+      let best: { key: FormKey; score: number } | undefined;
+      for (const sig of [ITEM_TEMPLATE_SIG[kind], ...ITEM_SIGS.filter((x) => x !== ITEM_TEMPLATE_SIG[kind])]) {
+        for (const s of this.ws.search({ sigs: [sig], limit: 100_000 }).items) {
+          if (s.deleted || !s.name) continue;
+          const own: string[] = s.name.toLowerCase().match(/[a-z]{3,}/g) ?? [];
+          const hits = words.filter((w) => own.includes(w)).length;
+          if (!hits) continue;
+          // Same kind first; then plain ones (no enchantment, no "of …"), shortest name.
+          const score = hits * 100 + (sig === ITEM_TEMPLATE_SIG[kind] ? 50 : 0) - (/^ench/i.test(s.editorId ?? '') || / of /i.test(s.name) ? 40 : 0) - s.name.length;
+          if ((!best || score > best.score) && hasModel(this.ws.view(s.formKey)?.data)) best = { key: s.formKey, score };
+        }
+      }
+      if (best) return best.key;
+    }
     for (const sig of [ITEM_TEMPLATE_SIG[kind], 'MISC']) {
       const hit = this.ws
         .search({ sigs: [sig], limit: 100_000 })
-        .items.find((s) => !s.deleted && (this.ws.view(s.formKey)?.data as any)?.model?.file);
+        .items.find((s) => !s.deleted && hasModel(this.ws.view(s.formKey)?.data));
       if (hit) return hit.formKey;
     }
     return undefined;
@@ -311,7 +347,7 @@ export class QuestBuilder {
         continue;
       }
       const based = i.basedOn ? this.characters.findLoose([ITEM_TEMPLATE_SIG[i.kind]], i.basedOn) ?? this.characters.findLoose(ITEM_SIGS, i.basedOn) : undefined;
-      const t = based ?? this.itemTemplate(i.kind);
+      const t = based ?? this.itemTemplate(i.kind, i.name);
       out.push(t ? { kind: 'item', key: i.key, name: i.name, existing: null, template: t, text: `New, copied from ${this.label(t)}${i.basedOn && !based ? ` (no “${i.basedOn}” found)` : ''}` } : { kind: 'item', key: i.key, name: i.name, existing: null, template: null, text: 'No item to copy from', error: `${i.name}: there's no item in the load order to copy` });
     }
     return out;
@@ -602,6 +638,14 @@ export class QuestBuilder {
         s.report.created.push({ kind: 'placed', formKey: ref, label: `${i.name} ${where.on ? `on the ${(where.on.baseName ?? where.on.baseEditorId ?? 'table').toLowerCase()}` : 'on the floor'} in ${this.label(cell)}` });
       } else if (i.startsWith === 'character' && i.startsAtKey) {
         const npc = s.npcs.get(i.startsAtKey)!;
+        if (s.quest && followed(s.plan, i.key)) {
+          // Something the quest follows (taken from their body, handed over, delivered): made in their
+          // inventory when the quest starts, as its own reference the quest can watch and point a marker at.
+          s.inContainer.set(i.key, npc);
+          this.graphs.itemInContainerAlias(s.quest, item, npc);
+          s.report.created.push({ kind: 'placed', formKey: npc, label: `${i.name}, carried by ${this.label(npc)} (given to them when the quest starts)` });
+          continue;
+        }
         this.ws.editRecord(npc, (d: any) => void (d.items = [...(d.items ?? []), { item: { item, count: 1 } }]), 'Add to inventory');
         if (parseFormKey(npc).plugin !== this.ws.activeName) s.report.warnings.push(`${i.name} was added to ${this.label(npc)}'s inventory, which changes a character from ${parseFormKey(npc).plugin} (other mods that change them will conflict).`);
       } else if (i.startsWith === 'player') playerGets.push(`Game.GetPlayer().AddItem(${formExpression(item)}, 1)`);
@@ -623,6 +667,9 @@ export class QuestBuilder {
     if (s.placedItems.has(key)) return this.graphs.aliasFor(quest, s.placedItems.get(key)!);
     if (s.inContainer.has(key)) return this.graphs.itemInContainerAlias(quest, s.items.get(key)!, s.inContainer.get(key)!);
     if (s.cells.has(key)) return this.graphs.aliasFor(quest, this.graphs.markerIn(quest, s.cells.get(key)!));
+    // A group of enemies: the marker points at the first of them.
+    const enemies = s.encounters.get(key);
+    if (enemies?.length) return this.graphs.aliasFor(quest, enemies[0]!);
     return undefined;
   }
 
@@ -677,7 +724,7 @@ export class QuestBuilder {
     const scenesBefore = new Set(this.scenesOf(quest));
     const linesBefore = await this.stageCode(quest);
     try {
-      const r = await this.dialogue.importScreenplay(quest, text, (info, code, which) => this.quests.setInfoFragment(info, which, code), this.sceneHooks());
+      const r = await this.dialogue.importScreenplay(quest, text, (info, code, which) => this.quests.setInfoFragment(info, which, code), this.sceneHooks(s));
       s.report.dialogue.topics += r.topics;
       s.report.dialogue.responses += r.responses;
       s.report.dialogue.greetings += r.greetings;
@@ -774,6 +821,8 @@ export class QuestBuilder {
       const lines = byStage.get(r.atStage) ?? [];
       if (r.gold) lines.push(`Game.GetPlayer().AddItem(${formExpression(resolveItem(this.ws, 'gold')!)}, ${r.gold})`);
       if (r.itemKey) lines.push(`Game.GetPlayer().AddItem(${formExpression(s.items.get(r.itemKey)!)}, 1)`);
+      const skill = r.skill ? skillIndex(r.skill.skill) : -1;
+      if (skill >= 0) lines.push(`Game.IncrementSkillBy("${SKILLS[skill]}", ${Math.max(1, Math.min(10, r.skill!.levels))})`);
       byStage.set(r.atStage, lines);
     }
     for (const [stage, lines] of byStage) await this.addStageLines(s, stage, lines, why);
@@ -986,7 +1035,8 @@ export class QuestBuilder {
       return;
     }
     const key = sw.targetKey ?? '';
-    if (s.inContainer.has(key)) return void s.report.warnings.push(`${key} is inside a container, so picking it up or reading it can't start the quest (the quest that would create it isn't running yet). Put it on furniture instead.`);
+    const holder = s.inContainer.get(key);
+    if (holder) return void s.report.warnings.push(`${key} is ${this.ws.summary(holder)?.sig === 'NPC_' ? `carried by ${this.label(holder)}` : 'inside a container'}, so picking it up or reading it can't start the quest (the quest that would create it isn't running yet). Put it on furniture instead.`);
     const target = s.placedItems.get(key) ?? s.cells.get(key) ?? this.findForm(['CELL', 'REFR', 'ACHR'], key);
     if (!target) return void s.report.warnings.push(`The quest should start when the player ${({ arrive: 'enters', read: 'reads', pickup: 'picks up', activate: 'uses' } as const)[sw.kind]} “${key}”, but it isn't placed anywhere, so nothing starts the quest yet.`);
     if (this.ws.summary(target)?.sig !== 'CELL' && parseFormKey(target).plugin !== this.ws.activeName) s.report.warnings.push(`The start trigger goes on ${this.label(target)} from ${parseFormKey(target).plugin}, which other mods that change it will conflict with.`);
@@ -1476,8 +1526,17 @@ export class QuestBuilder {
     s.conversations.delete(title);
   }
 
-  private sceneHooks() {
-    return { aliasFor: (q: FormKey, npc: FormKey) => this.graphs.aliasFor(q, npc), appendStageCode: (q: FormKey, stage: number, lines: string[]) => this.graphs.appendStageCode(q, stage, lines) };
+  private sceneHooks(s: BuildSession) {
+    return {
+      aliasFor: (q: FormKey, npc: FormKey) => this.graphs.aliasFor(q, npc),
+      appendStageCode: (q: FormKey, stage: number, lines: string[]) => this.graphs.appendStageCode(q, stage, lines),
+      questItem: (item: FormKey) => {
+        const key = [...s.items].find(([, v]) => v === item)?.[0];
+        const holder = key ? s.inContainer.get(key) : undefined;
+        if (!holder || this.ws.summary(holder)?.sig !== 'NPC_') return undefined;
+        return { alias: this.graphs.itemInContainerAlias(s.quest!, item, holder), holder };
+      },
+    };
   }
 
   private finishNotes(report: QuestBuildReport): void {
@@ -1519,7 +1578,7 @@ export class QuestBuilder {
     for (const [k] of FACE_MORPHS) morphs[k] = Math.round((random() - 0.5) * 0.8 * 100) / 100;
     this.npcs.setAppearance(npc, { morphs });
     report.created.push({ kind: 'character', formKey: npc, label: `${c.name} (${editorId}), copied from ${this.label(template)}` });
-    report.notes.push(`${c.name} (“${c.appearance}”): hair, beard, build and colours were picked to match; the face shape is random — fine-tune it in the Characters tab. They stand where they're placed until you give them AI packages.`);
+    report.notes.push(`${c.name} (“${c.appearance}”): hair, beard, build and colours were picked to match; the face shape is random — fine-tune it in the Characters tab.${c.routine?.length ? '' : " They stand where they're placed until you give them AI packages."}`);
     return npc;
   }
 
@@ -1530,6 +1589,8 @@ export class QuestBuilder {
       item,
       (d: any) => {
         d.name = i.name;
+        // Scripts belong to the original's quest (a quest item copied for its looks), not this one.
+        delete d.scripts;
         if (d.data && i.value !== null) d.data = { ...d.data, value: Math.max(0, Math.round(i.value)) };
         if (this.ws.summary(item)?.sig === 'BOOK') d.text = `<p align="center">${i.name}</p>`;
       },
@@ -1537,7 +1598,8 @@ export class QuestBuilder {
     );
     const sig = this.ws.summary(item)?.sig;
     report.created.push({ kind: 'item', formKey: item, label: `${i.name} (${editorId}), copied from ${this.label(template)}` });
-    if (sig !== ITEM_TEMPLATE_SIG[i.kind]) report.notes.push(`${i.name} should be a ${i.kind} but there's none to copy, so it's a misc item.`);
+    if (sig === 'MISC' && ITEM_TEMPLATE_SIG[i.kind] !== 'MISC') report.notes.push(`${i.name} should be a ${i.kind} but there's none to copy, so it's a misc item.`);
+    else if (sig !== ITEM_TEMPLATE_SIG[i.kind]) report.notes.push(`${i.name} is copied from ${this.label(template)}, the closest item by name, so it looks like one.`);
     if (sig === 'BOOK') report.notes.push(`${i.name}: write the book's text in the Objects tab.`);
     return item;
   }
@@ -1555,7 +1617,7 @@ export function rewriteScreenplay(text: string, speakers: Map<string, string>, i
         const id = speakers.get(who.trim().toLowerCase());
         return id ? `${pad}${id}${colon}` : m;
       });
-      out = out.replace(/\[(gives|takes)\s+([^\]]*?)(\s*[x×]\s*\d+)?\]/gi, (m, verb: string, what: string, count?: string) => {
+      out = out.replace(/\[(gives|takes|if\s+(?:not\s+|no\s+)?has)\s+([^\]]*?)(\s*[x×]\s*\d+)?\]/gi, (m, verb: string, what: string, count?: string) => {
         const id = items.get(what.trim().toLowerCase());
         return id ? `[${verb} ${id}${count ?? ''}]` : m;
       });

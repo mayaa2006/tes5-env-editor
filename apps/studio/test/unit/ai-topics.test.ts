@@ -38,6 +38,33 @@ describe('the tools a free AI is shown', () => {
     expect(names(offerTools(tools, session, 'Make a character: Ingrid, a Redguard blacksmith').tools)).toContain('create_character');
   });
 
+  it('offers the planner, and only the planner, for a whole new quest', () => {
+    const { tools, session } = all();
+    for (const text of [
+      "Make a quest: Hulda at the Bannered Mare has lost her mother's ring. The ring is on a table in the inn.",
+      'Write me a new quest where Faendal asks the player to clear a bandit cave',
+      'I want a small quest about a farmer and three wolves',
+      'Quest: deliver a sword to Proventus',
+    ]) {
+      const o = offerTools(tools, session, text, 'Quests tab: quest LostRing');
+      expect(names(o.tools), text).toEqual(expect.arrayContaining(['plan_quest', 'revise_plan', 'build_plan', 'check_quest', 'search_records']));
+      // Not the piece-by-piece tools: a small model given both starts building by hand.
+      expect(names(o.tools), text).not.toContain('create_quest');
+      expect(names(o.tools), text).not.toContain('add_dialogue');
+      expect(Object.keys(o.topics)).toContain('quests');
+      // The first step plans it, from what the author wrote.
+      expect(o.first).toEqual({ name: 'plan_quest', input: { text } });
+    }
+    // Changes to a quest aren't new quests.
+    for (const text of ['Add a stage to the quest', 'Make a quest stage that gives 100 gold', 'Change the quest dialogue so Hulda is angrier']) {
+      expect(names(offerTools(tools, session, text).tools), text).not.toContain('plan_quest');
+      expect(offerTools(tools, session, text).first).toBeUndefined();
+    }
+    // Saying "build it" afterwards keeps the planner.
+    session.messages.push({ role: 'user', text: 'Make a quest: a ring' }, { role: 'assistant', text: '', calls: [{ id: 'a', name: 'plan_quest', input: {} }] });
+    expect(names(offerTools(tools, session, 'Looks good, go ahead').tools)).toContain('build_plan');
+  });
+
   it('uses what is open, and keeps the conversation’s topics for follow-ups', () => {
     const { tools, session } = all();
     expect(names(offerTools(tools, session, 'What is this?', 'Quests tab: quest LostRing').tools)).toContain('set_stage');

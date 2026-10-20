@@ -20,7 +20,7 @@ import type { FormKey } from '@tes5/esp';
 import { GESTURES } from './gestures';
 import { z } from 'zod';
 import type { JournalContext, JournalDraft } from './journal';
-import { PLAN_EVENT_KINDS, QuestPlanSchema, normalizePlan, repairPlan, validatePlan, type PlanIssue, type QuestPlan } from './questplan';
+import { PLAN_EVENT_KINDS, QuestPlanSchema, keepAskedChanges, normalizePlan, repairPlan, stagesSaid, validatePlan, type PlanIssue, type QuestPlan } from './questplan';
 import { lintScreenplay } from './dialoguelint';
 import { aiName, chatSend, type AiProvider } from './aiproviders';
 import { WorldService } from './world';
@@ -37,7 +37,7 @@ export interface PlannerReply {
 }
 
 /** Sends one request. The default streams it through the Anthropic SDK; tests pass their own. */
-export type PlannerSend = (params: BetaMessageStreamParams) => Promise<PlannerReply>;
+export type PlannerSend = (params: BetaMessageStreamParams, signal?: AbortSignal) => Promise<PlannerReply>;
 
 const RULES = `You turn a Skyrim mod author's writing into a quest plan that a tool builds into a working quest (records, scripts, dialogue). Return only the plan, in the given JSON format.
 
@@ -45,7 +45,7 @@ How to plan:
 - Read everything the author wrote. Keep their names, lines and intent. Where they leave something out, decide it the way an experienced Skyrim quest designer would, and record each such decision in "assumptions" in one short sentence. Put real choices only the author can make in "questions" (at most five), and still make a sensible choice for each in the plan.
 - Prefer characters, places and items that already exist in the load order (listed below) when the author names them or clearly means them; set "existing" to their Editor ID. Otherwise set "existing" to null and a new one is created.
 - Keys are short lowercase identifiers ("brynja", "cellar", "ring") used to refer to entries inside the plan. Every key is unique across characters, locations and items.
-- A new place (existing null) is a new interior. Set layoutLike to the Editor ID of an interior from the list below that fits it (an inn for an inn, a house for a home, a cave or ruin for a hideout): its rooms, furniture, lights and clutter are copied, so it's ready to use. Set doorFrom to where the player walks in from (a location key, or an existing cell's Editor ID), and a linked door is added there.
+- A new place (existing null) is a new interior. Set layoutLike to the Editor ID of an interior from the list below that fits it (an inn for an inn, a house for a home, a cave or ruin for a hideout): its rooms, furniture, lights and clutter are copied, so it's ready to use. Set doorFrom to where the player walks in from (a location key, an existing interior, or one of the outdoor places listed, e.g. a farm's exterior for a new farmhouse), and a linked door is added there.
 - New characters need a location to stand in (a location key); characters that already exist stay where they are (locationKey null).
 - Characters can be changed as well as used. When the author says a character (new or existing) wears something, carries something, belongs to a group, has a class or level, can or can't die, or looks a certain way, put it in outfit, inventory, factions, className, level, essential and look. For existing characters, only fill in what the text asks to change and leave the rest null or empty. "Save it as an outfit" means outfit.saveAs gets an Editor ID.
 - Describe every new character's look (build, height, hair, hair colour, facial hair, eyes, scars) from the text, choosing what fits their role when the text says nothing; for a new character that is "like" someone existing, set basedOn.
@@ -60,7 +60,7 @@ How to plan:
 - Objectives are short instructions ("Find Brynja's ring", "Return the ring to Brynja"). Show each at the stage where it starts and complete it at the stage where it's done. Point the marker (targetKey) at the character, item or location involved.
 - Steps say what moves the quest from one stage to the next: talk (a line in a conversation, see below), pickup/read/equip/drop/activate (an item key), death/activate (a character key), arrive (a location key), or script (immediately after the "from" stage).
 - Items the player must pick up, read or activate must start in a location (startsWith "location"), so the game can tell when it happens. Items handed over in dialogue use the [gives …] and [takes …] tags instead.
-- Rewards are gold and/or items given at a stage (usually the final one).
+- Rewards are gold, items and/or training in a skill (skill and how many levels, e.g. someone teaching the player Archery) given at a stage (usually the final one).
 - Endings: when the player's choices lead to different outcomes, give each outcome its own stage with completesQuest true, its own closing journal entry and its own rewards; the conversation line that decides it sets that stage.
 - Failure: when the quest can be lost, add a stage with failsQuest true and a journal entry saying what went wrong, and add a failure: "death" if it fails when a character dies (targetKey), "timeLimit" if it must be done within some in-game days (days, fromStage where the clock starts). At most one time limit.
 - Events are what happens in the world when a stage is reached, outside dialogue: enemies appear (spawn, with an enemy type like "bandit" or "draugr" and how many), a character turns on the player or calms down (hostile / friendly), a door or chest unlocks or locks, something appears or vanishes (show / hide; shown things start hidden), someone moves somewhere (moveTo), someone dies (kill), the screen fades to black and back (fade, e.g. for time passing or being knocked out; moves at the same stage happen in the dark), a sound plays, the weather changes, a message shows, another quest starts (startQuest, for questlines), or the player is moved (movePlayer). Add one wherever the text says something happens ("bandits ambush you", "the door unlocks", "he draws his sword"). Pair a hostile character or spawned enemies with a death step when killing them moves the quest on.
@@ -79,7 +79,7 @@ PLAYER: I found your ring. [if stage 20]
 BRYNJA: My ring! Here, take this. [takes ring x1] [gives gold x100] [stage 100] [goodbye]
 
 Speaker names are character keys in capitals (BRYNJA for the key "brynja"); the player is PLAYER.
-Tags at the end of a line: [stage N] sets stage N once the line is said; [if stage N] only offers the line at stage N; [goodbye] ends the conversation; [emotion happy|sad|angry|fear|surprise|disgust|puzzled] sets the delivery; [gives KEY xN] / [takes KEY xN] move an item between the speaker and the player (KEY is an item key, or gold); [gesture NAME] makes the speaker play an animation as they say the line.
+Tags at the end of a line: [stage N] sets stage N once the line is said; [if stage N] only offers the line at stage N; [goodbye] ends the conversation; [emotion happy|sad|angry|fear|surprise|disgust|puzzled] sets the delivery; [gives KEY xN] / [takes KEY xN] move an item between the speaker and the player (KEY is an item key, or gold); [gesture NAME] makes the speaker play an animation as they say the line; [skill NAME xN] trains the player's skill by N levels (e.g. [skill Archery x1] when someone teaches the player).
 Gestures: ${GESTURES.map((g) => `${g.id} (${g.label.toLowerCase()})`).join(', ')}. Use them where a stage direction or the action calls for one (a wave in greeting, pointing the way, laughing, applause); don't put one on every line. For a character reacting when the quest reaches a stage outside dialogue, add it to "animations".
 Choices the quest remembers: [remember NAME] on a line stores a choice (e.g. [remember spared] when the player spares someone), [forget NAME] clears it, and [if chose NAME] / [if not chose NAME] only offers a line when the choice was (not) made. Use them for later lines that react to what the player did. More tags: [once] says a line only once; [persuade N] on a player line makes the first answer under it the success of a Speech check (Speech N) and the next answer the failure. Conditions in plain words: [if stage N] (also >=, <), [if done N] (stage N has been reached), [if has KEY xN], [if gold N], [if speech N], [if level N], [if female], [if male], [if race Nord], [if quest EditorID done]; several [if] tags on one line must all be true.
 Lines nobody prompts go in blocks: "GREETING:" then NPC lines said when the player comes up to them (put [if …] on the GREETING: line to apply to all), "IDLE:" then things they say to themselves, and "SCENE: name [at stage N]" then lines characters say to each other in order (use [start] instead of [at stage N] to play it when the quest starts). Use greetings to make characters react to how the quest is going ("Any luck with the ring?").
@@ -118,9 +118,17 @@ const MODES: Record<PlannerMode, string> = {
 
 const STOPWORDS = new Set('the and for with that this from they them their there then than what when where which who will would into onto your you she her his him has have had was were are not but all any can out its our over under about after before again also just like more most some such only very been being does did done each find give gives take takes make makes said says player quest'.split(' '));
 
-/** The words in a text, lower case, without short and common ones. */
+/** One word, plural or not: wolves → wolf, bandits → bandit, berries → berry. */
+function stem(w: string): string {
+  if (w.length > 4 && w.endsWith('ves')) return `${w.slice(0, -3)}f`;
+  if (w.length > 4 && w.endsWith('ies')) return `${w.slice(0, -3)}y`;
+  return w.length > 3 && w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w;
+}
+
+/** The words in a text, lower case, without short and common ones (and the singular of each plural). */
 export function textWords(text: string): Set<string> {
-  return new Set((text.toLowerCase().match(/[a-z][a-z']{2,}/g) ?? []).map((w) => w.replace(/'s$/, '')).filter((w) => !STOPWORDS.has(w)));
+  const words = (text.toLowerCase().match(/[a-z][a-z']{2,}/g) ?? []).map((w) => w.replace(/'s$/, '')).filter((w) => !STOPWORDS.has(w));
+  return new Set(words.flatMap((w) => [w, stem(w)]));
 }
 
 /** "WhiterunBanneredMare" "The Bannered Mare" → whiterun, bannered, mare. */
@@ -130,12 +138,58 @@ function entryWords(...names: (string | undefined)[]): string[] {
   return [...out];
 }
 
+/** Editor IDs of things made for one dungeon, DLC, quest or test, or for creatures. */
+const SPECIFIC = /^(dun|dlc\d|cc[A-Z]{3}|cc_|MQ\d|MS\d|DA\d|C0\d|CW|DB\d|TG\d|MG\d|BYOH|Test|AAA|Favor|WE\d|WI|Cr[A-Z]|.*Creature)|Vampire|Child|Unique/i;
+/** The races players pick from: what most characters are. */
+const PLAYABLE_RACE = /^(Nord|Imperial|Breton|Redguard|HighElf|DarkElf|WoodElf|Orc|Argonian|Khajiit)Race$/i;
+
+/** 2 for a playable race or a man's or woman's voice, 1 for other everyday entries, 0 for specific ones. */
+function everyday(editorId?: string): number {
+  if (!editorId || SPECIFIC.test(editorId)) return 0;
+  return PLAYABLE_RACE.test(editorId) || /^(Male|Female)[A-Z]/.test(editorId) ? 2 : 1;
+}
+
 /** How strongly an entry matches the text: its full name in the text counts most, then shared words. */
 function relevance(text: string, words: Set<string>, name?: string, editorId?: string): number {
   let score = 0;
   for (const n of [name, editorId]) if (n && n.length > 2 && text.includes(n.toLowerCase())) score += 10;
-  for (const w of entryWords(name, editorId)) if (words.has(w)) score += 1;
+  for (const w of entryWords(name, editorId)) if (words.has(w) || words.has(stem(w))) score += 1;
   return score;
+}
+
+/**
+ * "A new farmer called Eirik" planned as an existing character with another name (WEDL14Farmer, "Farmer") the text
+ * never mentions: the AI meant someone like them, so it becomes a new character copied from them rather than a
+ * renamed one from the game. Returns what was changed, in words (also added to the plan's assumptions).
+ */
+export function newWhenRenamed(ws: Workspace, plan: QuestPlan, text: string): string[] {
+  const out: string[] = [];
+  for (const c of plan.characters ?? []) {
+    if (!c.existing) continue;
+    const want = c.existing.toLowerCase();
+    const key = ws.byEditorId(c.existing) ?? ws.search({ sigs: ['NPC_'], query: c.existing, limit: 200 }).items.find((i) => i.name?.toLowerCase() === want)?.formKey;
+    const npc = key ? ws.summary(key) : undefined;
+    if (!npc || npc.sig !== 'NPC_') continue;
+    // Kept when the names share a word, or the text names them (a unique character, by their full name, capitalised).
+    const theirs = entryWords(npc.name, npc.editorId);
+    const unique = ((ws.view(key!)?.data as { config?: { flags?: number } } | undefined)?.config?.flags ?? 0) & 0x20;
+    const named = !!npc.name && new RegExp(`\\b${npc.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(text); // as a name: "Hulda", not "a farmer"
+    if (entryWords(c.name).some((w) => theirs.includes(w)) || (unique && named)) continue;
+    out.push(`${c.name} is a new character, copied from ${npc.name ?? npc.editorId} (${npc.editorId ?? key})`);
+    c.basedOn = c.existing;
+    c.existing = null;
+  }
+  if (out.length) plan.assumptions = [...(plan.assumptions ?? []), ...out];
+  return out;
+}
+
+/**
+ * What planning does to the characters in an AI's plan before anyone sees it: new characters planned as renamed
+ * existing ones become new, and (for a free AI) changes the text doesn't ask for to characters already in the game
+ * are taken out. Both go in the plan's assumptions.
+ */
+export function settleCharacters(ws: Workspace, plan: QuestPlan, text: string, free: boolean): string[] {
+  return [...newWhenRenamed(ws, plan, text), ...(free ? keepAskedChanges(plan, text).map((n) => `Left ${n} as they are`) : [])];
 }
 
 /**
@@ -144,8 +198,11 @@ function relevance(text: string, words: Set<string>, name?: string, editorId?: s
  * entries it mentions come first (characters with their race, sex, voice,
  * class and factions), so a short list still holds what the quest is about.
  */
-export function planCatalog(ws: Workspace, opts: { limit?: number; text?: string } = {}): string {
+export function planCatalog(ws: Workspace, opts: { limit?: number; text?: string; short?: number } = {}): string {
   const limit = opts.limit ?? 300;
+  // Voice types, races, classes, factions, outfits and enemies: what the text mentions comes first, and the builder
+  // matches loose names ("Nord", "bandit") itself, so a free AI that reads slowly can be given fewer of them.
+  const short = opts.short ?? limit;
   const text = (opts.text ?? '').toLowerCase();
   const words = textWords(text);
   const label = (s: { editorId?: string; name?: string; formKey: string }) => (s.name && s.name !== s.editorId ? `${s.editorId ?? s.formKey} "${s.name}"` : (s.editorId ?? s.formKey));
@@ -157,12 +214,16 @@ export function planCatalog(ws: Workspace, opts: { limit?: number; text?: string
     if (factions.length) parts.push(`factions ${factions.join(', ')}`);
     return parts.filter(Boolean).join(', ');
   };
+  // After what the text mentions and what's in your plugin: everyday entries before ones made for a creature, a dungeon,
+  // a DLC or one quest, so a list that's cut short still has Nord, MaleNord and Citizen rather than atronachs.
   const rank = <T extends { name?: string; editorId?: string; inActive?: boolean }>(items: T[]): (T & { score: number })[] =>
-    items.map((s) => ({ ...s, score: text ? relevance(text, words, s.name, s.editorId) : 0 })).sort((a, b) => b.score - a.score || Number(b.inActive) - Number(a.inActive));
-  const list = (sigs: string[], filter: (name?: string, edid?: string) => boolean = (n) => !!n, detail = false) => {
+    items
+      .map((s) => ({ ...s, score: text ? relevance(text, words, s.name, s.editorId) : 0, everyday: everyday(s.editorId) }))
+      .sort((a, b) => b.score - a.score || Number(b.inActive) - Number(a.inActive) || b.everyday - a.everyday);
+  const list = (sigs: string[], filter: (name?: string, edid?: string) => boolean = (n) => !!n, detail = false, max = short) => {
     const items = rank(ws.search({ sigs, limit: 100_000 }).items.filter((s) => !s.deleted && filter(s.name, s.editorId)));
-    const shown = items.slice(0, limit).map((s) => (detail && s.score > 0 ? `${label(s)} (${details(s.formKey)})` : label(s)));
-    return `${shown.join('\n') || '(none)'}${items.length > limit ? `\n…and ${items.length - limit} more` : ''}`;
+    const shown = items.slice(0, max).map((s) => (detail && s.score > 0 ? `${label(s)} (${details(s.formKey)})` : label(s)));
+    return `${shown.join('\n') || '(none)'}${items.length > max ? `\n…and ${items.length - max} more` : ''}`;
   };
   const yours = ws
     .search({ sigs: ['QUST'], limit: 100_000 })
@@ -170,13 +231,23 @@ export function planCatalog(ws: Workspace, opts: { limit?: number; text?: string
     .slice(0, limit)
     .map((s) => (s.name ? `${s.editorId} "${s.name}"` : s.editorId!));
   const world = new WorldService(ws);
-  const cells = rank(world.cells({ interiorOnly: true }).filter((c) => c.name))
+  const all = world.cells();
+  const cells = rank(all.filter((c) => c.interior && c.name))
     .slice(0, limit)
     .map((c) => `${c.editorId ?? c.formKey} "${c.name}"`);
+  // Outdoor cells have no names, only Editor IDs (PelagiaFarmExterior, RiverwoodEdge01): the ones the text is about,
+  // for the outside door of a new interior ("a farmhouse outside Whiterun").
+  const outside = text
+    ? rank(all.filter((c) => !c.interior && c.editorId && !/^test/i.test(c.editorId)))
+        .filter((c) => c.score > 0)
+        .slice(0, 20)
+        .map((c) => c.editorId!)
+    : [];
   return [
-    `Characters (Editor ID "Name"${text ? ', with details for the ones your text seems to mention' : ''}):\n${list(['NPC_'], undefined, true)}`,
+    `Characters (Editor ID "Name"${text ? ', with details for the ones your text seems to mention' : ''}):\n${list(['NPC_'], undefined, true, limit)}`,
     `Interior locations:\n${cells.join('\n') || '(none)'}`,
-    `Voice types:\n${list(['VTYP'], (_, e) => !!e)}`,
+    ...(outside.length ? [`Outdoor places (Editor IDs, for doorFrom: where a new interior's door goes outside):\n${outside.join('\n')}`] : []),
+    `Voice types:\n${list(['VTYP'], (_, e) => !!e, false, limit)}`,
     `Races:\n${list(['RACE'])}`,
     `Classes:\n${list(['CLAS'])}`,
     `Factions:\n${list(['FACT'])}`,
@@ -192,20 +263,27 @@ export class QuestPlanner {
   /** What to call the AI in messages. */
   readonly name: string;
 
-  constructor(opts: { apiKey?: string; ai?: AiProvider; send?: PlannerSend; model?: string } = {}) {
+  /** `signal`: Stop in the AI tab ends a plan that's still being written (with the built-in AI that can take minutes). */
+  constructor(opts: { apiKey?: string; ai?: AiProvider; send?: PlannerSend; model?: string; signal?: AbortSignal } = {}) {
     const ai: AiProvider | undefined = opts.ai ?? (opts.apiKey ? { kind: 'claude', apiKey: opts.apiKey } : undefined);
     this.name = aiName(ai);
-    if (opts.send) this.send = opts.send;
-    else if (ai?.kind === 'local') throw new WorkspaceError('The built-in AI has to be started first');
-    else if (ai && ai.kind !== 'claude') this.send = chatSend(ai);
-    else {
+    const signal = opts.signal;
+    if (opts.send) {
+      const send = opts.send;
+      this.send = (params) => send(params, signal);
+    } else if (ai?.kind === 'local') throw new WorkspaceError('The built-in AI has to be started first');
+    else if (ai && ai.kind !== 'claude') {
+      const send = chatSend(ai);
+      this.send = (params) => send(params, signal);
+    } else {
       if (ai?.kind === 'claude') opts = { ...opts, apiKey: ai.apiKey };
       if (!opts.apiKey) throw new WorkspaceError('Add your Anthropic API key, or pick a free AI, to plan quests');
       const client = new Anthropic({ apiKey: opts.apiKey, dangerouslyAllowBrowser: true });
       this.send = async (params) => {
         try {
-          return await client.beta.messages.stream(params).finalMessage();
+          return await client.beta.messages.stream(params, signal ? { signal } : undefined).finalMessage();
         } catch (e) {
+          if (signal?.aborted) throw new WorkspaceError('Stopped.');
           if (e instanceof Anthropic.AuthenticationError) throw new WorkspaceError('Anthropic rejected the API key. Check it in Settings.');
           if (e instanceof Anthropic.RateLimitError) throw new WorkspaceError('Too many requests to Claude right now. Wait a minute and try again.');
           if (e instanceof Anthropic.APIConnectionError) throw new WorkspaceError("Couldn't reach Anthropic's API. Check your internet connection.");
@@ -298,6 +376,7 @@ export class QuestPlanner {
     const speakers = plan.characters.flatMap((c) => [c.key, c.name, ...(c.existing ? [c.existing] : [])]);
     const errors = (text: string) => lintScreenplay(text, { stages, speakers }).filter((l) => l.severity === 'error').length;
     const stageTags = (text: string) => [...text.matchAll(/\[stage\s+(-?\d+)\]/gi)].map((m) => Number(m[1])).sort((a, b) => a - b).join(',');
+    await this.writeMissingLines(plan, brief, errors);
     for (const conv of plan.conversations) {
       try {
         const out = await this.run(
@@ -353,10 +432,54 @@ export class QuestPlanner {
     return plan;
   }
 
+  /**
+   * Steps that happen in a conversation with no line that makes them happen ("the player gives Proventus the
+   * sword", and nobody says anything that sets the stage): each gets one small request for just that exchange,
+   * added to the speaker's conversation. Small models manage this where rewriting the whole plan fails.
+   */
+  private async writeMissingLines(plan: QuestPlan, brief: string, errors: (text: string) => number): Promise<void> {
+    const keys = plan.characters.map((c) => c.key.toUpperCase()).join(', ');
+    for (const st of plan.steps.filter((x) => x.kind === 'talk')) {
+      const tag = new RegExp(`\\[stage\\s+${st.to}\\]`, 'i');
+      if (stagesSaid(plan).has(st.to)) continue;
+      // Who it happens with, when the step names them ("Player gives the sword to Proventus").
+      const esc = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const named = plan.characters.find((c) => [c.key, c.name, c.name.split(/\s+/)[0]!].some((n) => n.length > 2 && new RegExp(`\\b${esc(n)}\\b`, 'i').test(st.note)));
+      const answer = named ? `then ${named.key.toUpperCase()}'s answer` : 'then the answer from the character it happens with';
+      try {
+        const out = await this.run(
+          {
+            model: this.model,
+            max_tokens: 3000,
+            output_config: { effort: 'high', format: betaZodOutputFormat(ScreenplaySchema) },
+            system: [{ type: 'text', text: `${DIALOGUE_RULES}\n\n${STYLE}` }],
+            messages: [
+              {
+                role: 'user',
+                content: `${brief}\n\nNothing in the dialogue makes this happen yet: “${st.note}” (${st.from === null ? '' : `stage ${st.from} → `}stage ${st.to}). Write just that short exchange: a PLAYER line${st.from === null ? '' : ` with [if stage ${st.from}]`}, ${answer}, ending with [stage ${st.to}] and [goodbye]. If an item changes hands, use [gives KEY x1] or [takes KEY x1] with the item's key. Speakers: PLAYER and ${keys}.`,
+              },
+            ],
+          },
+          ScreenplaySchema,
+        );
+        const text = out.screenplay.trim();
+        if (!tag.test(text) || errors(text) > 0) continue;
+        const who = [...text.matchAll(/^\s*([^:\n[\]]+?)\s*:/gm)].map((m) => m[1]!.trim().toLowerCase()).find((n) => n !== 'player');
+        const c = plan.characters.find((x) => x.key.toLowerCase() === who || x.name.toLowerCase() === who);
+        if (!c || (named && c !== named)) continue;
+        const conv = plan.conversations.find((x) => x.title.toLowerCase() === c.name.toLowerCase());
+        if (conv) conv.screenplay = `${conv.screenplay.trimEnd()}\n${text}`;
+        else plan.conversations.push({ title: c.name, screenplay: text });
+      } catch {
+        // The step stays as it was; the plan review says nothing sets that stage.
+      }
+    }
+  }
+
   /** Change a plan as the author describes; returns the whole new plan. */
   async revise(plan: QuestPlan, feedback: string, catalog: string, source?: string): Promise<QuestPlan> {
     if (!feedback.trim()) throw new WorkspaceError('Say what to change');
-    return this.run(
+    return this.run<QuestPlan>(
       this.request(
         [
           { role: 'user', content: source?.trim() ? `${MODES.document}\n\n<source>\n${source.trim()}\n</source>` : 'Plan a quest.' },
@@ -472,8 +595,8 @@ function planBrief(plan: QuestPlan, source: string): string {
 }
 
 /** Problems worth one more round with the AI: errors, and gaps that leave the quest stuck. */
-function blockingIssues(issues: PlanIssue[]): PlanIssue[] {
-  return issues.filter((i) => i.severity === 'error' || /^(Nothing moves the quest|Nothing starts the quest|No stage completes)/.test(i.message));
+export function blockingIssues(issues: PlanIssue[]): PlanIssue[] {
+  return issues.filter((i) => i.severity === 'error' || /^(Nothing moves the quest|Nothing starts the quest|No stage completes|The player needs|The player loses|A line in .* sets stage|The quest starts with the game, so stage|.* fails the quest as soon as stage|.* whenever it's chosen, even before|The player has to pick up)/.test(i.message));
 }
 
 const JournalDraftSchema = z.object({

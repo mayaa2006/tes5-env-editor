@@ -1,5 +1,6 @@
 /** The AI tab: ask about the mod, the AI uses the editor's tools (Claude's API mocked), results link to their tabs. */
 import { expect, test } from '@playwright/test';
+import { exampleQuestPlan } from '../../../../packages/workspace/src/demo/example-plan';
 
 /** A streamed Messages API answer: optional text, then optional tool calls. */
 function sse(text: string, calls: { id: string; name: string; input: object }[] = []): string {
@@ -278,5 +279,71 @@ test('ask the AI from another workspace, and see what the conversation cost (128
   // What it cost: 10 tokens read and 50 written, at Claude's prices ($0.00104).
   await expect(page.getByTestId('ai-usage')).toHaveText('60 tokens · about $0.001');
   await expect(page.getByTestId('ai-usage')).toHaveAttribute('title', /10 tokens read, 50 written/);
+  expect(errors).toEqual([]);
+});
+
+test('the AI plans a whole quest, says what it will make, and builds it when asked (1280×800)', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  let turn = 0;
+  const planner: any[] = [];
+  await page.route('https://api.anthropic.com/**', async (route) => {
+    const body = route.request().postDataJSON();
+    let answer: string;
+    // The quest planner's own request (a JSON plan) is told apart from the conversation's.
+    if (body.output_config?.format) {
+      planner.push(body);
+      answer = sse(JSON.stringify(exampleQuestPlan()));
+    } else {
+      turn++;
+      answer =
+        turn === 1
+          ? sse("I'll plan it.", [{ id: 'tu_p', name: 'plan_quest', input: { text: "Brynja lost her ring; Eirik stole it. The player gets it back and Brynja pays 100 gold." } }])
+          : turn === 2
+            ? sse('Here is the plan: **The Lost Ring**, with Brynja and Eirik, four stages. Shall I build it?')
+            : turn === 3
+              ? sse('Building it.', [{ id: 'tu_b', name: 'build_plan', input: { planId: 'plan1' } }])
+              : sse('Built **The Lost Ring**: open it in Quests.');
+    }
+    await route.fulfill({ status: 200, headers: { 'content-type': 'text/event-stream', 'access-control-allow-origin': '*' }, body: answer });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: /Explore the demo/ }).click();
+  await page.getByTestId('load-plugins').click();
+  await page.locator('.workspace-tab', { hasText: 'AI' }).click();
+  await page.getByTestId('api-key').fill('sk-ant-test');
+  await page.getByTestId('api-key').blur();
+  await page.getByRole('checkbox', { name: 'Ask before each change' }).uncheck();
+
+  // First the plan: nothing is built yet.
+  await page.getByTestId('ai-input').fill('Make a quest: Brynja lost her ring and Eirik stole it.');
+  await page.getByTestId('ai-send').click();
+  await expect(page.getByTestId('ai-msg-assistant').last()).toContainText('Shall I build it?');
+  await expect(page.getByTestId('ai-tool').first()).toContainText('Plan a quest');
+  expect(planner).toHaveLength(1);
+  expect(planner[0].messages[0].content).toContain('Brynja lost her ring');
+  await expect(page.getByTestId('ai-turn')).toHaveCount(0);
+
+  // Then built, as one undo step, with a link to the quest.
+  await page.getByTestId('ai-input').fill('Yes, build it.');
+  await page.getByTestId('ai-send').click();
+  await expect(page.getByTestId('ai-msg-assistant').last()).toContainText('Built The Lost Ring');
+  await expect(page.getByTestId('ai-turn')).toContainText('Changes in this turn (1)');
+  await expect(page.getByTestId('ai-turn')).toContainText('Build the quest from plan1');
+
+  // The quest opens with its stages, dialogue and map.
+  await page.getByTestId('ai-tool').last().getByTestId('ai-tool-open').click();
+  await expect(page.locator('.workspace-tab.active')).toContainText('Quests');
+  await page.getByRole('tab', { name: /^Stages/ }).click();
+  await expect(page.locator('main')).toContainText('Brynja');
+  await page.getByRole('tab', { name: /^Dialogue/ }).click();
+  await page.getByRole('tab', { name: /^Map/ }).click();
+  await expect(page.getByTestId('error-panel')).toHaveCount(0);
+
+  // One undo takes the whole quest back.
+  await page.locator('.workspace-tab', { hasText: 'AI' }).click();
+  await page.getByTestId('ai-undo-turn').click();
+  await expect(page.getByTestId('ai-turn')).toContainText('Undone: Changes in this turn');
   expect(errors).toEqual([]);
 });

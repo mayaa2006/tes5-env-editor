@@ -159,6 +159,73 @@ describe('the AI workspace quest tools', () => {
     expect(r.session.turns[0]!.changes).toEqual(['Build the quest from plan1']);
   });
 
+  it('building a revised plan again updates the quest it made, rather than making a second one', async () => {
+    const host = await demo();
+    // The planner (faked) returns the example plan, then the revision with a new journal entry for stage 10.
+    let asked = 0;
+    vi.stubGlobal('fetch', async () => {
+      const plan = exampleQuestPlan();
+      if (asked++ > 0) plan.stages.find((x) => x.index === 10)!.journal = 'Brynja begged me to find her ring.';
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: JSON.stringify(plan) }, finish_reason: 'stop' }] }), text: async () => '' };
+    });
+    const ai = { kind: 'openai' as const, url: 'https://x.test/v1', model: 'm' };
+    host.aiModel = () =>
+      scripted([
+        { text: '', calls: [call('plan_quest', { text: 'Brynja lost her ring.' }, 'p')], stop: 'tools' },
+        { text: '', calls: [call('build_plan', { planId: 'plan1' }, 'b1')], stop: 'tools' },
+        { text: '', calls: [call('revise_plan', { planId: 'plan1', change: 'Brynja begs.' }, 'r')], stop: 'tools' },
+        { text: '', calls: [call('build_plan', { planId: 'plan2' }, 'b2')], stop: 'tools' },
+        { text: 'Done.', calls: [], stop: 'end' },
+      ]);
+    const s = await host.aiNewSession();
+    const r = await host.aiSend(s.id, 'Make the ring quest', ai);
+    expect(r.error).toBeNull();
+    const results = r.session.messages.filter((m) => m.role === 'tool').flatMap((m: any) => m.results);
+    expect(results.map((x: any) => `${x.name}:${x.status}`)).toEqual(['plan_quest:done', 'build_plan:done', 'revise_plan:done', 'build_plan:done']);
+    expect(JSON.parse(results[3].content)).toMatchObject({ updatedExisting: true });
+    // One quest, with the revised journal.
+    const quests = host.ws!.search({ sigs: ['QUST'], plugin: host.ws!.activeName }).items.filter((q) => q.inActive);
+    expect(quests.map((q) => q.editorId)).toEqual(['InnkeeperRingQuest']);
+    expect(host.quest(quests[0]!.formKey).stages.find((x) => x.index === 10)!.logEntries[0]!.text).toBe('Brynja begged me to find her ring.');
+  });
+
+  it('stops revising after two revisions in a turn, and says when a revision changed nothing', async () => {
+    const host = await demo();
+    vi.stubGlobal('fetch', async () => ({ ok: true, status: 200, json: async () => ({ choices: [{ message: { content: JSON.stringify(exampleQuestPlan()) }, finish_reason: 'stop' }] }), text: async () => '' }));
+    host.aiModel = () =>
+      scripted([
+        { text: '', calls: [call('plan_quest', { text: 'Brynja lost her ring.' }, 'p')], stop: 'tools' },
+        { text: '', calls: [call('revise_plan', { planId: 'plan1', change: 'Better.' }, 'r1')], stop: 'tools' },
+        { text: '', calls: [call('revise_plan', { planId: 'plan2', change: 'Better still.' }, 'r2')], stop: 'tools' },
+        { text: '', calls: [call('revise_plan', { planId: 'plan3', change: 'Even better.' }, 'r3')], stop: 'tools' },
+        { text: 'OK.', calls: [], stop: 'end' },
+      ]);
+    const s = await host.aiNewSession();
+    const r = await host.aiSend(s.id, 'Make the ring quest', { kind: 'openai', url: 'https://x.test/v1', model: 'm' });
+    const results = r.session.messages.filter((m) => m.role === 'tool').flatMap((m: any) => m.results);
+    expect(results.map((x: any) => `${x.name}:${x.status}`)).toEqual(['plan_quest:done', 'revise_plan:done', 'revise_plan:done', 'revise_plan:error']);
+    // The same plan back: told to build it instead.
+    expect(JSON.parse(results[1].content).next).toBe('The revision fixed nothing: build it now and tell the author what is left.');
+    expect(results[3].content).toContain("That's 2 revisions in this turn");
+  });
+
+  it('stops a plan that is still being written when the author presses Stop', async () => {
+    const host = await demo();
+    let aborted = false;
+    // A planner request that would take minutes: it only ends when it's called off.
+    vi.stubGlobal('fetch', (_url: string, init: { signal?: AbortSignal }) =>
+      new Promise((_, reject) => init.signal?.addEventListener('abort', () => ((aborted = true), reject(new DOMException('aborted', 'AbortError'))))),
+    );
+    host.aiModel = () => scripted([{ text: '', calls: [call('plan_quest', { text: 'Brynja lost her ring.' }, 'p')], stop: 'tools' }]);
+    const s = await host.aiNewSession();
+    const sent = host.aiSend(s.id, 'Make the ring quest', { kind: 'openai', url: 'https://x.test/v1', model: 'm' });
+    await new Promise((r) => setTimeout(r, 50));
+    host.aiStop(s.id);
+    const r = await sent;
+    expect(aborted).toBe(true);
+    expect(r.error).toBe('Stopped.');
+  });
+
   it('keeps plans with the conversation, so one made before a restart can still be built', async () => {
     const host = await demo();
     vi.stubGlobal('fetch', async () => ({ ok: true, status: 200, json: async () => ({ choices: [{ message: { content: JSON.stringify(exampleQuestPlan()) }, finish_reason: 'stop' }] }), text: async () => '' }));

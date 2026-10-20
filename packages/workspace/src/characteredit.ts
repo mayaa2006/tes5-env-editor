@@ -13,6 +13,7 @@ import type { HeadPartInfo, NpcService } from './npc';
 import { FEMALE_FLAG } from './npc';
 import type { PlanCharacter, PlanLook } from './questplan';
 import { ROUTINE_LABELS } from './routines';
+import { skillIndex } from './skills';
 
 const ESSENTIAL = 0x2;
 const AUTO_CALC_STATS = 0x10;
@@ -20,13 +21,7 @@ const AUTO_CALC_STATS = 0x10;
 const VENDOR = 1 << 14;
 const RANKS = ['lover', 'ally', 'confidant', 'friend', 'acquaintance', 'rival', 'foe', 'enemy', 'archnemesis'] as const;
 
-/** Skill names as people write them → index in the game's skill list. */
-export function skillIndex(name: string): number {
-  const n = name.toLowerCase().replace(/[^a-z]/g, '');
-  const alias: Record<string, string> = { archery: 'marksman', bow: 'marksman', speech: 'speechcraft', onehand: 'onehanded', twohand: 'twohanded', lockpick: 'lockpicking', pickpocketing: 'pickpocket' };
-  const want = alias[n] ?? n;
-  return SKILLS.findIndex((s) => s.toLowerCase() === want);
-}
+export { skillIndex } from './skills';
 const PC_LEVEL_MULT = 0x80;
 const STOP = new Set(['the', 'a', 'an', 'of', 'and', 'with', 'set', 'some', 'pair', 'his', 'her', 'their']);
 const SYNONYMS: Record<string, string[]> = { grey: ['gray'], gray: ['grey'], blond: ['blonde'], blonde: ['blond'], beard: ['facialhair'], clothes: ['clothing', 'outfit'], clothing: ['clothes'], shoes: ['boots'], boots: ['shoes'], hood: ['hat', 'cap'], hat: ['hood', 'cap'] };
@@ -452,6 +447,10 @@ export class CharacterEditor {
       if (p) {
         byType.set(type, p);
         if (text) changed.push(`${type.toLowerCase()}: ${p.name ?? p.editorId}`);
+      } else if (type === 'Hair' && text && NONE.test(text.trim())) {
+        // No bald "hair" for their race: bald is no hair at all.
+        if (byType.get(type)) changed.push('no hair');
+        byType.set(type, undefined);
       } else if (text) ctx.note(`${c.name}: no ${type.toLowerCase()} like “${text}” for their race and sex.`);
     }
     let hairColor = a.hairColor;

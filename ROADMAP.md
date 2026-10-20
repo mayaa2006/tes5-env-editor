@@ -87,13 +87,15 @@ Tested means unit tests (`npm test`) plus the Playwright run of the browser demo
 10. **Gestures:** that the listed vanilla idle names play as expected from dialogue and stage scripts.
 11. **Generated FaceGen:** the files now match the CK's in structure and shape, but still need loading in game: no dark-face bug, expressions and lip movement working, and region shaping looking right.
 12. **Linked doors:** that arrival points land on the correct side for vanilla door meshes, and that the generated light forms (radius, flicker) look right in game.
+13. **Quest items characters carry:** that an item made in a character's inventory by a quest alias ("Create in" another alias) is there when the quest starts and can be looted from their body, and that `RemoveItem(<alias reference>, 1, False, <other>)` in dialogue moves that very item between the character and the player.
 
 ## Next steps
 
-0. The Story Manager (quests started by game events), then weather, lighting templates, sounds, combat styles and races, with friendly editors like the ones for factions and classes.
-1. Open a vanilla Skyrim SE install and a large MO2 setup. Confirm the synthetic benchmark numbers hold, then verify that saving unchanged plugins produces identical files.
-2. Check BodySlide sets and built meshes against real CBBE / UNP / 3BA data and in game; add zaps, set groups and body textures; include built bodies in the Release pack.
-3. Load generated FaceGen in game; find the CK's extra beard adjustment; add a sculpt brush to the character creator.
-4. Terrain LOD; vertex colour painting; poses for characters; skin subsurface.
-5. Navmesh cover generation, and merging or splitting vertices.
-6. Full scene and AI package editors (beyond what scripts and plans generate).
+0. Whole quests from the built-in AI: keep running `quest-trial.ts` on Skyrim's data after each change to the planner or builder. Next: let plans put characters and enemies outdoors (they can only stand in interiors today, so "wolves near his farm" end up inside it), and give smaller models a shorter planner prompt.
+1. The Story Manager (quests started by game events), then weather, lighting templates, sounds, combat styles and races, with friendly editors like the ones for factions and classes.
+2. Open a vanilla Skyrim SE install and a large MO2 setup. Confirm the synthetic benchmark numbers hold, then verify that saving unchanged plugins produces identical files.
+3. Check BodySlide sets and built meshes against real CBBE / UNP / 3BA data and in game; add zaps, set groups and body textures; include built bodies in the Release pack.
+4. Load generated FaceGen in game; find the CK's extra beard adjustment; add a sculpt brush to the character creator.
+5. Terrain LOD; vertex colour painting; poses for characters; skin subsurface.
+6. Navmesh cover generation, and merging or splitting vertices.
+7. Full scene and AI package editors (beyond what scripts and plans generate).

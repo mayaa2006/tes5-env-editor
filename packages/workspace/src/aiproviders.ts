@@ -157,8 +157,8 @@ export async function readChat(res: ChatResponse, kind: 'openai' | 'ollama', onT
 }
 
 /** Turn the planner's Anthropic-format request into one chat request for Ollama or an OpenAI-style service. */
-export function chatSend(p: ChatProvider, fetchImpl: Fetch = globalThis.fetch as unknown as Fetch): (params: BetaMessageStreamParams) => Promise<Reply> {
-  return async (params) => {
+export function chatSend(p: ChatProvider, fetchImpl: Fetch = globalThis.fetch as unknown as Fetch): (params: BetaMessageStreamParams, signal?: AbortSignal) => Promise<Reply> {
+  return async (params, signal) => {
     const schema = (params.output_config?.format as { schema?: unknown } | undefined)?.schema;
     const system = [
       ...(Array.isArray(params.system) ? params.system.map((b) => b.text) : params.system ? [params.system] : []),
@@ -174,8 +174,9 @@ export function chatSend(p: ChatProvider, fetchImpl: Fetch = globalThis.fetch as
     const call = async (url: string, body: unknown, headers: Record<string, string> = {}) => {
       let res;
       try {
-        res = await fetchImpl(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
+        res = await fetchImpl(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body), ...(signal ? { signal } : {}) });
       } catch {
+        if (signal?.aborted) throw new WorkspaceError('Stopped.');
         throw new WorkspaceError(p.kind === 'ollama' ? `Couldn't reach Ollama at ${p.url || OLLAMA_URL}. Is it installed and running?` : `Couldn't reach ${hostOf(p.url) || p.url}. Check the address and your internet connection.`);
       }
       if (!res.ok) {

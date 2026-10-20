@@ -65,16 +65,33 @@ export const TOOL_TOPICS: Record<string, { about: string; words: RegExp; tools: 
   },
 };
 
+/** "Make a quest: …", "write me a new quest where…", "a quest about…": a whole new quest, not a change to one. */
+const NEW_QUEST =
+  /\b(make|create|write|build|design|generate|come up with|give me|i want|i need|i'd like)\s+(me\s+)?(a|an|another|one|some|two|three|\d+)\s+(\S+\s+){0,3}?quests?\b(?!\s+(stages?|objectives?|journal|alias\w*|scripts?|items?|markers?|dialogue|lines?|map)\b)|\bnew quests?\b(?!\s+(stages?|objectives?))|^\s*quests?\s*:|\bquest (idea|where|about|in which)\b/i;
+
+export function asksForNewQuest(text: string): boolean {
+  return NEW_QUEST.test(text);
+}
+
 /** The tools to show a free AI for this message, and the rest by topic. */
 export function offerTools(all: AgentTool[], session: AgentSession, text: string, context?: string): ToolOffer {
   const byName = new Map(all.map((t) => [t.name, t]));
   const pick = (names: string[]) => names.map((n) => byName.get(n)).filter((t): t is AgentTool => !!t);
   const topics = new Set<string>();
+  const extra: string[] = [];
   const match = (s: string) => {
     for (const [k, t] of Object.entries(TOOL_TOPICS)) if (t.words.test(s)) topics.add(k);
   };
-  match(text);
-  if (context) match(context);
+  if (asksForNewQuest(text)) {
+    // A whole new quest is planned and built in one go (characters, places, items, stages, objectives,
+    // dialogue, what moves it on). Small models given the piece-by-piece tools as well start building
+    // with those instead, run out of steps and leave a quest nothing moves on; the rest stays a topic away.
+    topics.add('plans');
+    extra.push('check_quest');
+  } else {
+    match(text);
+    if (context) match(context);
+  }
   // Follow-ups ("yes, do it", "go on") keep the topics the conversation has been about.
   const used = new Set(session.messages.flatMap((m) => (m.role === 'assistant' ? m.calls.map((c) => c.name) : [])));
   for (const [k, t] of Object.entries(TOOL_TOPICS)) if (t.tools.some((n) => used.has(n))) topics.add(k);
@@ -82,8 +99,9 @@ export function offerTools(all: AgentTool[], session: AgentSession, text: string
   if (session.project) topics.add('project');
   // Nothing to go on: the reading and checking tools, to look around and answer.
   if (!topics.size) topics.add('checks');
-  const shown = new Set([...ALWAYS, ...[...topics].flatMap((k) => TOOL_TOPICS[k]!.tools)]);
+  const shown = new Set([...ALWAYS, ...extra, ...[...topics].flatMap((k) => TOOL_TOPICS[k]!.tools)]);
   return {
+    ...(asksForNewQuest(text) && byName.has('plan_quest') && !session.messages.some((m) => m.role === 'assistant' && m.calls.some((c) => c.name === 'plan_quest')) ? { first: { name: 'plan_quest', input: { text } } } : {}),
     tools: all.filter((t) => shown.has(t.name)),
     topics: Object.fromEntries(
       Object.entries(TOOL_TOPICS)
