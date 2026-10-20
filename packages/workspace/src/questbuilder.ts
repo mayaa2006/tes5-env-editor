@@ -127,6 +127,11 @@ function followed(plan: QuestPlan, key: string): boolean {
   );
 }
 
+/** Whether an item has something to show in the world (armour keeps it per body: male and female models). */
+function hasModel(d: any): boolean {
+  return /\.nif/i.test(JSON.stringify([d?.model, d?.maleModel, d?.femaleModel]));
+}
+
 function startStageOf(plan: QuestPlan): number {
   const stages = [...plan.stages].sort((a, b) => a.index - b.index);
   return stages.find((x) => x.startsQuest)?.index ?? stages[0]?.index ?? 0;
@@ -273,11 +278,31 @@ export class QuestBuilder {
     return best?.key;
   }
 
-  private itemTemplate(kind: PlanItem['kind']): FormKey | undefined {
+  /**
+   * What a new item is copied from (its model): the plainest item of its kind named like it ("Hulda's Ring" →
+   * Gold Ring, which in Skyrim is jewellery rather than a misc item), else the first of its kind with a model.
+   */
+  private itemTemplate(kind: PlanItem['kind'], name = ''): FormKey | undefined {
+    const words = (name.toLowerCase().match(/[a-z]{3,}/g) ?? []).filter((w) => !/s$/.test(w) || w.length > 4);
+    if (words.length) {
+      let best: { key: FormKey; score: number } | undefined;
+      for (const sig of [ITEM_TEMPLATE_SIG[kind], ...ITEM_SIGS.filter((x) => x !== ITEM_TEMPLATE_SIG[kind])]) {
+        for (const s of this.ws.search({ sigs: [sig], limit: 100_000 }).items) {
+          if (s.deleted || !s.name) continue;
+          const own: string[] = s.name.toLowerCase().match(/[a-z]{3,}/g) ?? [];
+          const hits = words.filter((w) => own.includes(w)).length;
+          if (!hits) continue;
+          // Same kind first; then plain ones (no enchantment, no "of …"), shortest name.
+          const score = hits * 100 + (sig === ITEM_TEMPLATE_SIG[kind] ? 50 : 0) - (/^ench/i.test(s.editorId ?? '') || / of /i.test(s.name) ? 40 : 0) - s.name.length;
+          if ((!best || score > best.score) && hasModel(this.ws.view(s.formKey)?.data)) best = { key: s.formKey, score };
+        }
+      }
+      if (best) return best.key;
+    }
     for (const sig of [ITEM_TEMPLATE_SIG[kind], 'MISC']) {
       const hit = this.ws
         .search({ sigs: [sig], limit: 100_000 })
-        .items.find((s) => !s.deleted && (this.ws.view(s.formKey)?.data as any)?.model?.file);
+        .items.find((s) => !s.deleted && hasModel(this.ws.view(s.formKey)?.data));
       if (hit) return hit.formKey;
     }
     return undefined;
@@ -321,7 +346,7 @@ export class QuestBuilder {
         continue;
       }
       const based = i.basedOn ? this.characters.findLoose([ITEM_TEMPLATE_SIG[i.kind]], i.basedOn) ?? this.characters.findLoose(ITEM_SIGS, i.basedOn) : undefined;
-      const t = based ?? this.itemTemplate(i.kind);
+      const t = based ?? this.itemTemplate(i.kind, i.name);
       out.push(t ? { kind: 'item', key: i.key, name: i.name, existing: null, template: t, text: `New, copied from ${this.label(t)}${i.basedOn && !based ? ` (no “${i.basedOn}” found)` : ''}` } : { kind: 'item', key: i.key, name: i.name, existing: null, template: null, text: 'No item to copy from', error: `${i.name}: there's no item in the load order to copy` });
     }
     return out;
@@ -641,6 +666,9 @@ export class QuestBuilder {
     if (s.placedItems.has(key)) return this.graphs.aliasFor(quest, s.placedItems.get(key)!);
     if (s.inContainer.has(key)) return this.graphs.itemInContainerAlias(quest, s.items.get(key)!, s.inContainer.get(key)!);
     if (s.cells.has(key)) return this.graphs.aliasFor(quest, this.graphs.markerIn(quest, s.cells.get(key)!));
+    // A group of enemies: the marker points at the first of them.
+    const enemies = s.encounters.get(key);
+    if (enemies?.length) return this.graphs.aliasFor(quest, enemies[0]!);
     return undefined;
   }
 
@@ -1560,6 +1588,8 @@ export class QuestBuilder {
       item,
       (d: any) => {
         d.name = i.name;
+        // Scripts belong to the original's quest (a quest item copied for its looks), not this one.
+        delete d.scripts;
         if (d.data && i.value !== null) d.data = { ...d.data, value: Math.max(0, Math.round(i.value)) };
         if (this.ws.summary(item)?.sig === 'BOOK') d.text = `<p align="center">${i.name}</p>`;
       },
@@ -1567,7 +1597,8 @@ export class QuestBuilder {
     );
     const sig = this.ws.summary(item)?.sig;
     report.created.push({ kind: 'item', formKey: item, label: `${i.name} (${editorId}), copied from ${this.label(template)}` });
-    if (sig !== ITEM_TEMPLATE_SIG[i.kind]) report.notes.push(`${i.name} should be a ${i.kind} but there's none to copy, so it's a misc item.`);
+    if (sig === 'MISC' && ITEM_TEMPLATE_SIG[i.kind] !== 'MISC') report.notes.push(`${i.name} should be a ${i.kind} but there's none to copy, so it's a misc item.`);
+    else if (sig !== ITEM_TEMPLATE_SIG[i.kind]) report.notes.push(`${i.name} is copied from ${this.label(template)}, the closest item by name, so it looks like one.`);
     if (sig === 'BOOK') report.notes.push(`${i.name}: write the book's text in the Objects tab.`);
     return item;
   }

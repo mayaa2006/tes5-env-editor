@@ -21,6 +21,8 @@ import {
   describePackage,
   exampleQuestPlan,
   fieldHint,
+  keepAskedChanges,
+  newWhenRenamed,
   pickPlanExample,
   planCatalog,
   repairPlan,
@@ -60,6 +62,104 @@ describe('quest plan', () => {
     expect(msgs).toContain('A step sets stage 300, which doesn\'t exist');
     expect(msgs.some((m) => /Kill the ring.*character key/.test(m))).toBe(true);
     expect(msgs).toContain('The key "eirik" is used twice');
+  });
+});
+
+describe('plans that would get stuck', () => {
+  const messages = (p: ReturnType<typeof exampleQuestPlan>) => validatePlan(p).map((i) => i.message);
+
+  it('a talk step that no line of dialogue sets', () => {
+    const plan = exampleQuestPlan();
+    // Eirik's step "tells the player where the ring is" is a talk step, but none of his lines has [stage 15].
+    plan.stages.push({ index: 15, journal: 'Eirik told me where the ring is.', startsQuest: false, completesQuest: false, failsQuest: false });
+    plan.steps.push({ from: 10, to: 15, kind: 'talk', targetKey: null, note: 'Eirik tells the player where the ring is' });
+    expect(messages(plan)).toContain('Nothing moves the quest to stage 15: “Eirik tells the player where the ring is” happens in a conversation, but no line has [stage 15]. Add [stage 15] to the line that does it');
+    plan.conversations[1]!.screenplay += '\nPLAYER: Where is it? [if stage 10]\nEIRIK: Under the table. [stage 15]';
+    expect(messages(plan).filter((m) => m.includes('stage 15'))).toEqual([]);
+  });
+
+  it('an item the player has to hand over but never gets, or loses on the way', () => {
+    const plan = exampleQuestPlan();
+    expect(validatePlan(plan).filter((i) => /^The player (needs|loses)/.test(i.message))).toEqual([]);
+    // The ring is Eirik's and nobody gives it to the player, yet Brynja takes it from them.
+    plan.items[0] = { ...plan.items[0]!, startsWith: 'character', startsAtKey: 'eirik', spot: null };
+    plan.steps = plan.steps.filter((st) => st.kind !== 'pickup');
+    expect(messages(plan)).toContain("The player needs Brynja's Ring ([takes ring] or [if has ring]) but never gets it: put it somewhere to pick up (startsWith \"location\" and a pickup step), have its owner hand it over with [gives ring x1], or give it as a reward");
+    // Eirik hands it over: fine.
+    plan.conversations[1]!.screenplay += '\nPLAYER: Give me the ring. [if stage 10]\nEIRIK: Fine. [gives ring x1] [stage 20]';
+    expect(messages(plan).filter((m) => m.startsWith('The player needs'))).toEqual([]);
+    // Eirik takes it back on a line that doesn't move the quest on: the player can't finish.
+    plan.conversations[1]!.screenplay += "\nPLAYER: Here, hold this. [if stage 20]\nEIRIK: Thanks. [takes ring x1]";
+    expect(messages(plan).some((m) => m.startsWith("The player loses Brynja's Ring when Eirik takes it (Eirik, line"))).toBe(true);
+  });
+});
+
+describe('plans that would play wrong', () => {
+  it('a line that lets the player talk their way past something they should do', () => {
+    const plan = exampleQuestPlan();
+    plan.conversations[0]!.screenplay += '\nPLAYER: Never mind the ring.\nBRYNJA: Fine, call it found. [stage 20] [goodbye]';
+    expect(validatePlan(plan).map((i) => i.message)).toContain('A line in “Brynja” sets stage 20, which “The player finds the ring” is meant to reach, so the player can skip it by talking. Take out that [stage 20], or add a talk step if saying it should count');
+  });
+
+  it('a journal entry on the first stage of a quest that runs from the start', () => {
+    const plan = exampleQuestPlan();
+    expect(validatePlan(plan).filter((i) => i.message.startsWith('The quest starts with the game, so stage'))).toEqual([]);
+    plan.stages[0]!.journal = 'I arrived at the tavern.';
+    expect(validatePlan(plan).map((i) => i.message)).toContain("The quest starts with the game, so stage 0's journal entry shows in the journal from the very start, before the player has met anyone. Leave it empty and write the entry on the stage where the quest is given");
+  });
+
+  it('a new character planned as an existing one with another name is made new, copied from them', async () => {
+    const { ws } = await setup();
+    const plan = exampleQuestPlan();
+    plan.characters[1] = { ...plan.characters[1]!, existing: 'DemoBlacksmith', basedOn: null };
+    expect(newWhenRenamed(ws, plan, 'A new traveller called Eirik saw the ring fall.')).toEqual(['Eirik is a new character, copied from Halvar the Smith (DemoBlacksmith)']);
+    expect(plan.characters[1]).toMatchObject({ existing: null, basedOn: 'DemoBlacksmith' });
+    expect(plan.assumptions.at(-1)).toBe('Eirik is a new character, copied from Halvar the Smith (DemoBlacksmith)');
+    // Named like them: kept.
+    plan.characters[1] = { ...plan.characters[1]!, name: 'Halvar', existing: 'DemoBlacksmith', basedOn: null };
+    expect(newWhenRenamed(ws, plan, 'Halvar saw the ring fall.')).toEqual([]);
+    expect(plan.characters[1]!.existing).toBe('DemoBlacksmith');
+  });
+});
+
+describe('changes to characters already in the game', () => {
+  const text = "Hulda at the Bannered Mare has lost her mother's ring. The player brings it back to Hulda, who pays 100 gold.";
+  const existing = () => {
+    const plan = exampleQuestPlan();
+    plan.characters[0] = {
+      ...plan.characters[0]!,
+      existing: 'Hulda',
+      sex: 'female',
+      race: 'NordRace',
+      voice: 'FemaleNord',
+      essential: true,
+      className: 'VendorPawnbroker',
+      level: 10,
+      factions: [{ faction: 'ServicesWhiterunBanneredMare', rank: 0 }],
+      routine: [
+        { activity: 'sandbox', where: null, hours: null, fromStage: null, untilStage: null, line: null },
+        { activity: 'forcegreet', where: null, hours: null, fromStage: 20, untilStage: null, line: 'You found it?' },
+      ],
+      roles: { follower: false, marriage: false, innkeeper: true, merchant: null, trainer: null },
+      relationships: [{ with: 'player', rank: 'friend' }],
+    };
+    return plan;
+  };
+
+  it('a free AI only changes what the text asks for; quest behaviour stays', () => {
+    const plan = existing();
+    expect(keepAskedChanges(plan, text)).toEqual(['Brynja']);
+    expect(plan.characters[0]).toMatchObject({ sex: null, race: null, voice: null, essential: null, className: null, level: null, factions: [], roles: null, relationships: [] });
+    expect(plan.characters[0]!.routine.map((r) => r.activity)).toEqual(['forcegreet']);
+    expect(plan.assumptions.at(-1)).toBe("Left as they are in the game, since the text doesn't ask to change them: Brynja");
+    // New characters keep everything.
+    expect(plan.characters[1]!.outfit).not.toBeNull();
+  });
+
+  it('keeps what the text does ask for', () => {
+    const plan = existing();
+    keepAskedChanges(plan, `${text} Make Hulda essential and level 30, and she's friends with the player.`);
+    expect(plan.characters[0]).toMatchObject({ essential: true, level: 10, relationships: [{ with: 'player', rank: 'friend' }], className: null, roles: null });
   });
 });
 
@@ -195,6 +295,14 @@ describe('quest builder', () => {
     // A skill that isn't one is caught before building.
     plan.rewards[0]!.skill = { skill: 'Juggling', levels: 1 };
     expect(validatePlan(plan).map((i) => i.message)).toContain('A reward trains “Juggling”, which isn\'t a skill (try Archery, One-handed, Speech, Destruction…)');
+  });
+
+  it('copies a new item from one named like it, so it looks the part', async () => {
+    const { builder } = await setup();
+    const plan = exampleQuestPlan();
+    plan.items[0] = { ...plan.items[0]!, name: "Brynja's Old Bowl", basedOn: null };
+    const res = builder.resolve(plan).find((r) => r.kind === 'item')!;
+    expect(res.text).toBe('New, copied from Bowl (DemoBowl)');
   });
 
   it('follows quest items characters carry: taken from their body, handed over, delivered', async () => {
@@ -573,8 +681,10 @@ describe('quest builder', () => {
     plan.encounters = [{ key: 'guards', what: 'Town Guard', count: 3, locationKey: 'tavern', spot: null }];
     plan.stages.push({ index: 30, journal: 'I fought off the guards.', startsQuest: false, completesQuest: false, failsQuest: false });
     plan.steps.push({ from: 20, to: 30, kind: 'clear', targetKey: 'guards', note: 'Defeat the guards' });
+    plan.objectives.push({ index: 25, text: 'Defeat the guards', shownAtStage: 20, completedAtStage: 30, targetKey: 'guards' });
     expect(validatePlan(plan)).toEqual([]);
     const r = await builder.build(plan);
+    expect(r.notes.filter((n) => /no quest marker/.test(n))).toEqual([]);
     const tavern = ws.byEditorId('DemoTavern')!;
     const guards = world.references(tavern).filter((x) => x.sig === 'ACHR' && x.base === ws.byEditorId('DemoGuard') && x.source === 'Built.esp');
     expect(guards).toHaveLength(3);

@@ -20,7 +20,7 @@ import type { FormKey } from '@tes5/esp';
 import { GESTURES } from './gestures';
 import { z } from 'zod';
 import type { JournalContext, JournalDraft } from './journal';
-import { PLAN_EVENT_KINDS, QuestPlanSchema, normalizePlan, repairPlan, validatePlan, type PlanIssue, type QuestPlan } from './questplan';
+import { PLAN_EVENT_KINDS, QuestPlanSchema, keepAskedChanges, normalizePlan, repairPlan, validatePlan, type PlanIssue, type QuestPlan } from './questplan';
 import { lintScreenplay } from './dialoguelint';
 import { aiName, chatSend, type AiProvider } from './aiproviders';
 import { WorldService } from './world';
@@ -118,9 +118,17 @@ const MODES: Record<PlannerMode, string> = {
 
 const STOPWORDS = new Set('the and for with that this from they them their there then than what when where which who will would into onto your you she her his him has have had was were are not but all any can out its our over under about after before again also just like more most some such only very been being does did done each find give gives take takes make makes said says player quest'.split(' '));
 
-/** The words in a text, lower case, without short and common ones. */
+/** One word, plural or not: wolves → wolf, bandits → bandit, berries → berry. */
+function stem(w: string): string {
+  if (w.length > 4 && w.endsWith('ves')) return `${w.slice(0, -3)}f`;
+  if (w.length > 4 && w.endsWith('ies')) return `${w.slice(0, -3)}y`;
+  return w.length > 3 && w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w;
+}
+
+/** The words in a text, lower case, without short and common ones (and the singular of each plural). */
 export function textWords(text: string): Set<string> {
-  return new Set((text.toLowerCase().match(/[a-z][a-z']{2,}/g) ?? []).map((w) => w.replace(/'s$/, '')).filter((w) => !STOPWORDS.has(w)));
+  const words = (text.toLowerCase().match(/[a-z][a-z']{2,}/g) ?? []).map((w) => w.replace(/'s$/, '')).filter((w) => !STOPWORDS.has(w));
+  return new Set(words.flatMap((w) => [w, stem(w)]));
 }
 
 /** "WhiterunBanneredMare" "The Bannered Mare" → whiterun, bannered, mare. */
@@ -145,8 +153,43 @@ function everyday(editorId?: string): number {
 function relevance(text: string, words: Set<string>, name?: string, editorId?: string): number {
   let score = 0;
   for (const n of [name, editorId]) if (n && n.length > 2 && text.includes(n.toLowerCase())) score += 10;
-  for (const w of entryWords(name, editorId)) if (words.has(w)) score += 1;
+  for (const w of entryWords(name, editorId)) if (words.has(w) || words.has(stem(w))) score += 1;
   return score;
+}
+
+/**
+ * "A new farmer called Eirik" planned as an existing character with another name (WEDL14Farmer, "Farmer") the text
+ * never mentions: the AI meant someone like them, so it becomes a new character copied from them rather than a
+ * renamed one from the game. Returns what was changed, in words (also added to the plan's assumptions).
+ */
+export function newWhenRenamed(ws: Workspace, plan: QuestPlan, text: string): string[] {
+  const out: string[] = [];
+  for (const c of plan.characters ?? []) {
+    if (!c.existing) continue;
+    const want = c.existing.toLowerCase();
+    const key = ws.byEditorId(c.existing) ?? ws.search({ sigs: ['NPC_'], query: c.existing, limit: 200 }).items.find((i) => i.name?.toLowerCase() === want)?.formKey;
+    const npc = key ? ws.summary(key) : undefined;
+    if (!npc || npc.sig !== 'NPC_') continue;
+    // Kept when the names share a word, or the text names them (a unique character, by their full name, capitalised).
+    const theirs = entryWords(npc.name, npc.editorId);
+    const unique = ((ws.view(key!)?.data as { config?: { flags?: number } } | undefined)?.config?.flags ?? 0) & 0x20;
+    const named = !!npc.name && new RegExp(`\\b${npc.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(text); // as a name: "Hulda", not "a farmer"
+    if (entryWords(c.name).some((w) => theirs.includes(w)) || (unique && named)) continue;
+    out.push(`${c.name} is a new character, copied from ${npc.name ?? npc.editorId} (${npc.editorId ?? key})`);
+    c.basedOn = c.existing;
+    c.existing = null;
+  }
+  if (out.length) plan.assumptions = [...(plan.assumptions ?? []), ...out];
+  return out;
+}
+
+/**
+ * What planning does to the characters in an AI's plan before anyone sees it: new characters planned as renamed
+ * existing ones become new, and (for a free AI) changes the text doesn't ask for to characters already in the game
+ * are taken out. Both go in the plan's assumptions.
+ */
+export function settleCharacters(ws: Workspace, plan: QuestPlan, text: string, free: boolean): string[] {
+  return [...newWhenRenamed(ws, plan, text), ...(free ? keepAskedChanges(plan, text).map((n) => `Left ${n} as they are`) : [])];
 }
 
 /**
@@ -384,7 +427,7 @@ export class QuestPlanner {
   /** Change a plan as the author describes; returns the whole new plan. */
   async revise(plan: QuestPlan, feedback: string, catalog: string, source?: string): Promise<QuestPlan> {
     if (!feedback.trim()) throw new WorkspaceError('Say what to change');
-    return this.run(
+    return this.run<QuestPlan>(
       this.request(
         [
           { role: 'user', content: source?.trim() ? `${MODES.document}\n\n<source>\n${source.trim()}\n</source>` : 'Plan a quest.' },
@@ -501,7 +544,7 @@ function planBrief(plan: QuestPlan, source: string): string {
 
 /** Problems worth one more round with the AI: errors, and gaps that leave the quest stuck. */
 function blockingIssues(issues: PlanIssue[]): PlanIssue[] {
-  return issues.filter((i) => i.severity === 'error' || /^(Nothing moves the quest|Nothing starts the quest|No stage completes|The player needs)/.test(i.message));
+  return issues.filter((i) => i.severity === 'error' || /^(Nothing moves the quest|Nothing starts the quest|No stage completes|The player needs|The player loses|A line in .* sets stage|The quest starts with the game, so stage)/.test(i.message));
 }
 
 const JournalDraftSchema = z.object({

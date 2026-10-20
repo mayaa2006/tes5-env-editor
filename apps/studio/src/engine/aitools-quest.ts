@@ -6,7 +6,7 @@
  */
 import { z } from 'zod';
 import type { FormKey } from '@tes5/esp';
-import { QuestPlanSchema, QuestPlanner, WorkspaceError, lintScreenplay, planCatalog, validatePlan, type AgentTool, type AiProvider, type PlanIssue, type PlanResolution, type QuestPlan } from '@tes5/workspace';
+import { QuestPlanSchema, QuestPlanner, WorkspaceError, lintScreenplay, planCatalog, settleCharacters, validatePlan, type AgentTool, type AiProvider, type PlanIssue, type PlanResolution, type QuestPlan } from '@tes5/workspace';
 import type { EngineHost } from './host';
 
 /** How much of the load order the planner lists: everything for Claude, less for a free AI (it reads it slowly). */
@@ -89,6 +89,7 @@ export function questTools(host: EngineHost, ctx: QuestToolContext): AgentTool<a
       summary: () => 'Plan a quest',
       run: async (i) => {
         const plan = await planner().plan(i.text, i.mode ?? 'document', catalog(i.text));
+        settleCharacters(ws(), plan, i.text, ctx.ai.kind !== 'claude');
         const id = keep(plan, { source: i.text });
         return { data: review(id), note: `Planned “${plan.title}”` };
       },
@@ -103,6 +104,7 @@ export function questTools(host: EngineHost, ctx: QuestToolContext): AgentTool<a
       run: async (i) => {
         const p = planOf(i.planId);
         const next = await planner().revise(p.plan, i.change, catalog(`${p.source ?? ''}\n${i.change}`), p.source);
+        settleCharacters(ws(), next, `${p.source ?? ''}\n${i.change}`, ctx.ai.kind !== 'claude');
         const id = keep(next, { source: p.source, quest: p.quest });
         return { data: review(id) };
       },

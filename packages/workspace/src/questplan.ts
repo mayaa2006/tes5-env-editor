@@ -331,6 +331,53 @@ export function repairPlan(plan: QuestPlan): string[] {
   return changes;
 }
 
+/** Words that show the author asked to change this about a character who's already in the game. */
+const ASKED: { field: keyof PlanCharacter; words: RegExp; what: string }[] = [
+  { field: 'sex', words: /\b(sex|gender)\b/i, what: 'sex' },
+  { field: 'race', words: /\b(race|nord|imperial|breton|redguard|elf|elven|orc|argonian|khajiit)\b/i, what: 'race' },
+  { field: 'voice', words: /\bvoice/i, what: 'voice' },
+  { field: 'essential', words: /\b(essential|immortal|protected|unkillable|killable|mortal|can'?t die|cannot die|can'?t be killed|can be killed)\b/i, what: 'whether they can die' },
+  { field: 'className', words: /\bclass\b/i, what: 'class' },
+  { field: 'level', words: /\blevel/i, what: 'level' },
+  { field: 'outfit', words: /\b(wear\w*|dress\w*|cloth\w*|outfit|armou?r|robes?)\b/i, what: 'clothes' },
+  { field: 'inventory', words: /\b(carr\w+|holds?|inventory|pocket\w*)\b/i, what: 'what they carry' },
+  { field: 'factions', words: /\b(factions?|members?|joins?|guild|belongs?|ranks?)\b/i, what: 'factions' },
+  { field: 'combat', words: /\b(fight\w*|attack\w*|hostile|combat|skills?|spells?|perks?|archer|mage|warrior)\b/i, what: 'how they fight' },
+  { field: 'roles', words: /\b(follower|companion|marr\w+|merchant|sells?|shop\w*|trainer|trains?|teach\w*|innkeeper|rents?)\b/i, what: 'roles' },
+  { field: 'relationships', words: /\b(friends?|enem(y|ies)|rivals?|lovers?|ally|allies|hates?|loves?|relationships?|likes?|dislikes?)\b/i, what: 'relationships' },
+  { field: 'look', words: /\b(hair|beard|eyes?|scar\w*|tall|thin|fat|heavy|muscular|looks?|appearance|face|bald)\b/i, what: 'look' },
+  { field: 'routine', words: /\b(routine|schedule|sleeps?|eats?|works? (at|in)|spends?|wanders?|patrols?)\b/i, what: 'daily routine' },
+];
+
+/**
+ * A free AI tends to fill in every field of a character who's already in the game (copying what the load-order list
+ * says about them), which would override them in the author's plugin. Changes the author's text doesn't ask for are
+ * taken out: a field is kept only when the text talks about that kind of thing. Quest behaviour on stages (follow,
+ * walk up and speak, anything from or until a stage) is kept: it lives on the quest. Returns who was left as they are.
+ */
+export function keepAskedChanges(plan: QuestPlan, text: string): string[] {
+  const out: string[] = [];
+  for (const c of plan.characters ?? []) {
+    if (!c.existing) continue;
+    const left: string[] = [];
+    for (const a of ASKED) {
+      const v = c[a.field];
+      const set = Array.isArray(v) ? v.length > 0 : v !== null && v !== undefined;
+      if (!set || a.words.test(text)) continue;
+      if (a.field === 'routine') {
+        const quest = c.routine.filter((r) => r.fromStage !== null || r.untilStage !== null || r.activity === 'follow' || r.activity === 'forcegreet');
+        if (quest.length === c.routine.length) continue;
+        c.routine = quest;
+      } else (c as Record<string, unknown>)[a.field] = Array.isArray(v) ? [] : null;
+      left.push(a.what);
+    }
+    if (left.length) out.push(c.name);
+  }
+  const note = 'Left as they are in the game, since the text doesn\'t ask to change them: ';
+  if (out.length) plan.assumptions = [...(plan.assumptions ?? []).filter((a) => !a.startsWith(note)), `${note}${out.join(', ')}`];
+  return out;
+}
+
 export interface PlanIssue {
   severity: 'error' | 'warning';
   message: string;
@@ -457,9 +504,20 @@ export function validatePlan(input: QuestPlan): PlanIssue[] {
         : `Nothing moves the quest to stage ${st.index}: add a step, or a [stage ${st.index}] tag on a line of dialogue`,
     );
   }
+  // A line that sets a stage the plan reaches by something the player does (killing, picking up, arriving…)
+  // lets them talk their way past it, unless the plan also says talking does it.
+  for (const st of plan.steps ?? []) {
+    if (st.kind === 'talk' || !said.has(st.to) || (plan.steps ?? []).some((x) => x.kind === 'talk' && x.to === st.to)) continue;
+    const c = (plan.conversations ?? []).find((x) => new RegExp(`\\[stage\\s+${st.to}\\]`, 'i').test(x.screenplay));
+    warn(`A line in “${c?.title ?? 'a conversation'}” sets stage ${st.to}, which “${st.note || st.kind}” is meant to reach, so the player can skip it by talking. Take out that [stage ${st.to}], or add a talk step if saying it should count`);
+  }
+  // A quest running from the start shows its first journal entry before the player has met anyone.
+  const first = ordered.find((x) => x.startsQuest) ?? ordered[0];
+  if (plan.startsWithGame && first?.journal.trim() && !first.completesQuest)
+    warn(`The quest starts with the game, so stage ${first.index}'s journal entry shows in the journal from the very start, before the player has met anyone. Leave it empty and write the entry on the stage where the quest is given`);
   // Items the player has to have ([takes …], [if has …]) must reach them somehow.
   const lines = (plan.conversations ?? []).map((c) => c.screenplay).join('\n');
-  const tagged = (verbs: string, i: PlanItem) => [i.key, i.name].some((n) => n && new RegExp(`\\[(?:${verbs})\\s+${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s*[x×]\\s*\\d+)?\\]`, 'i').test(lines));
+  const tagged = (verbs: string, i: PlanItem, text = lines) => [i.key, i.name].some((n) => n && new RegExp(`\\[(?:${verbs})\\s+${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s*[x×]\\s*\\d+)?\\]`, 'i').test(text));
   for (const i of plan.items ?? []) {
     if (i.kind === 'gold' || !tagged('takes|if\\s+has', i)) continue;
     const gets =
@@ -473,6 +531,16 @@ export function validatePlan(input: QuestPlan): PlanIssue[] {
         `The player needs ${i.name} ([takes ${i.key}] or [if has ${i.key}]) but never gets it: put it somewhere to pick up (startsWith "location" and a pickup step), have its owner hand it over with [gives ${i.key} x1], or give it as a reward`,
       );
   }
+  // A quest item taken on a line that doesn't move the quest on is gone for the rest of the quest.
+  for (const c of plan.conversations ?? [])
+    for (const [n, line] of c.screenplay.split(/\r?\n/).entries()) {
+      if (/\[stage\s+-?\d+\]/i.test(line)) continue;
+      const speaker = /^\s*([^:[\]]+?)\s*:/.exec(line)?.[1]?.toLowerCase();
+      const who = (plan.characters ?? []).find((x) => x.key.toLowerCase() === speaker || x.name.toLowerCase() === speaker)?.name ?? speaker ?? 'someone';
+      for (const i of plan.items ?? [])
+        if (i.kind !== 'gold' && tagged('takes', i, line))
+          warn(`The player loses ${i.name} when ${who} takes it (${c.title}, line ${n + 1}) on a line that doesn't move the quest on, so they won't have it for the rest of the quest. Add the [stage N] that line leads to, or take out [takes ${i.key}]`);
+    }
   // The conversations, as they'll be imported.
   const speakers = (plan.characters ?? []).flatMap((c) => [c.key, c.name, ...(c.existing ? [c.existing] : [])]);
   for (const c of plan.conversations ?? [])

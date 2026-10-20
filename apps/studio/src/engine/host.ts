@@ -31,6 +31,7 @@ import {
   QuestBuilder,
   QuestPlanner,
   exampleQuestPlan,
+  settleCharacters,
   planCatalog,
   validatePlan,
   type PlannerMode,
@@ -1235,6 +1236,7 @@ export class EngineHost {
   async planQuest(source: string, mode: PlannerMode, ai: AiProvider | string) {
     const a = await this.resolveAi(ai);
     const plan = await new QuestPlanner({ ai: a }).plan(source, mode, planCatalog(this.requireWs(), { text: source, ...catalogLimits(a) }));
+    settleCharacters(this.requireWs(), plan, source, a.kind !== 'claude');
     return { plan, ...this.reviewQuestPlan(plan) };
   }
 
@@ -1243,6 +1245,7 @@ export class EngineHost {
     const a = await this.resolveAi(ai);
     const text = `${source ?? ''}\n${feedback}\n${plan.characters.map((c) => `${c.name} ${c.existing ?? ''}`).join('\n')}\n${plan.locations.map((l) => `${l.name} ${l.existing ?? ''}`).join('\n')}`;
     const next = await new QuestPlanner({ ai: a }).revise(plan, feedback, planCatalog(this.requireWs(), { text, ...catalogLimits(a) }), source);
+    settleCharacters(this.requireWs(), next, `${source ?? ''}\n${feedback}`, a.kind !== 'claude');
     return { plan: next, ...this.reviewQuestPlan(next) };
   }
 

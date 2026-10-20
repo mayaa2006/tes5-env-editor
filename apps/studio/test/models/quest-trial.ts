@@ -4,7 +4,7 @@
  * then the quest that was built is examined.
  *
  *   SKYRIM_DATA=<Data folder> npx tsx apps/studio/test/models/quest-trial.ts <base url> <model> [--only id,id] [--minutes N] [--done results.jsonl] [--plans DIR]
- *   SKYRIM_DATA=<Data folder> npx tsx apps/studio/test/models/quest-trial.ts --rebuild DIR [--only id,id]
+ *   SKYRIM_DATA=<Data folder> npx tsx apps/studio/test/models/quest-trial.ts --rebuild DIR [--only id,id] [--as-planned]
  *
  * Checks: a quest was built; the quest map's problems (stages nothing reaches, nothing starting or
  * completing it…); dialogue errors; every script the build wrote, through the editor's Papyrus checker;
@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { NodeFileSystem, NodeProcessRunner } from '@tes5/workspace/node';
-import type { AiProvider, QuestPlan } from '@tes5/workspace';
+import { settleCharacters, validatePlan, type AiProvider, type QuestPlan } from '@tes5/workspace';
 import { decodeRecord, parsePlugin, type FormKey } from '@tes5/esp';
 import { EngineHost } from '../../src/engine/host';
 
@@ -136,16 +136,20 @@ if (rebuild) {
     if (only && !only.some((o) => id.startsWith(o))) continue;
     const plan = JSON.parse(readFileSync(join(rebuild, f), 'utf8')) as QuestPlan;
     const h = await game(id);
+    // --as-planned: what planning does to a free AI's answer now (for plans saved by an older version).
+    const text = QUESTS.find((q) => id.startsWith(q.id))?.text;
+    const mended = args.includes('--as-planned') && text ? settleCharacters(h.ws!, plan, text, true) : [];
+    const issues = validatePlan(plan).map((x) => `${x.severity}: ${x.message}`);
     const before = modScripts(h);
     const t0 = Date.now();
     let built: Record<string, unknown> = {};
     try {
       const r = await h.buildQuestPlan(plan);
-      built = { warnings: r.warnings, notes: r.notes.slice(0, 10), created: r.created.length };
+      built = { warnings: r.warnings, notes: r.notes.slice(0, 12), created: r.created.map((c) => c.label).slice(0, 25), changed: r.changed.map((c) => `${c.label}: ${c.changes.join(', ')}`) };
     } catch (e) {
       built = { error: (e as Error).message.slice(0, 400) };
     }
-    console.log(JSON.stringify({ plan: id, seconds: Math.round((Date.now() - t0) / 1000), build: built, ...(await inspect(h, before)) }));
+    console.log(JSON.stringify({ plan: id, seconds: Math.round((Date.now() - t0) / 1000), mended, issues, build: built, ...(await inspect(h, before)) }));
   }
   process.exit(0);
 }
