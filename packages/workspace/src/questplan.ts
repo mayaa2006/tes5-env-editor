@@ -762,6 +762,12 @@ export function validatePlan(input: QuestPlan): PlanIssue[] {
     };
     for (const t of parseScreenplay(c.screenplay).topics) visit(t, false);
   }
+  // Lines nobody prompts (a scene, greetings) all play: two endings set there both happen.
+  for (const c of plan.conversations ?? [])
+    for (const b of parseScreenplay(c.screenplay).blocks) {
+      const sets = [...new Set(b.lines.map((l) => Number(l.tags.stage)).filter((n) => Number.isFinite(n) && n > 0))];
+      if (sets.length > 1) warn(`${b.kind === 'scene' ? `The scene “${b.title}”` : `The ${b.kind} lines`} in “${c.title}” set stages ${sets.join(' and ')}: lines nobody prompts all play, so all of it happens. Put choices on PLAYER lines instead`);
+    }
   // A quest running from the start shows its first journal entry before the player has met anyone.
   const first = ordered.find((x) => x.startsQuest) ?? ordered[0];
   if (plan.startsWithGame && first?.journal.trim() && !first.completesQuest)

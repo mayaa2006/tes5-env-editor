@@ -122,6 +122,11 @@ function parseTags(text: string): { text: string; tags: Record<string, string> }
   return { text: clean, tags };
 }
 
+/** Lines in a row by one speaker are one answer: two stages set there would lose the first (and do both lines' rest). */
+function twoStages(who: string, first: string, then: string): string {
+  return `${who}'s lines in a row are said as one answer, but they set two stages (${first}, then ${then}), so only the last would count while both lines' gifts and rewards happen. If they're alternatives, give each its own PLAYER line to choose`;
+}
+
 export function parseScreenplay(source: string): ParsedScreenplay {
   const topics: ScriptPlayerLine[] = [];
   const errors: ParsedScreenplay['errors'] = [];
@@ -177,6 +182,7 @@ export function parseScreenplay(source: string): ParsedScreenplay {
       const prev = current.lines[current.lines.length - 1];
       if (current.kind === 'scene' && prev && prev.speaker.toLowerCase() === who.toLowerCase()) {
         if (text) prev.lines.push(text);
+        if (tags.stage && prev.tags.stage && tags.stage !== prev.tags.stage) errors.push({ line: lineNo, message: twoStages(who, prev.tags.stage, tags.stage) });
         Object.assign(prev.tags, tags);
       } else current.lines.push({ kind: 'npc', line: lineNo, indent, speaker: who, lines: text ? [text] : [], tags, choices: [] });
       return;
@@ -191,6 +197,7 @@ export function parseScreenplay(source: string): ParsedScreenplay {
     const last = parent.responses[parent.responses.length - 1];
     if (last && last.speaker.toLowerCase() === who.toLowerCase() && !last.choices.length && last.indent === indent && !('persuade' in parent.tags)) {
       if (text) last.lines.push(text);
+      if (tags.stage && last.tags.stage && tags.stage !== last.tags.stage) errors.push({ line: lineNo, message: twoStages(who, last.tags.stage, tags.stage) });
       Object.assign(last.tags, tags);
       return;
     }

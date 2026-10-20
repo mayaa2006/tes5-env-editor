@@ -237,6 +237,17 @@ describe('plans that would play wrong', () => {
     expect(validatePlan(plan).map((i) => i.message)).toContain('A line in “Brynja” sets stage 20, which “The player finds the ring” is meant to reach, so the player can skip it by talking. Take out that [stage 20], or add a talk step if saying it should count');
   });
 
+  it('two endings in lines nobody chooses between', () => {
+    const plan = exampleQuestPlan();
+    plan.stages.push({ index: 110, journal: 'Brynja trained me instead.', startsQuest: false, completesQuest: true, failsQuest: false });
+    // One speaker's lines in a row are one answer: only the last stage would count, and both gifts would happen.
+    const answer = plan.conversations[0]!.screenplay.replace('[stage 100] [emotion happy] [goodbye]', '[stage 100]\nBRYNJA: Or I could train you. [skill Speech x1] [stage 110] [goodbye]');
+    expect(validatePlan({ ...plan, conversations: [{ ...plan.conversations[0]!, screenplay: answer }, plan.conversations[1]!] }).some((i) => i.severity === 'error' && /BRYNJA's lines in a row are said as one answer, but they set two stages \(100, then 110\)/.test(i.message))).toBe(true);
+    // A scene plays every line: both would happen.
+    plan.conversations[0]!.screenplay += '\nSCENE: Reward [at stage 20]\nBRYNJA: Here, gold. [stage 100]\nEIRIK: Or training. [stage 110]';
+    expect(validatePlan(plan).map((i) => i.message)).toContain('The scene “Reward” in “Brynja” set stages 100 and 110: lines nobody prompts all play, so all of it happens. Put choices on PLAYER lines instead');
+  });
+
   it('a journal entry on the first stage of a quest that runs from the start', () => {
     const plan = exampleQuestPlan();
     expect(validatePlan(plan).filter((i) => i.message.startsWith('The quest starts with the game, so stage'))).toEqual([]);
