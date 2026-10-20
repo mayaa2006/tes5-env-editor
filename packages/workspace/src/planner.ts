@@ -423,7 +423,8 @@ export class QuestPlanner {
         notes.push(`The directions in ${title}'s conversations weren't turned into tags (the AI's answer didn't come back right): check what their lines do`);
       }
       // What the directions say outright, where the AI said nothing.
-      notes.push(...directionTags(blocks, plan).map((t) => `From your direction: ${t}`));
+      const earlier = [...context.matchAll(/choices it remembers: ([^;]+);/g)].flatMap((m) => m[1]!.split(/,\s*/)).filter((c) => c && c !== 'none');
+      notes.push(...directionTags(blocks, plan, earlier).map((t) => `From your direction: ${t}`));
       made.push({ title, screenplay: writtenScreenplay(structuredClone(blocks)) });
     }
     if (stuck.length && !made.length) return;

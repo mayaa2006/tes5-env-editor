@@ -300,7 +300,7 @@ type DirectionPlan = {
  * attacks", "leaves for good"; a heading like "Right after the player takes the job" or "When the player comes back
  * with all three pages" says the stage its block is offered at. Returns what was added, in words.
  */
-export function directionTags(blocks: WrittenBlock[], plan: DirectionPlan): string[] {
+export function directionTags(blocks: WrittenBlock[], plan: DirectionPlan, choices: string[] = []): string[] {
   const out: string[] = [];
   const ends = plan.stages.filter((st) => st.completesQuest && !st.failsQuest);
   const steps = (plan.steps ?? []).filter((st) => typeof st.to === 'number');
@@ -338,9 +338,19 @@ export function directionTags(blocks: WrittenBlock[], plan: DirectionPlan): stri
       l.tags = l.tags.filter((t) => !wrong.includes(t));
       misplaced.push(...wrong.map((t) => /^\[remember\s+([^\]\s]+)/i.exec(t)![1]!));
     }
+  // Choices remembered here or in earlier quests, for "only if the player promised Hesta in Quest 1".
+  const known = [...new Set([...choices, ...lines.flatMap((l) => l.tags.map((t) => /^\[remember\s+([^\]\s]+)\]/i.exec(t)?.[1]).filter((x): x is string => !!x))].map((c) => c.toLowerCase()))];
   for (const l of lines) {
     for (const note of l.notes) {
       const n = note.toLowerCase();
+      // (Not "150, or 250 if persuaded": that's the line said two ways, each way its own copy.)
+      if (/\bif\b/.test(n) && !/\bor\s+\d+/.test(n) && !l.tags.includes('[otherwise]') && !l.tags.some((t) => /^\[if\s+(not\s+)?chose\b/i.test(t))) {
+        const words = wordsOf(n);
+        const choice = known.find((c) => c.length > 3 && words.some((w) => w.length > 3 && w.slice(0, 5) === c.slice(0, 5)));
+        if (choice) add(l, `[if ${/\b(not|didn'?t|never|refused)\b/.test(n) ? 'not ' : ''}chose ${choice}]`, 'a choice made earlier');
+      }
+      const needs = /\bneeds?\s+(?:at least\s+)?(\d+)\s*(?:gold|septims?|coins?)\b/.exec(n);
+      if (needs && !l.tags.some((t) => /^\[if\s+gold/i.test(t))) add(l, `[if gold ${needs[1]}]`, 'needs gold');
       const rem = REMEMBER.exec(n);
       if (rem && !has(l, 'remember')) add(l, `[remember ${misplaced.find((m) => m.slice(0, 4) === rem[1]!.slice(0, 4)) ?? (remembering.length === 1 && misplaced.length ? misplaced[0] : rem[1])}]`, 'remembers the choice');
       if (!has(l, 'stage') && !/\bif\b/.test(n)) {
@@ -351,9 +361,14 @@ export function directionTags(blocks: WrittenBlock[], plan: DirectionPlan): stri
       // One amount, said plainly (not "150, or 250 if persuaded": that's two ways of saying the line).
       const gold = /\b(?:pays?|gives?(?: the player)?|hands? over)\s+(\d+)\s*(?:gold|septims?|coins?)\b/.exec(n);
       if (gold && !/\bor\s+\d+/.test(n) && !l.tags.some((t) => /^\[gives gold/i.test(t))) add(l, `[gives gold x${gold[1]}]`, 'pays gold');
-      const takes = /\b(?:takes?|keeps?)\s+(?:the\s+|his\s+|her\s+)?(?:(a|an|one|two|three|four|five|six|\d+)\s+)?([a-z'’ -]+?)(?:\s+and\b|[;,.]|$)/.exec(n);
+      const takesGold = /\btakes?\s+(\d+)\s*(?:gold|septims?|coins?)\b/.exec(n);
+      if (takesGold && !l.tags.some((t) => /^\[takes\s+gold/i.test(t))) add(l, `[takes gold x${takesGold[1]}]`, 'takes gold');
+      const takes = takesGold ? null : /\b(?:takes?|keeps?)\s+(?:the\s+|his\s+|her\s+)?(?:(a|an|one|two|three|four|five|six|\d+)\s+)?([a-z'’ -]+?)(?:\s+and\b|[;,.]|$)/.exec(n);
       const item = takes ? itemIn(takes[2]!) : undefined;
       if (takes && item && !l.tags.some((t) => /^\[takes\s/i.test(t))) add(l, `[takes ${item.key} x${NUMBERS[takes[1] ?? ''] ?? (Number(takes[1]) || 1)}]`, `takes ${item.name}`);
+      const gives = /\b(?:gives?|hands? over)(?:\s+(?:the player|you|him|her))?\s+(?:the\s+|a\s+|an\s+|his\s+|her\s+|their\s+)?([a-z'’ -]+?)(?:\s+and\b|[;,.]|$)/.exec(n);
+      const given = gives ? itemIn(gives[1]!) : undefined;
+      if (given && !l.tags.some((t) => t.toLowerCase().startsWith(`[gives ${given.key.toLowerCase()}`))) add(l, `[gives ${given.key} x1]`, `gives ${given.name}`);
       if (/\b(the quest is (done|complete|finished|over)|quest ends|ends the quest|completes the quest)\b/.test(n) && !has(l, 'stage') && ends.length === 1) add(l, `[stage ${ends[0]!.index}]`, 'the quest is done');
       if (/\b(attacks?|draws? (his|her) (sword|weapon|blade))\b/.test(n) && !/\bif\b/.test(n) && !has(l, 'attacks')) add(l, '[attacks]', 'attacks');
       if (/\b(leaves? for good|walks? away|is gone|leaves skyrim|disappears?)\b/.test(n) && !has(l, 'leaves')) add(l, '[leaves]', 'leaves');
@@ -369,7 +384,7 @@ export function directionTags(blocks: WrittenBlock[], plan: DirectionPlan): stri
   for (const b of blocks) {
     const h = b.header.toLowerCase();
     // Only a heading that says when ("While the player is looking for the pages:"), not a paragraph of the story.
-    if (!h || b.scene || !/:\s*$/.test(h) || h.length > 120 || !/\b(when|while|after|once|before|now that|as soon as|during|until)\b/.test(h)) continue;
+    if (!h || b.scene || !/:\s*$/.test(h) || h.length > 120 || !/\b(when|while|after|once|before|now that|as soon as|during|until|later|next day|tomorrow|dark|night|day)\b/.test(h)) continue;
     // "While the quest is running": whenever the quest runs (its dialogue is only there then), at no one stage.
     if (/\b(while|whenever|as long as) the (quest|job) is (running|on|active|going|open|under way)\b|\bduring the quest\b|\bany time\b/.test(h)) {
       const gate = b.tags.filter((t) => /^\[if\s+(?:stage\s*)?(?:==?\s*)?\d+\]$/i.test(t));
@@ -378,13 +393,21 @@ export function directionTags(blocks: WrittenBlock[], plan: DirectionPlan): stri
       for (const l of b.lines) l.tags = l.tags.filter((t) => !/^\[if\s+(?:stage\s*)?(?:==?\s*)?\d+\]$/i.test(t));
       continue;
     }
+    // The time of day: "after dark only", "during the day".
+    const time = /\b(after dark|at night|by night|night only|at nightfall|in the evening)\b/.test(h) ? '[if night]' : /\b(during the day|by day|in the day(time)?|daytime|daylight)\b/.test(h) ? '[if day]' : '';
+    if (time && !b.tags.some((t) => /^\[if\s+(night|day|time)\b/i.test(t))) {
+      b.tags.push(time);
+      out.push(`${time} on the conversation “${b.header.slice(0, 50)}${b.header.length > 50 ? '…' : ''}”`);
+    }
     let stage: number | undefined;
     let why = '';
+    const waits = steps.filter((st) => st.kind === 'wait');
     const item = itemIn(h.replace(/[^a-z0-9' ]+/g, ' '));
     const pickup = item ? steps.find((st) => st.kind === 'pickup' && st.targetKey === item.key) : undefined;
-    if (pickup && /\b(with|has|have|got|brings?|found|finds|returns?|comes? back)\b/.test(h)) (stage = pickup.to), (why = `has ${item!.name}`);
+    if (waits.length === 1 && /\b(a day later|the next day|next morning|the day after|tomorrow|days? later|hours later|later that (day|night))\b/.test(h)) (stage = waits[0]!.to), (why = `after “${waits[0]!.note}”`);
+    else if (pickup && /\b(with|has|have|got|brings?|found|finds|returns?|comes? back)\b/.test(h)) (stage = pickup.to), (why = `has ${item!.name}`);
     else if (pickup && typeof pickup.from === 'number' && /\b(looking|searching|search|finding|find|hunting|while)\b/.test(h)) (stage = pickup.from), (why = `looking for ${item!.name}`);
-    else if (/\b(after|once|now that|having)\b/.test(h)) {
+    else if (/\b(after|once|now that|having)\b/.test(h.replace(/\bafter dark\b/g, ''))) {
       const w = keyWords(h);
       const scored = steps.filter((st) => st.note).map((st) => ({ st, hit: shared(w, keyWords(st.note)) }));
       const best = Math.max(0, ...scored.map((x) => x.hit));

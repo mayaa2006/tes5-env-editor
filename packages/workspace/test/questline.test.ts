@@ -223,6 +223,43 @@ describe('written dialogue', () => {
     expect(blocks.find((b) => b.id === 2)!.tags).toEqual(['[if stage 20]']);
   });
 
+  it("reads the Cartographer's later directions with no AI: after dark, a day later, needing and taking gold, giving the survey, a promise from quest 1", () => {
+    const parts = splitQuestline(readFileSync(join(import.meta.dirname, '../../../apps/studio/test/models/questline-cartographer.md'), 'utf8'))!.parts;
+    // Each line named by its first words.
+    const brief = (xs: string[]) => xs.map((x) => x.replace(/“(.{0,20})[^”]*”/, '“$1”'));
+    const q3 = findDialogue(parts[2]!.text).blocks;
+    const plan3 = {
+      stages: [0, 10, 20, 30, 40, 50].map((index) => ({ index, completesQuest: index === 50, failsQuest: false })),
+      items: [{ key: 'varroLedger', name: "Varro's Ledger" }, { key: 'strongboxKey', name: "Varro's Strongbox Key" }],
+      steps: [
+        { from: 10, to: 20, kind: 'read', targetKey: 'varroLedger', note: 'The player reads the ledger' },
+        { from: 20, to: 30, kind: 'talk', targetKey: null, note: 'The player brings the ledger to Hesta' },
+        { from: 30, to: 40, kind: 'wait', targetKey: null, note: 'A day passes' },
+        { from: 40, to: 50, kind: 'talk', targetKey: null, note: 'Hesta has news' },
+      ],
+    };
+    const varro = blocksFor(q3, 'Varro');
+    expect(brief(directionTags(varro, plan3, ['promised', 'persuaded']))).toEqual(
+      brief([
+        '[remember deal] on “Sensible. Two hundred now, the rest when…” (remembers the choice)',
+        '[gives gold x200] on “Sensible. Two hundred now, the rest when…” (pays gold)',
+        '[if chose promised] on “Hesta told me nothing, if that\'s what yo…” (a choice made earlier)',
+        '[if night] on the conversation “Varro, after dark only:”',
+      ]),
+    );
+    expect(directionTags(blocksFor(q3, 'Hulda'), plan3)).toEqual(['[if day] on the conversation “Hulda, during the day:”']);
+    const hesta = blocksFor(q3, 'Hesta');
+    expect(brief(directionTags(hesta, plan3, ['promised']))).toEqual(
+      brief(['[takes varroLedger x1] on “Give it here. Gods. He paid them in coin…” (takes Varro\'s Ledger)', '[if chose promised] on “And you kept your word, too. I won\'t for…” (a choice made earlier)', '[stage 50] on “Rest. You\'ll need it.” (the quest is done)', '[if stage 40] on the conversation “A day later:” (after “A day passes”)']),
+    );
+    const q4 = findDialogue(parts[3]!.text).blocks;
+    const plan4 = { stages: [0, 100, 200].map((index) => ({ index, completesQuest: index === 200, failsQuest: false })), items: [{ key: 'survey', name: 'Coldwater Survey of the Rift' }], steps: [] };
+    const gerda = blocksFor(q4, 'Gerda');
+    expect(brief(directionTags(gerda, plan4, ['promised', 'deal']))).toEqual(brief(['[if gold 300] on “What if I paid you more?” (needs gold)', '[takes gold x300] on “More than Varro? He\'s tight with coin. Th…” (takes gold)', '[leaves] on “More than Varro? He\'s tight with coin. Th…” (leaves)', '[attacks] on “Suits me.” (attacks)']));
+    const paid = directionTags(blocksFor(q4, 'Hesta'), plan4, ['promised', 'deal']);
+    expect(brief(paid.filter((t) => t.startsWith('[gives')))).toEqual(brief(['[gives gold x100] on “His ledger had a new entry. Two hundred se…” (pays gold)', '[gives survey x1] on “His ledger had a new entry. Two hundred se…” (gives Coldwater Survey of the Rift)', '[gives gold x300] on “Here. Three hundred, and something better:…” (pays gold)', '[gives survey x1] on “Here. Three hundred, and something better:…” (gives Coldwater Survey of the Rift)']));
+  });
+
   it('adds up what the lines of one answer give, and [or] starts another answer', () => {
     const p = parseScreenplay('PLAYER: Hi\nBRYNJA: Here. [gives gold x10]\nBRYNJA: And this. [gives ring x1]\nBRYNJA: Or nothing. [or]');
     expect(p.topics[0]!.responses.map((r) => r.tags.gives ?? '')).toEqual(['gold x10;ring x1', '']);
