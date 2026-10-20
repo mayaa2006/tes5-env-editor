@@ -363,6 +363,52 @@ export function repairPlan(plan: QuestPlan): string[] {
       return to ? `[${to}${rest}]` : '';
     });
   }
+  // Dialogue slips that would stop the build: a tag left open, a stage that isn't in the plan, a player line nobody
+  // answers, a line that isn't "NAME: words". Mended or taken out.
+  const planStages = new Set(list(p.stages).map((x) => x.index).filter((x): x is number => typeof x === 'number'));
+  for (const c of list(p.conversations)) {
+    if (typeof c.screenplay !== 'string') continue;
+    const title = String(c.title);
+    let rows = c.screenplay.split(/\r?\n/).map((row) => {
+      let r = row;
+      if (/\[[^\]]*$/.test(r)) (r = `${r}]`), changes.push(`closed a tag left open in “${title}”`);
+      return r.replace(/\s*\[(if\s+(?:stage\s*)?(?:[<>=!]=?\s*)?|stage\s+)(-?\d+)\]/gi, (m: string, _t: string, n: string) => {
+        if (planStages.size === 0 || planStages.has(Number(n))) return m;
+        changes.push(`took ${m.trim()} out of “${title}” (there's no stage ${n})`);
+        return '';
+      });
+    });
+    const parsed = parseScreenplay(rows.join('\n'));
+    const drop = new Set<number>(parsed.errors.map((e) => e.line));
+    const unanswered = (pl: ScriptPlayerLine) => {
+      if (!pl.responses.length) drop.add(pl.line);
+      for (const r of pl.responses) r.choices.forEach(unanswered);
+    };
+    parsed.topics.forEach(unanswered);
+    if (drop.size) {
+      changes.push(`took ${drop.size} line(s) out of “${title}” (a player line nobody answers, or not “NAME: words”)`);
+      rows = rows.filter((_, i) => !drop.has(i + 1));
+    }
+    c.screenplay = rows.join('\n');
+  }
+  // [goodbye] on an answer the player still has choices after: the choices come next, so it's taken off.
+  for (const c of list(p.conversations)) {
+    if (typeof c.screenplay !== 'string') continue;
+    const rows = c.screenplay.split(/\r?\n/);
+    let changed = false;
+    const visit = (pl: ScriptPlayerLine) => {
+      for (const r of pl.responses) {
+        if ('goodbye' in r.tags && r.choices.length && rows[r.line - 1] !== undefined) {
+          rows[r.line - 1] = rows[r.line - 1]!.replace(/\s*\[goodbye\]/i, '');
+          changes.push(`took [goodbye] off a line in “${c.title as string}” that the player still has choices after`);
+          changed = true;
+        }
+        r.choices.forEach(visit);
+      }
+    };
+    parseScreenplay(c.screenplay).topics.forEach(visit);
+    if (changed) c.screenplay = rows.join('\n');
+  }
   // A line that moves the quest on with nothing limiting when it's offered: tied to the stage the plan's own talk step
   // comes from ("The player chooses gold", 30 → 40, puts [if stage 30] on the line that sets 40).
   const talkFrom = new Map<number, Set<number>>();

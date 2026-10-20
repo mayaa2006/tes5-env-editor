@@ -183,6 +183,25 @@ describe('plans that would play wrong', () => {
     expect(code).toContain('AddItem(Game.GetFormFromFile(0x00000F, "Skyrim.esm"), 100)');
   });
 
+  it('mends dialogue slips in an AI plan: a tag left open, stages not in the plan, lines nobody answers', () => {
+    const plan = exampleQuestPlan();
+    plan.conversations[1]!.screenplay += '\nPLAYER: And the key? [if stage 70]\nEIRIK: Under the mat. [stage 80\nPLAYER: Anything else?\nthis is not a line';
+    expect(validatePlan(plan).some((i) => i.severity === 'error')).toBe(true);
+    const changes = repairPlan(plan);
+    expect(changes).toEqual(expect.arrayContaining(['closed a tag left open in “Eirik”', 'took [if stage 70] out of “Eirik” (there\'s no stage 70)', 'took [stage 80] out of “Eirik” (there\'s no stage 80)']));
+    expect(changes.some((c) => /took 2 line\(s\) out of “Eirik”/.test(c))).toBe(true);
+    expect(plan.conversations[1]!.screenplay).toContain('PLAYER: And the key?\nEIRIK: Under the mat.');
+    expect(validatePlan(plan).filter((i) => i.severity === 'error')).toEqual([]);
+  });
+
+  it('takes [goodbye] off an answer the player still has choices after', () => {
+    const plan = exampleQuestPlan();
+    plan.conversations[0]!.screenplay = plan.conversations[0]!.screenplay.replace("I swear it. [if stage 0] [emotion sad]", "I swear it. [if stage 0] [emotion sad] [goodbye]");
+    expect(validatePlan(plan).some((i) => i.severity === 'error' && /ends the conversation, so the choices after it never appear/.test(i.message))).toBe(true);
+    expect(repairPlan(plan)).toContain('took [goodbye] off a line in “Brynja” that the player still has choices after');
+    expect(validatePlan(plan).filter((i) => i.severity === 'error')).toEqual([]);
+  });
+
   it('joins a stage that leads nowhere to the completing stage nothing reaches', () => {
     const plan = exampleQuestPlan();
     // "Returned" at 100 no longer completes; a separate 200 does, and nothing gets there.
