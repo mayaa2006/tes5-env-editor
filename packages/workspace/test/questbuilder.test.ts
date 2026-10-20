@@ -23,6 +23,7 @@ import {
   fieldHint,
   keepAskedChanges,
   newWhenRenamed,
+  normalizePlan,
   pickPlanExample,
   planCatalog,
   repairPlan,
@@ -95,6 +96,26 @@ describe('plans that would get stuck', () => {
 });
 
 describe('plans that would play wrong', () => {
+  it('a “right away” step into a failing stage', () => {
+    const plan = exampleQuestPlan();
+    plan.stages.push({ index: 90, journal: 'I kept the ring.', startsQuest: false, completesQuest: false, failsQuest: true });
+    plan.steps.push({ from: 20, to: 90, kind: 'script', targetKey: null, note: 'The player keeps the ring' });
+    expect(validatePlan(plan).map((i) => i.message)).toContain('“The player keeps the ring” fails the quest as soon as stage 20 is reached (a “right away” step into a failing stage). Use a failure instead (a time limit, or someone dying)');
+    // With a time limit already failing it, the step is mended away.
+    plan.failures.push({ kind: 'timeLimit', targetKey: null, days: 3, fromStage: 10, failStage: 90, note: 'Three days' });
+    expect(repairPlan(plan)).toContain('left out 1 step(s) that would fail the quest right away (its failures already do that)');
+    expect(plan.steps.some((st) => st.to === 90)).toBe(false);
+  });
+
+  it('mends the slips of a plan written out by hand: lists left out, [] for none', () => {
+    const plan = exampleQuestPlan() as any;
+    delete plan.events;
+    delete plan.assumptions;
+    plan.characters[1].roles = [];
+    expect(QuestPlanSchema.safeParse(plan).success).toBe(false);
+    expect(QuestPlanSchema.safeParse(normalizePlan(plan)).success).toBe(true);
+  });
+
   it('a line that lets the player talk their way past something they should do', () => {
     const plan = exampleQuestPlan();
     plan.conversations[0]!.screenplay += '\nPLAYER: Never mind the ring.\nBRYNJA: Fine, call it found. [stage 20] [goodbye]';
@@ -894,6 +915,22 @@ BRYNJA: You found it! Take this, with my thanks. [takes ring x1] [gives gold x10
     const one: any[] = [];
     await new QuestPlanner({ ai: { kind: 'claude', apiKey: 'k' }, send: async (p) => (one.push(p), reply(JSON.stringify(exampleQuestPlan()))) }).plan('x', 'document', '');
     expect(one).toHaveLength(1);
+  });
+
+  it('asks a free AI for just the lines a step needs when no line makes it happen', async () => {
+    // The plan says Eirik hands over a key at stage 15, but nobody says anything that sets it.
+    const first = exampleQuestPlan();
+    first.stages.push({ index: 15, journal: 'Eirik gave me a key.', startsQuest: false, completesQuest: false, failsQuest: false });
+    first.steps.push({ from: 10, to: 15, kind: 'talk', targetKey: null, note: 'Eirik gives the player a key' });
+    const lines = 'PLAYER: Do you know anything? [if stage 10]\nEIRIK: Take this key, it opens the cellar. [stage 15] [goodbye]';
+    const sent: any[] = [];
+    // The plan, the one round of fixing the whole plan (no better), then the lines on their own.
+    const replies = [first, first, { screenplay: lines }];
+    const planner = new QuestPlanner({ ai: { kind: 'ollama', model: 'qwen3' }, send: async (p) => (sent.push(p), sent.length <= 3 ? reply(JSON.stringify(replies[sent.length - 1])) : reply('not json')) });
+    const plan = await planner.plan('Brynja lost her ring; Eirik has a key.', 'document', 'catalog');
+    expect(sent[2].messages[0].content).toContain('Nothing in the dialogue makes this happen yet: “Eirik gives the player a key” (stage 10 → stage 15)');
+    expect(plan.conversations.find((c) => c.title === 'Eirik')!.screenplay.endsWith(lines)).toBe(true);
+    expect(validatePlan(plan).filter((i) => i.message.includes('stage 15'))).toEqual([]);
   });
 
   it('revises a plan with the author’s feedback', async () => {

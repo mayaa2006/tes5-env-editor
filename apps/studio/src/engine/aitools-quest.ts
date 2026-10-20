@@ -6,7 +6,7 @@
  */
 import { z } from 'zod';
 import type { FormKey } from '@tes5/esp';
-import { QuestPlanSchema, QuestPlanner, WorkspaceError, lintScreenplay, planCatalog, settleCharacters, validatePlan, type AgentTool, type AiProvider, type PlanIssue, type PlanResolution, type QuestPlan } from '@tes5/workspace';
+import { QuestPlanSchema, QuestPlanner, WorkspaceError, lintScreenplay, normalizePlan, planCatalog, repairPlan, settleCharacters, validatePlan, type AgentTool, type AiProvider, type PlanIssue, type PlanResolution, type QuestPlan } from '@tes5/workspace';
 import type { EngineHost } from './host';
 
 /** How much of the load order the planner lists: everything for Claude, less for a free AI (it reads it slowly). */
@@ -127,7 +127,10 @@ export function questTools(host: EngineHost, ctx: QuestToolContext): AgentTool<a
       summary: (i) => `Edit ${i.planId}`,
       run: (i) => {
         const p = planOf(i.planId);
-        const parsed = QuestPlanSchema.safeParse(i.plan);
+        // The slips a model makes writing out a whole plan (a list left out, [] for "none") are mended first.
+        const raw = normalizePlan(structuredClone(i.plan) as unknown as QuestPlan);
+        repairPlan(raw);
+        const parsed = QuestPlanSchema.safeParse(raw);
         if (!parsed.success) throw new WorkspaceError(`The plan doesn't match the format: ${parsed.error.issues.slice(0, 6).map((x) => `${x.path.join('.')}: ${x.message}`).join('; ')}`);
         const id = keep(parsed.data, { source: p.source, quest: p.quest });
         return { data: review(id) };
@@ -158,7 +161,7 @@ export function questTools(host: EngineHost, ctx: QuestToolContext): AgentTool<a
           ctx.plans.set(i.planId, { ...p, quest: r.quest });
         }
         return {
-          data: { quest: r.quest, editorId: r.editorId, created: r.created.map((c) => `${c.kind}: ${c.label}`), changed: r.changed.map((c) => `${c.label}: ${c.changes.join(', ')}`), dialogue: r.dialogue, notes: r.notes, warnings: r.warnings },
+          data: { quest: r.quest, editorId: r.editorId, created: r.created.map((c) => `${c.kind}: ${c.label}`), changed: r.changed.map((c) => `${c.label}: ${c.changes.join(', ')}`), dialogue: r.dialogue, problems: r.problems, notes: r.notes, warnings: r.warnings },
           ...(r.quest ? { link: link(r.quest) } : {}),
           note: `Built ${p.plan.title}`,
         };

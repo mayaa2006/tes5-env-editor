@@ -369,6 +369,7 @@ export class QuestPlanner {
     const speakers = plan.characters.flatMap((c) => [c.key, c.name, ...(c.existing ? [c.existing] : [])]);
     const errors = (text: string) => lintScreenplay(text, { stages, speakers }).filter((l) => l.severity === 'error').length;
     const stageTags = (text: string) => [...text.matchAll(/\[stage\s+(-?\d+)\]/gi)].map((m) => Number(m[1])).sort((a, b) => a - b).join(',');
+    await this.writeMissingLines(plan, brief, errors);
     for (const conv of plan.conversations) {
       try {
         const out = await this.run(
@@ -422,6 +423,46 @@ export class QuestPlanner {
       }
     }
     return plan;
+  }
+
+  /**
+   * Steps that happen in a conversation with no line that makes them happen ("the player gives Proventus the
+   * sword", and nobody says anything that sets the stage): each gets one small request for just that exchange,
+   * added to the speaker's conversation. Small models manage this where rewriting the whole plan fails.
+   */
+  private async writeMissingLines(plan: QuestPlan, brief: string, errors: (text: string) => number): Promise<void> {
+    const keys = plan.characters.map((c) => c.key.toUpperCase()).join(', ');
+    for (const st of plan.steps.filter((x) => x.kind === 'talk')) {
+      const tag = new RegExp(`\\[stage\\s+${st.to}\\]`, 'i');
+      if (plan.conversations.some((c) => tag.test(c.screenplay))) continue;
+      try {
+        const out = await this.run(
+          {
+            model: this.model,
+            max_tokens: 3000,
+            output_config: { effort: 'high', format: betaZodOutputFormat(ScreenplaySchema) },
+            system: [{ type: 'text', text: `${DIALOGUE_RULES}\n\n${STYLE}` }],
+            messages: [
+              {
+                role: 'user',
+                content: `${brief}\n\nNothing in the dialogue makes this happen yet: “${st.note}” (${st.from === null ? '' : `stage ${st.from} → `}stage ${st.to}). Write just that short exchange: a PLAYER line${st.from === null ? '' : ` with [if stage ${st.from}]`}, then the answer from the character it happens with, ending with [stage ${st.to}] and [goodbye]. If an item changes hands, use [gives KEY x1] or [takes KEY x1] with the item's key. Speakers: PLAYER and ${keys}.`,
+              },
+            ],
+          },
+          ScreenplaySchema,
+        );
+        const text = out.screenplay.trim();
+        if (!tag.test(text) || errors(text) > 0) continue;
+        const who = [...text.matchAll(/^\s*([^:\n[\]]+?)\s*:/gm)].map((m) => m[1]!.trim().toLowerCase()).find((n) => n !== 'player');
+        const c = plan.characters.find((x) => x.key.toLowerCase() === who || x.name.toLowerCase() === who);
+        if (!c) continue;
+        const conv = plan.conversations.find((x) => x.title.toLowerCase() === c.name.toLowerCase());
+        if (conv) conv.screenplay = `${conv.screenplay.trimEnd()}\n${text}`;
+        else plan.conversations.push({ title: c.name, screenplay: text });
+      } catch {
+        // The step stays as it was; the plan review says nothing sets that stage.
+      }
+    }
   }
 
   /** Change a plan as the author describes; returns the whole new plan. */
@@ -544,7 +585,7 @@ function planBrief(plan: QuestPlan, source: string): string {
 
 /** Problems worth one more round with the AI: errors, and gaps that leave the quest stuck. */
 function blockingIssues(issues: PlanIssue[]): PlanIssue[] {
-  return issues.filter((i) => i.severity === 'error' || /^(Nothing moves the quest|Nothing starts the quest|No stage completes|The player needs|The player loses|A line in .* sets stage|The quest starts with the game, so stage)/.test(i.message));
+  return issues.filter((i) => i.severity === 'error' || /^(Nothing moves the quest|Nothing starts the quest|No stage completes|The player needs|The player loses|A line in .* sets stage|The quest starts with the game, so stage|.* fails the quest as soon as stage)/.test(i.message));
 }
 
 const JournalDraftSchema = z.object({

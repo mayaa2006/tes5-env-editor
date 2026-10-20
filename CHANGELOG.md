@@ -16,9 +16,12 @@ Each version here is published as a Windows installer and portable exe on the [r
   - an item the player must hand over (or have) but never gets;
   - a character taking a quest item on a line that doesn't move the quest on, so the player can't finish;
   - a line that sets the stage that killing the wolves (or picking something up, or arriving somewhere) should reach, so the player can talk their way past it;
-  - a journal entry on the first stage of a quest that runs from the start, which would show in the journal before the player has met anyone.
+  - a journal entry on the first stage of a quest that runs from the start, which would show in the journal before the player has met anyone;
+  - a "right away" step into a stage that fails the quest, so it fails as soon as the stage before is reached.
 
   The planner sends these back to the AI to fix before you see the plan, and the plan review shows them too. Each one turned up in quests Qwen3.5 4B planned on Skyrim's data.
+- **Small models fill the gaps one at a time.** Rewriting a whole plan to fix one missing line is too much for a small model; Qwen3.5 4B gave back the same plan. Now, for each step that happens in a conversation that nothing says yet ("the player gives Proventus the sword"), a free AI is asked for just that short exchange, and it's added to that character's conversation. "Right away" steps that would fail the quest, where a time limit or death already fails it, are taken out without asking.
+- **The AI can fix a plan by editing it**: an edited plan with a list left out or `[]` written for "none" is mended instead of turned down (Qwen3.5 4B had three edits rejected in a row). After building, the AI is also told about any stage nothing leads to.
 - **Enemy groups get a quest marker**, so "Kill the three wolves" points at them. Plurals in your text match the load order too: "wolves" finds LvlWolf and "bandits" finds the bandit types, instead of "forest predators" (bears and sabre cats as well).
 - **Building a revised plan updates the quest instead of making a second one.** After building, the AI sometimes revised the plan and built it again, which left two copies of the quest in your plugin. Now a plan remembers the quest it made, and building it (or a revision of it) again only applies the differences.
 - **A shorter load-order list for free AIs.** It now leads with what's useful (the ten playable races, everyday voices and classes, the factions and outfits your text is about) instead of giants, atronachs and creature voices in alphabetical order. That cuts about a fifth of what a free AI reads before planning, and characters still get the full list.

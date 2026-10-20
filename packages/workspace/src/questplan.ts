@@ -242,7 +242,11 @@ export function normalizePlan(plan: QuestPlan): QuestPlan {
     if (c.combat === undefined) c.combat = null;
     if (c.roles === undefined) c.roles = null;
     c.relationships ??= [];
+    // [] written for "none" where a setting or null goes.
+    for (const f of ['look', 'outfit', 'combat', 'roles'] as const) if (Array.isArray(c[f]) && !(c[f] as unknown[]).length) (c as Record<string, unknown>)[f] = null;
   }
+  plan.assumptions ??= [];
+  plan.questions ??= [];
   for (const l of plan.locations ?? []) {
     if (l.layoutLike === undefined) l.layoutLike = null;
     if (l.doorFrom === undefined) l.doorFrom = null;
@@ -321,6 +325,14 @@ export function repairPlan(plan: QuestPlan): string[] {
       changes.push(`outfit "${outfit.saveAs}" → "${editorId(outfit.saveAs)}"`);
       outfit.saveAs = editorId(outfit.saveAs);
     }
+  }
+  // "Fails if kept three days" written as a step that fails the quest right away, where a failure already does it.
+  const failed = new Set(list(p.failures).map((f) => f.failStage));
+  const steps = list(p.steps);
+  const kept = steps.filter((st) => !(st.kind === 'script' && failed.has(st.to)));
+  if (kept.length < steps.length) {
+    p.steps = kept;
+    changes.push(`left out ${steps.length - kept.length} step(s) that would fail the quest right away (its failures already do that)`);
   }
   const stages = list(p.stages).filter((s) => typeof s.index === 'number');
   if (stages.length && !stages.some((s) => s.startsQuest === true)) {
@@ -511,6 +523,9 @@ export function validatePlan(input: QuestPlan): PlanIssue[] {
     const c = (plan.conversations ?? []).find((x) => new RegExp(`\\[stage\\s+${st.to}\\]`, 'i').test(x.screenplay));
     warn(`A line in “${c?.title ?? 'a conversation'}” sets stage ${st.to}, which “${st.note || st.kind}” is meant to reach, so the player can skip it by talking. Take out that [stage ${st.to}], or add a talk step if saying it should count`);
   }
+  for (const st of plan.steps ?? [])
+    if (st.kind === 'script' && st.from !== null && (plan.stages ?? []).find((x) => x.index === st.to)?.failsQuest)
+      warn(`“${st.note || 'A step'}” fails the quest as soon as stage ${st.from} is reached (a “right away” step into a failing stage). Use a failure instead (a time limit, or someone dying)`);
   // A quest running from the start shows its first journal entry before the player has met anyone.
   const first = ordered.find((x) => x.startsQuest) ?? ordered[0];
   if (plan.startsWithGame && first?.journal.trim() && !first.completesQuest)
