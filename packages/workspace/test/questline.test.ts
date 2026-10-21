@@ -317,6 +317,23 @@ describe('written dialogue', () => {
     expect(brief(paid.filter((t) => t.startsWith('[gives')))).toEqual(brief(['[gives gold x100] on “His ledger had a new entry. Two hundred se…” (pays gold)', '[gives survey x1] on “His ledger had a new entry. Two hundred se…” (gives Coldwater Survey of the Rift)', '[gives gold x300] on “Here. Three hundred, and something better:…” (pays gold)', '[gives survey x1] on “Here. Three hundred, and something better:…” (gives Coldwater Survey of the Rift)']));
   });
 
+  it('reads "if Varro left" and "if Varro is dead" as what happened to him, over choices the AI made up', () => {
+    const parts = splitQuestline(readFileSync(join(import.meta.dirname, '../../../apps/studio/test/models/questline-cartographer.md'), 'utf8'))!.parts;
+    const q4 = findDialogue(parts[3]!.text).blocks;
+    const plan = { stages: [0, 10, 20, 100].map((index) => ({ index, completesQuest: index === 100, failsQuest: false })), items: [{ key: 'survey', name: 'Coldwater Survey of the Rift' }], steps: [], characters: [{ key: 'varro', name: 'Varro Tullius' }, { key: 'hesta', name: 'Hesta Coldwater' }] };
+    // Varro leaving Skyrim remembers that he left.
+    const varro = blocksFor(q4, 'Varro');
+    directionTags(varro, plan);
+    expect(varro.flatMap((b) => b.lines).find((l) => l.text.startsWith('...Fine. Cyrodiil'))!.tags).toEqual(expect.arrayContaining(['[leaves]', '[remember varroleft]']));
+    // Hesta's answers: what the AI made up ("[if chose left]", "[if chose dead]") gives way.
+    const hesta = blocksFor(q4, 'Hesta');
+    applyAnnotation(hesta, { blocks: [], lines: [{ line: 2, tags: '[if chose left]' }, { line: 3, tags: '[if chose dead]' }] });
+    directionTags(hesta, plan, ['deal']);
+    const tagsOf = (start: string) => hesta.flatMap((b) => b.lines).find((l) => l.text.startsWith(start))!.tags;
+    expect(tagsOf('Gone back to Cyrodiil')).toEqual(['[if chose varroleft]']);
+    expect(tagsOf('Dead, then.')).toEqual(['[if dead varro]']);
+  });
+
   it('adds up what the lines of one answer give, and [or] starts another answer', () => {
     const p = parseScreenplay('PLAYER: Hi\nBRYNJA: Here. [gives gold x10]\nBRYNJA: And this. [gives ring x1]\nBRYNJA: Or nothing. [or]');
     expect(p.topics[0]!.responses.map((r) => r.tags.gives ?? '')).toEqual(['gold x10;ring x1', '']);
@@ -456,6 +473,13 @@ describe('questline mechanics', () => {
       ['<', 6, false],
     ]);
     expect(clauseConditions(ws, q2, parseIf('quest FirstQuest done 10'))[0]).toMatchObject({ param1: q1, param2: 10, value: 1 });
+    // Whether a character is dead: the game's count of that character's deaths.
+    expect(parseIf('dead DemoGuard')).toEqual([{ kind: 'dead', who: 'DemoGuard', not: false }]);
+    expect(parseIf('alive DemoGuard')).toEqual([{ kind: 'dead', who: 'DemoGuard', not: true }]);
+    const guard = ws.byEditorId('DemoGuard')!;
+    expect(clauseConditions(ws, q2, parseIf('dead DemoGuard'))[0]).toMatchObject({ param1: guard, op: '>=', value: 1 });
+    expect(clauseConditions(ws, q2, parseIf('alive DemoGuard'))[0]).toMatchObject({ param1: guard, op: '==', value: 0 });
+    expect(() => clauseConditions(ws, q2, parseIf('dead Nobody'))).toThrow('no character called “Nobody”');
   });
 
   it('writes triggers that wait for the player to come near, collect items and let time pass', () => {

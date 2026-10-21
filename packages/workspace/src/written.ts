@@ -302,6 +302,7 @@ const shared = (a: Set<string>, b: Set<string>) => [...a].filter((w) => b.has(w)
 type DirectionPlan = {
   stages: { index: number; completesQuest: boolean; failsQuest: boolean }[];
   items: { key: string; name: string }[];
+  characters?: { key: string; name: string }[];
   steps?: { from: number | null; to: number; kind: string; targetKey: string | null; note: string }[];
 };
 
@@ -399,6 +400,27 @@ export function directionTags(blocks: WrittenBlock[], plan: DirectionPlan, choic
       if (/\b(attacks?|draws? (his|her) (sword|weapon|blade))\b/.test(n) && !/\bif\b/.test(n) && !has(l, 'attacks')) add(l, '[attacks]', 'attacks');
       if (/\b(leaves? for good|walks? away|is gone|leaves skyrim|disappears?)\b/.test(n) && !has(l, 'leaves')) add(l, '[leaves]', 'leaves');
     }
+  }
+  // "(if Varro is dead)" and "(if Varro left)": whether that character died, or left (a line with [leaves] remembers
+  // that they did, as the choice "varroleft").
+  const characterNamed = (word: string) => (plan.characters ?? []).find((c) => [c.key, c.name, c.name.split(/\s+/)[0]].some((n) => n.toLowerCase() === word.toLowerCase()));
+  const leftChoice = (c: { key: string }) => `${c.key.toLowerCase().replace(/[^a-z0-9]/g, '')}left`;
+  for (const l of lines) {
+    if (l.tags.some((t) => /^\[if\s+(not\s+)?(dead|alive)\b/i.test(t))) continue;
+    for (const note of l.notes) {
+      const dead = /\bif\s+([A-Za-z][\w'’-]*)\s+(?:is|was|has been|gets?)\s+(?:dead|killed)\b|\bif\s+([A-Za-z][\w'’-]*)\s+died\b/i.exec(note);
+      const left = /\bif\s+([A-Za-z][\w'’-]*)\s+(?:has\s+)?(?:left|leaves|fled|is gone|went away|walked away)\b/i.exec(note);
+      const who = dead ? characterNamed(dead[1] ?? dead[2]!) : left ? characterNamed(left[1]!) : undefined;
+      if (!who) continue;
+      // A choice the AI made up for it ("[if chose dead]", remembered nowhere) gives way.
+      l.tags = l.tags.filter((t) => !/^\[if\s+(not\s+)?chose\s/i.test(t) || known.includes(/chose\s+([^\]\s]+)/i.exec(t)![1]!.toLowerCase()));
+      if (dead) add(l, `[if dead ${who.key}]`, `${who.name} is dead`);
+      else if (!l.tags.some((t) => t.toLowerCase() === `[if chose ${leftChoice(who)}]`)) add(l, `[if chose ${leftChoice(who)}]`, `${who.name} left`);
+    }
+  }
+  for (const l of lines.filter((x) => x.tags.includes('[leaves]'))) {
+    const who = characterNamed(l.speaker);
+    if (who && !l.tags.some((t) => t.toLowerCase() === `[remember ${leftChoice(who)}]`)) add(l, `[remember ${leftChoice(who)}]`, `remembers that ${who.name} left`);
   }
   // "[if chose persuaded]" with nothing remembering it: a persuasion's success remembers it.
   for (const m of lines.flatMap((l) => l.tags).map((t) => /^\[if\s+chose\s+([^\]\s]+)\]/i.exec(t)?.[1]).filter((x): x is string => !!x && /persua|convinc|intimidat|bribe|haggl/i.test(x))) {

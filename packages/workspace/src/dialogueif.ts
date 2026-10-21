@@ -14,6 +14,7 @@
  *   [if night] / [if day]  the time of day (8 in the evening to 6 in the morning is night)
  *   [if time 20-4]         between those hours (it can run past midnight)
  *   [if chose spared]      a choice remembered with [remember spared], in this quest or an earlier one of yours
+ *   [if dead Varro]        that character is dead ([if alive Varro]: they aren't)
  *
  * Several [if …] tags on one line must all be true. Each becomes a normal
  * Creation Kit condition, so it shows (and can be edited) in the condition list.
@@ -32,7 +33,8 @@ export type IfClause =
   | { kind: 'questDone'; quest: string }
   | { kind: 'questStage'; quest: string; stage: number; not: boolean }
   | { kind: 'time'; from: number; to: number }
-  | { kind: 'choice'; name: string; not: boolean };
+  | { kind: 'choice'; name: string; not: boolean }
+  | { kind: 'dead'; who: string; not: boolean };
 
 /** Run on the player (in dialogue, "Target" is the player). */
 const TARGET = 1;
@@ -76,7 +78,8 @@ export function parseIf(value: string | undefined): IfClause[] {
       out.push({ kind: 'time', from, to });
     }
     else if ((m = /^(not\s+)?(?:chose|remembered|remembers)\s+([A-Za-z][\w-]*)$/i.exec(part))) out.push({ kind: 'choice', name: m[2]!, not: !!m[1] });
-    else throw new Error(`[if ${part}] isn't understood. Try: stage 10, done 20, has Ring, gold 100, speech 50, level 10, female, race Nord, quest MyQuest done, quest MyQuest done 20, night, time 20-4, chose spared`);
+    else if ((m = /^(not\s+)?(dead|alive|killed)\s+(.+)$/i.exec(part))) out.push({ kind: 'dead', who: m[3]!.trim(), not: !!m[1] !== (m[2]!.toLowerCase() === 'alive') });
+    else throw new Error(`[if ${part}] isn't understood. Try: stage 10, done 20, has Ring, gold 100, speech 50, level 10, female, race Nord, quest MyQuest done, quest MyQuest done 20, night, time 20-4, chose spared, dead Varro`);
   }
   return out;
 }
@@ -193,6 +196,14 @@ export function clauseConditions(ws: Workspace, quest: FormKey, clauses: IfClaus
         const q = ws.byEditorId(c.quest);
         if (!q || ws.summary(q)?.sig !== 'QUST') throw new Error(`[if quest ${c.quest} done ${c.stage}]: no quest with that Editor ID`);
         out.push(cond('GetStageDone', { param1: q, param2: c.stage, op: '==', value: c.not ? 0 : 1 }));
+        break;
+      }
+      case 'dead': {
+        // How many of that character are dead (a character's base record, so no placed reference is needed).
+        const l = c.who.toLowerCase();
+        const npc = ws.byEditorId(c.who) ?? ws.search({ sigs: ['NPC_'], query: c.who, limit: 200 }).items.find((r) => !r.deleted && (r.name?.toLowerCase() === l || r.editorId?.toLowerCase() === l))?.formKey;
+        if (!npc || ws.summary(npc)?.sig !== 'NPC_') throw new Error(`[if dead ${c.who}]: no character called “${c.who}”`);
+        out.push(cond('GetDeadCount', { param1: npc, op: c.not ? '==' : '>=', value: c.not ? 0 : 1 }));
         break;
       }
       case 'questDone': {

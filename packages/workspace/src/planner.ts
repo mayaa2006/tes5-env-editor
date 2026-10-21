@@ -778,7 +778,7 @@ Lines: turn the author's directions (after "—") into tags:
 - the quest moving on ("the player takes the job", "Rulnik starts following", "the quest is done", an ending) → [stage N] with the stage from the plan;
 - money or things changing hands → [gives gold x150] (the speaker gives the player), [takes KEY x3] (the speaker takes from the player), with item keys from the plan;
 - a choice the quest should remember ("she remembers the promise", "he remembers the deal") → [remember NAME] with a short name; "only if the player promised…" → [if chose NAME] with the same name;
-- other "only if …" / "if …" / "needs …" → [if …] (e.g. [if gold 300], [if done 40], [if not chose deal]);
+- other "only if …" / "if …" / "needs …" → [if …] (e.g. [if gold 300], [if done 40], [if not chose deal], [if dead varro] for "if Varro is dead");
 - "he attacks" → [attacks]; "leaves for good" → [leaves]; a line said two ways ("pays 150 gold, or 250 if persuaded") → the two tag sets separated by |, the first with its [if …]: "[if chose persuaded] [gives gold x250] | [gives gold x150]".
 Directions about objectives and the journal need no tag. Leave out blocks and lines that need nothing. Use only stage numbers, item keys and choice names from the plan and the questline.`;
 

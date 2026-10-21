@@ -1720,6 +1720,11 @@ export function rewriteScreenplay(text: string, speakers: Map<string, string>, i
         const id = items.get(what.trim().toLowerCase());
         return id ? `[${verb} ${id}${count ?? ''}]` : m;
       });
+      // [if dead varro]: the character the plan's key stands for.
+      out = out.replace(/\[if\s+((?:not\s+)?(?:dead|alive|killed))\s+([^\]]+?)\]/gi, (m, what: string, who: string) => {
+        const id = speakers.get(who.trim().toLowerCase());
+        return id ? `[if ${what} ${id}]` : m;
+      });
       return out;
     })
     .join('\n');
