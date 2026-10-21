@@ -404,17 +404,17 @@ export function directionTags(blocks: WrittenBlock[], plan: DirectionPlan, choic
   // "(if Varro is dead)" and "(if Varro left)": whether that character died, or left (a line with [leaves] remembers
   // that they did, as the choice "varroleft").
   const characterNamed = (word: string) => (plan.characters ?? []).find((c) => [c.key, c.name, c.name.split(/\s+/)[0]].some((n) => n.toLowerCase() === word.toLowerCase()));
+  const madeUp = (t: string) => /^\[if\s+(not\s+)?chose\s/i.test(t) && !known.includes(/chose\s+([^\]\s]+)/i.exec(t)![1]!.toLowerCase());
   for (const l of lines) {
-    if (l.tags.some((t) => /^\[if\s+(not\s+)?(dead|alive)\b/i.test(t))) continue;
     for (const note of l.notes) {
       const dead = /\bif\s+([A-Za-z][\w'’-]*)\s+(?:is|was|has been|gets?)\s+(?:dead|killed)\b|\bif\s+([A-Za-z][\w'’-]*)\s+died\b/i.exec(note);
       const left = /\bif\s+([A-Za-z][\w'’-]*)\s+(?:has\s+)?(?:left|leaves|fled|is gone|went away|walked away)\b/i.exec(note);
       const who = dead ? characterNamed(dead[1] ?? dead[2]!) : left ? characterNamed(left[1]!) : undefined;
       if (!who) continue;
-      // A choice the AI made up for it ("[if chose dead]", remembered nowhere) gives way.
-      l.tags = l.tags.filter((t) => !/^\[if\s+(not\s+)?chose\s/i.test(t) || known.includes(/chose\s+([^\]\s]+)/i.exec(t)![1]!.toLowerCase()));
-      if (dead) add(l, `[if dead ${who.key}]`, `${who.name} is dead`);
-      else if (!l.tags.some((t) => /^\[if\s+left\s/i.test(t))) add(l, `[if left ${who.key}]`, `${who.name} left`);
+      // A choice the AI made up for it ("[if chose dead]", remembered nowhere) gives way, however often it's asked.
+      l.tags = l.tags.filter((t) => !madeUp(t));
+      if (dead && !l.tags.some((t) => /^\[if\s+dead\s/i.test(t))) add(l, `[if dead ${who.key}]`, `${who.name} is dead`);
+      else if (left && !l.tags.some((t) => /^\[if\s+left\s/i.test(t))) add(l, `[if left ${who.key}]`, `${who.name} left`);
     }
   }
   // A condition the AI put on a whole block that has alternatives ("only if the player took his money" / "otherwise")
@@ -431,6 +431,15 @@ export function directionTags(blocks: WrittenBlock[], plan: DirectionPlan, choic
   for (const l of lines.filter((x) => x.tags.includes('[leaves]'))) {
     const who = characterNamed(l.speaker);
     if (who && !l.tags.some((t) => t.toLowerCase() === `[remember ${leftChoice(who.key)}]`)) add(l, `[remember ${leftChoice(who.key)}]`, `remembers that ${who.name} left`);
+  }
+  // A choice nothing remembers, on a line whose direction asks for no condition ("(otherwise)", or none at all): the
+  // AI made it up, and the line would never be said.
+  for (const l of lines) {
+    if (l.notes.some((n) => /\b(if|unless)\b/i.test(n))) continue;
+    const gone = l.tags.filter(madeUp);
+    if (!gone.length) continue;
+    l.tags = l.tags.filter((t) => !gone.includes(t));
+    out.push(`took ${gone.join(' ')} off “${l.text.slice(0, 40)}${l.text.length > 40 ? '…' : ''}” (nothing remembers that choice, and the line asks for no condition)`);
   }
   // "[if chose persuaded]" with nothing remembering it: a persuasion's success remembers it.
   for (const m of lines.flatMap((l) => l.tags).map((t) => /^\[if\s+chose\s+([^\]\s]+)\]/i.exec(t)?.[1]).filter((x): x is string => !!x && /persua|convinc|intimidat|bribe|haggl/i.test(x))) {

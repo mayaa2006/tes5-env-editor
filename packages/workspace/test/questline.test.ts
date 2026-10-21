@@ -329,9 +329,14 @@ describe('written dialogue', () => {
     expect(varro.flatMap((b) => b.lines).find((l) => l.text.startsWith('...Fine. Cyrodiil'))!.tags).toEqual(expect.arrayContaining(['[leaves]', '[remember varroleft]']));
     // Hesta's answers: what the AI made up ("[if chose left]", "[if chose dead]") gives way.
     const hesta = blocksFor(q4, 'Hesta');
-    applyAnnotation(hesta, { blocks: [], lines: [{ line: 2, tags: '[if chose left]' }, { line: 3, tags: '[if chose dead]' }] });
-    directionTags(hesta, plan, ['deal']);
     const tagsOf = (start: string) => hesta.flatMap((b) => b.lines).find((l) => l.text.startsWith(start))!.tags;
+    applyAnnotation(hesta, { blocks: [], lines: [{ line: 2, tags: '[if chose left]' }, { line: 3, tags: '[if chose dead]' }, { line: 5, tags: '[if chose survey]' }] });
+    directionTags(hesta, plan, ['deal']);
+    // Asked again (which lines move the quest on), it makes the same choice up again: it gives way again.
+    applyAnnotation(hesta, { blocks: [], lines: [{ line: 3, tags: '[if chose dead]' }] });
+    directionTags(hesta, plan, ['deal']);
+    // "(otherwise)" asks for no condition: a made-up one would mean the line is never said.
+    expect(tagsOf('Here. Three hundred')).not.toContain('[if chose survey]');
     expect(tagsOf('Gone back to Cyrodiil')).toEqual(['[if left varro]']);
     expect(tagsOf('Dead, then.')).toEqual(['[if dead varro]']);
     // How Varro ended up and whether the player took his money: one line of each, every combination, the first that

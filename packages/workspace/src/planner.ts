@@ -404,6 +404,9 @@ export class QuestPlanner {
       const speakers = plan.characters.flatMap((c) => [c.key, c.name, ...(c.existing ? [c.existing] : [])]);
       await this.writeMissingLines(plan, brief, (text) => lintScreenplay(text, { stages, speakers }).filter((l) => l.severity === 'error').length);
       await this.writeJournal2(plan, brief);
+      // Lines it wrote that repeat the author's own are taken out again.
+      const authorLines = blocks.flatMap((b) => b.lines.map((l) => l.text));
+      plan.conversations = plan.conversations.map((c) => (c.title.startsWith('✎ ') ? c : { ...c, screenplay: withoutAuthorLines(c.screenplay, authorLines) })).filter((c) => c.screenplay.trim());
     }
     return plan;
   }
