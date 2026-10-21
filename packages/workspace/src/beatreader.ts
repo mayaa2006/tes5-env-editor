@@ -6,7 +6,9 @@
  *      written conversation, when it's offered and which of its lines do what;
  *   3. for the written lines with directions: when they're said, and what saying them does;
  *   4. what checkBeats finds that doesn't fit together, asked again about that one beat or line;
- *   5. for talk beats the author only describes, the line that does it.
+ *   5. what else happens along with the beats (the author's words for it, read into gold, items, people leaving…),
+ *      and each beat's objective and journal entry;
+ *   6. for talk beats the author only describes, the line that does it.
  *
  * The AI reads the language; this file only keeps the books: keys for names, beat numbers, what's already in the
  * game (looked up by exact name), and which answer goes where.
@@ -120,16 +122,33 @@ const EffectsShape = {
 };
 
 const BeatShape = z.object({
+  n: z.number().int().describe("This beat's number"),
   does: z.enum(BEAT_ACTIONS).describe('What the player does: talk (to someone), pickup, read, use, arrive (at a place), kill (someone), clear (every enemy in a group dead), wait (some in-game hours), immediately (right after the beats before)'),
   target: z.string().nullable().describe('The name of the person, item, place or enemies it is done to (from the lists); null for wait and immediately'),
   count: z.number().int().nullable().describe('pickup: how many'),
   hours: z.number().nullable().describe('wait: how many in-game hours'),
-  after: z.array(z.number().int()).describe('The numbers of the beats that must happen before this one; empty when it can happen from the start. Two endings each come after the same beat; the beat after them lists both'),
+  after: z
+    .array(z.number().int())
+    .describe('The numbers of the beats that must happen just before this one: usually the beat before it. Two ways of going on each come after the same beat, and the beat where they meet again lists both. Empty only for the first thing the player does'),
   quote: z.string(),
-  journal: z.string().nullable().describe("The player's journal once it's done, in the first person; the author's words where given"),
-  objective: z.string().nullable().describe('What the player is told to do for this beat, e.g. "Find the three pages"'),
   ends: z.enum(['complete', 'fail', 'no']).describe('Whether reaching it finishes the quest (complete) or fails it'),
-  ...EffectsShape,
+  then: z.string().nullable().describe("Anything else that happens when it's done (the player is paid or given something, someone leaves, attacks, follows or appears), in the author's words; null if nothing"),
+});
+
+/** What happens along with the beats that say "then". */
+const ThenSchema = z.object({
+  beats: z.array(z.object({ n: z.number().int().describe('The beat number'), ...EffectsShape })),
+});
+
+/** What the player is told, and what the journal says, for each beat. */
+const WordsSchema = z.object({
+  beats: z.array(
+    z.object({
+      n: z.number().int().describe('The beat number'),
+      objective: z.string().describe('What the player is told to do to make this beat happen, short ("Find the three pages"); the author\'s words where given'),
+      journal: z.string().describe("The player's journal once it's done, in the first person; the author's words where given"),
+    }),
+  ),
 });
 
 const PassageSchema = z.object({
@@ -230,6 +249,7 @@ export class BeatReader {
   /** Read one quest into a beat sheet (checked, with what didn't fit asked about again). */
   async read(text: string, opts: BeatReadOptions): Promise<{ sheet: BeatSheet; questions: BeatQuestion[]; blocks: WrittenBlock[] }> {
     const step = opts.onStep ?? (() => undefined);
+    this.then.clear();
     const blocks = findDialogue(text).blocks;
     step('finding who and what the quest involves');
     const sheet = await this.entities(text, opts);
@@ -249,6 +269,12 @@ export class BeatReader {
       await this.reask(sheet, questions, text, blocks, opts);
       questions = checkBeats(sheet, { blocks, earlierChoices: earlierChoices(opts) });
     }
+    if (this.then.size) {
+      step('reading what else happens along the way');
+      await this.consequences(sheet);
+    }
+    step('writing the objectives and journal');
+    await this.words(sheet, text);
     const unsaid = sheet.beats.filter((b) => b.does === 'talk' && !sheet.dialogue.some((d) => d.lines.some((l) => l.beat === b.id)) && !sheet.lines.some((l) => l.beat === b.id));
     for (const b of unsaid) {
       step(`writing what's said for “${b.quote.slice(0, 40)}”`);
@@ -374,19 +400,29 @@ export class BeatReader {
       hours: b.hours,
       after: b.after.map((n) => ids.get(n)).filter((x): x is string => !!x && x !== id),
       quote: b.quote,
-      journal: b.journal,
-      objective: b.objective,
+      journal: null,
+      objective: null,
       ends: b.ends === 'no' ? null : b.ends,
-      effects: this.effects(sheet, b),
+      effects: {},
     };
   }
+
+  /** What else happens along with each beat, in the author's words; read into effects once the beats are in. */
+  private readonly then = new Map<string, string>();
 
   /** The AI's beats (numbered after the ones so far) into the sheet; returns every beat's id by number. */
   private addBeats(sheet: BeatSheet, beats: z.infer<typeof BeatShape>[]): Map<number, string> {
     const ids = new Map(sheet.beats.map((b, i) => [i + 1, b.id] as const));
     const first = sheet.beats.length + 1;
-    beats.forEach((_, i) => ids.set(first + i, `b${first + i}`));
-    for (const [i, b] of beats.entries()) sheet.beats.push(this.toBeat(sheet, b, `b${first + i}`, ids));
+    // The AI's own numbers, when they number the new beats one each from where the list left off; by order otherwise.
+    const own = beats.map((b) => b.n);
+    const byOwn = new Set(own).size === own.length && own.every((n) => n >= first && n < first + beats.length);
+    beats.forEach((b, i) => ids.set(byOwn ? b.n : first + i, `b${first + i}`));
+    for (const [i, b] of beats.entries()) {
+      const id = `b${first + i}`;
+      sheet.beats.push(this.toBeat(sheet, b, id, ids));
+      if (b.then?.trim()) this.then.set(id, b.then.trim());
+    }
     return ids;
   }
 
@@ -471,10 +507,12 @@ export class BeatReader {
         try {
           const a = await this.ai.ask(
             READ_RULES,
-            `${this.context(sheet)}\n\nThe quest:\n<quest>\n${text.trim()}\n</quest>\n\nBeat ${i + 1} (“${b.quote}”) doesn't fit yet:\n${qs.map((q) => `- ${q.message}`).join('\n')}\n\nGive beat ${i + 1} again, corrected.`,
+            `${this.context(sheet)}\n\nThe quest:\n<quest>\n${text.trim()}\n</quest>\n\nBeat ${i + 1} (“${b.quote}”) doesn't fit yet:\n${qs.map((q) => `- ${q.message}`).join('\n')}\n\nGive beat ${i + 1} again, corrected. If its action isn't what the quote describes, choose the one it does.`,
             BeatShape,
           );
           sheet.beats[i] = this.toBeat(sheet, a, b.id, new Map(sheet.beats.map((x, n) => [n + 1, x.id] as const)));
+          if (a.then?.trim()) this.then.set(b.id, a.then.trim());
+          else this.then.delete(b.id);
         } catch {
           // Left as it was; the review shows the question.
         }
@@ -496,7 +534,46 @@ export class BeatReader {
     }
   }
 
-  // ---------------------------------------------------------------- 5. what's said, where the author didn't write it
+  // ---------------------------------------------------------------- 5. what else happens, and the journal
+
+  private async consequences(sheet: BeatSheet): Promise<void> {
+    const list = sheet.beats.map((b, i) => [b, i + 1] as const).filter(([b]) => this.then.has(b.id));
+    try {
+      const a = await this.ai.ask(
+        READ_RULES,
+        `${this.context(sheet)}\n\nWhat else happens along with these beats:\n${list.map(([b, n]) => `Beat ${n}: “${this.then.get(b.id)}”`).join('\n')}\n\nFor each, give what it does to the game: gold, items given or taken, a choice remembered, people attacking, leaving, following or appearing.`,
+        ThenSchema,
+      );
+      for (const e of a.beats) {
+        const b = sheet.beats[e.n - 1];
+        if (b && this.then.has(b.id)) b.effects = this.effects(sheet, e);
+      }
+    } catch {
+      // Left without; the review shows what the author wrote.
+    }
+  }
+
+  private async words(sheet: BeatSheet, text: string): Promise<void> {
+    if (!sheet.beats.length) return;
+    try {
+      const a = await this.ai.ask(
+        READ_RULES,
+        `The quest:\n<quest>\n${text.trim()}\n</quest>\n\n${this.context(sheet)}\n\nFor every beat: what the player is told to do to make it happen, and what their journal says once it's done.`,
+        WordsSchema,
+        Math.min(4000, 400 + sheet.beats.length * 120),
+      );
+      for (const w of a.beats) {
+        const b = sheet.beats[w.n - 1];
+        if (!b) continue;
+        b.objective = w.objective.trim() || null;
+        b.journal = w.journal.trim() || null;
+      }
+    } catch {
+      // Left without; the compiled quest falls back to its own words.
+    }
+  }
+
+  // ---------------------------------------------------------------- 6. what's said, where the author didn't write it
 
   private async saying(sheet: BeatSheet, b: Beat, text: string): Promise<void> {
     const who = sheet.people.find((p) => p.key === b.target);

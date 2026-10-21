@@ -227,9 +227,18 @@ describe('beat sheets', () => {
         if (user.includes('<passage>'))
           return reply({
             beats: [
-              { does: 'talk', target: 'Tilda', count: null, hours: null, after: [], quote: 'she tells them about Arn and begs them to find out what happened to him', journal: 'Tilda asked me to find out what happened to her son.', objective: null, ends: 'no', ...none },
-              { does: 'pickup', target: 'letter', count: null, hours: null, after: [1], quote: 'on him a letter he never sent', journal: 'I found Arn and his letter.', objective: 'Find out what happened to Arn', ends: 'no', ...none },
-              { does: 'talk', target: 'Tilda Grey-Hand', count: null, hours: null, after: [2], quote: 'When the player brings the letter back', journal: 'Tilda read the letter.', objective: 'Bring the letter to Tilda', ends: 'complete', ...none, takes: [{ item: 'letter', count: 1 }], gives: [{ item: 'axe', count: 1 }] },
+              { n: 1, does: 'talk', target: 'Tilda', count: null, hours: null, after: [], quote: 'she tells them about Arn and begs them to find out what happened to him', ends: 'no', then: null },
+              { n: 2, does: 'pickup', target: 'letter', count: null, hours: null, after: [1], quote: 'on him a letter he never sent', ends: 'no', then: null },
+              { n: 3, does: 'talk', target: 'Tilda Grey-Hand', count: null, hours: null, after: [2], quote: 'When the player brings the letter back', ends: 'complete', then: "she takes the letter and gives the player her late husband's axe" },
+            ],
+          });
+        if (user.includes('What else happens')) return reply({ beats: [{ n: 3, ...none, takes: [{ item: 'letter', count: 1 }], gives: [{ item: 'axe', count: 1 }] }] });
+        if (user.includes('their journal says'))
+          return reply({
+            beats: [
+              { n: 1, objective: 'Talk to Tilda', journal: 'Tilda asked me to find out what happened to her son.' },
+              { n: 2, objective: 'Find out what happened to Arn', journal: 'I found Arn and his letter.' },
+              { n: 3, objective: 'Bring the letter to Tilda', journal: 'Tilda read the letter.' },
             ],
           });
         if (user.includes('Write what the player says')) return reply(user.includes('moment: “When the player brings') ? { player: 'I found Arn.', answer: 'Then he is gone. Take this.' } : { player: 'Why the lantern?', answer: 'For my son. Will you look for him?' });
@@ -252,7 +261,9 @@ describe('beat sheets', () => {
       ['tildaHusbandAxe', null, 'tilda'],
     ]);
     expect(sheet.beats.map((b) => `${b.id} ${b.does} ${b.target} after ${b.after.join(',')}`)).toEqual(['b1 talk tilda after ', 'b2 pickup arnLetter after b1', 'b3 talk tilda after b2']);
+    // What else happens is the author's words, read into effects in a question of its own.
     expect(sheet.beats[2]!.effects).toEqual({ takes: [{ item: 'arnLetter', count: 1 }], gives: [{ item: 'tildaHusbandAxe', count: 1 }] });
+    expect(sheet.beats.map((b) => b.objective)).toEqual(['Talk to Tilda', 'Find out what happened to Arn', 'Bring the letter to Tilda']);
     // Nothing written out: the AI wrote one exchange for each talk beat.
     expect(sheet.lines.map((l) => l.beat)).toEqual(['b1', 'b3']);
     expect(steps).toContain('reading part 1 of 1');
