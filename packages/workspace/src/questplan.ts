@@ -681,7 +681,14 @@ export function repairPlan(plan: QuestPlan): string[] {
     }
     if (kept.length !== events.length || kept.some((x, i) => x !== events[i])) p.events = kept;
   }
-  changes.push(...doubledRewards(plan), ...reportStages(plan), ...backwardStages(plan), ...talkThenDeed(plan));
+  // A container locked with the plan's key: what's in it lies in a strongbox where its holder stays, not on them.
+  for (const i of list(p.items)) {
+    if (typeof i.lockedWith !== 'string' || !i.lockedWith || i.startsWith !== 'character') continue;
+    const holder = list(p.characters).find((c) => c.key === i.startsAtKey);
+    if (typeof holder?.locationKey !== 'string') continue;
+    Object.assign(i, { startsWith: 'location', startsAtKey: holder.locationKey, spot: typeof i.spot === 'string' && i.spot.trim() ? i.spot : 'in a locked strongbox' });
+    changes.push(`${String(i.name)} is locked away with ${String(i.lockedWith)}, so it lies in a strongbox where ${String(holder.name)} stays`);
+  }
   const stages = list(p.stages).filter((s) => typeof s.index === 'number');
   if (stages.length && !stages.some((s) => s.startsQuest === true)) {
     const first = stages.reduce((a, b) => ((b.index as number) < (a.index as number) ? b : a));
@@ -800,6 +807,14 @@ export function talkThenDeed(plan: QuestPlan): string[] {
     out.push(`the line that set stage ${to} now sets a stage of its own (${mid}), so “${deed.note || deed.kind}” still has to happen after it`);
   }
   return out;
+}
+
+/**
+ * The mends that need the plan's dialogue as it will be built (for a written quest, the author's lines with their
+ * tags): stages run together pulled apart, stages the quest is past dropped, gold paid twice paid once.
+ */
+export function mendStages(plan: QuestPlan): string[] {
+  return [...doubledRewards(plan), ...reportStages(plan), ...backwardStages(plan), ...talkThenDeed(plan)];
 }
 
 /**

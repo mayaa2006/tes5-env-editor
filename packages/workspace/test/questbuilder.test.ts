@@ -26,6 +26,7 @@ import {
   normalizePlan,
   pickPlanExample,
   planCatalog,
+  mendStages,
   repairPlan,
   rewriteScreenplay,
   validatePlan,
@@ -244,7 +245,7 @@ describe('plans that would play wrong', () => {
     plan.events = [{ atStage: 10, kind: 'spawn', targetKey: null, toKey: null, what: 'LvlBanditAmbushMeleeNordM', count: 3, note: 'Bandits appear in Embershard Mine' }];
     plan.rewards = [{ atStage: 100, gold: 100, itemKey: null, skill: null }];
     plan.conversations[0]!.screenplay = plan.conversations[0]!.screenplay.replace('[takes ring x1] ', '');
-    const changes = repairPlan(plan);
+    const changes = [...repairPlan(plan), ...mendStages(plan)];
     expect(changes).toEqual(
       expect.arrayContaining([
         '3 items called “Torn Map Page” in one place are now one item with 3 copies, found by one step that counts them',
@@ -289,7 +290,7 @@ describe('plans that would play wrong', () => {
     plan.conversations[1]!.screenplay = "PLAYER: Brynja sent me. [if stage 10]\nEIRIK: Lead the way. [stage 20]";
     plan.characters[1]!.routine = [{ activity: 'follow', where: null, hours: null, fromStage: 20, untilStage: 100, line: null }];
     expect(validatePlan(plan).map((i) => i.message)).toContain('A line in “Eirik” sets stage 20, which “Escort Eirik to the valley” is meant to reach, so the player can skip it by talking. Take out that [stage 20], or add a talk step if saying it should count');
-    expect(repairPlan(plan)).toContain('the line that set stage 20 now sets a stage of its own (15), so “Escort Eirik to the valley” still has to happen after it');
+    expect([...repairPlan(plan), ...mendStages(plan)]).toContain('the line that set stage 20 now sets a stage of its own (15), so “Escort Eirik to the valley” still has to happen after it');
     expect(plan.conversations[1]!.screenplay).toBe('PLAYER: Brynja sent me. [if stage 10]\nEIRIK: Lead the way. [stage 15]');
     expect(plan.steps.map((x) => `${x.from}→${x.to} ${x.kind}`)).toEqual(['0→10 talk', '15→20 arrive', '20→100 talk', '10→15 talk']);
     expect(plan.characters[1]!.routine[0]!.fromStage).toBe(15);
@@ -301,7 +302,7 @@ describe('plans that would play wrong', () => {
     const plan = exampleQuestPlan();
     plan.failures = [{ kind: 'death', targetKey: 'eirik', days: null, fromStage: null, failStage: 20, note: 'Rulnik is dead' }];
     plan.conversations[1]!.screenplay = 'PLAYER: Are you hurt? [if stage 100]\nEIRIK: Hesta needs to know. [stage 20]';
-    const changes = repairPlan(plan);
+    const changes = [...repairPlan(plan), ...mendStages(plan)];
     expect(changes).toEqual(expect.arrayContaining(['“Rulnik is dead” sets the new stage 200, which fails the quest (stage 20 is one the quest goes through)', 'took [stage 20] off a line in “Eirik” offered at stage 100 (the quest is past it by then)']));
     expect(plan.stages.find((x) => x.index === 20)!.failsQuest).toBe(false);
     expect(plan.failures[0]!.failStage).toBe(200);
@@ -316,7 +317,7 @@ describe('plans that would play wrong', () => {
     plan.steps[2] = { from: 20, to: 100, kind: 'clear', targetKey: 'bandits', count: null, hours: null, note: 'All bandits are dead' };
     plan.objectives[1] = { index: 20, text: 'Kill the bandits', shownAtStage: 20, completedAtStage: 100, targetKey: 'bandits' };
     plan.conversations[0]!.screenplay = plan.conversations[0]!.screenplay.replace('[takes ring x1] ', '') + '\nGREETING:\nBRYNJA: They won\'t trouble us now. [if stage 100]';
-    const changes = repairPlan(plan);
+    const changes = [...repairPlan(plan), ...mendStages(plan)];
     expect(changes).toContain('“All bandits are dead” now reaches a stage of its own (60), and the conversation that reaches stage 100 is offered from there, so the player reports back after it');
     expect(plan.stages.map((x) => x.index)).toEqual([0, 10, 20, 60, 100]);
     expect(plan.steps[2]).toMatchObject({ from: 20, to: 60, kind: 'clear' });
@@ -324,6 +325,18 @@ describe('plans that would play wrong', () => {
     expect(plan.conversations[0]!.screenplay).toContain('PLAYER: I found your ring. [if stage 60]');
     expect(plan.conversations[0]!.screenplay).toContain("BRYNJA: They won't trouble us now. [if stage 60]");
     expect(validatePlan(plan).filter((i) => i.severity === 'error')).toEqual([]);
+  });
+
+  it('puts an item locked away with a key in a strongbox where its holder stays', () => {
+    // As Qwen3.5 4B planned "Business After Dark": the ledger locked with Varro's key, but carried by Varro.
+    const plan = exampleQuestPlan();
+    plan.items.push(
+      { key: 'strongboxKey', name: "Varro's Strongbox Key", kind: 'key', existing: null, basedOn: null, value: null, startsWith: 'character', startsAtKey: 'eirik', spot: null, copies: null, text: null, lockedWith: null },
+      { key: 'ledger', name: "Varro's Ledger", kind: 'book', existing: null, basedOn: null, value: null, startsWith: 'character', startsAtKey: 'eirik', spot: null, copies: null, text: 'Paid half.', lockedWith: 'strongboxKey' },
+    );
+    expect(repairPlan(plan)).toContain("Varro's Ledger is locked away with strongboxKey, so it lies in a strongbox where Eirik stays");
+    expect(plan.items.at(-1)).toMatchObject({ startsWith: 'location', startsAtKey: 'tavern', spot: 'in a locked strongbox' });
+    expect(validatePlan(plan).filter((i) => /locked|isn't put in a container/.test(i.message))).toEqual([]);
   });
 
   it('leaves alone items of one name in different places, an ambush away from the encounter, and gold no line pays', () => {
@@ -337,7 +350,7 @@ describe('plans that would play wrong', () => {
     // Bandits wait in the cellar; these come for the player wherever they are.
     plan.events = [{ atStage: 20, kind: 'spawn', targetKey: null, toKey: null, what: 'LvlBanditMelee', count: 2, note: 'Thieves come for the ring on the road' }];
     plan.rewards = [{ atStage: 20, gold: 25, itemKey: null, skill: null }];
-    const changes = repairPlan(plan);
+    const changes = [...repairPlan(plan), ...mendStages(plan)];
     expect(changes.filter((c) => /copies|spawn|reward/.test(c))).toEqual([]);
     expect(plan.items).toHaveLength(2);
     expect(plan.events).toHaveLength(1);

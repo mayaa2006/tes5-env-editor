@@ -20,7 +20,7 @@ import type { FormKey } from '@tes5/esp';
 import { GESTURES } from './gestures';
 import { z } from 'zod';
 import type { JournalContext, JournalDraft } from './journal';
-import { PLAN_EVENT_KINDS, QuestPlanSchema, backwardStages, doubledRewards, keepAskedChanges, reportStages, talkThenDeed, normalizePlan, repairPlan, stagesSaid, validatePlan, type PlanIssue, type QuestPlan } from './questplan';
+import { PLAN_EVENT_KINDS, QuestPlanSchema, keepAskedChanges, mendStages, normalizePlan, repairPlan, stagesSaid, validatePlan, type PlanIssue, type QuestPlan } from './questplan';
 import { lintScreenplay } from './dialoguelint';
 import { aiName, chatSend, type AiProvider } from './aiproviders';
 import { WorldService } from './world';
@@ -367,7 +367,10 @@ export class QuestPlanner {
     const written = mode === 'document' ? findDialogue(source).blocks : [];
     if (written.length) return this.planWritten(source, catalog, written, opts.context ?? '');
     const params = this.request([{ role: 'user', content: `${MODES[mode]}${opts.context ? `\n\n${opts.context}` : ''}\n\n<source>\n${source.trim()}\n</source>${this.free ? `\n\n${CHECKLIST}` : ''}` }], catalog, source);
-    const plan = await this.fixLogic(params, await this.run<QuestPlan>(params));
+    const first = await this.run<QuestPlan>(params);
+    const mended = mendStages(first);
+    if (mended.length) first.assumptions = [...(first.assumptions ?? []), ...mended.map((x) => x[0]!.toUpperCase() + x.slice(1))];
+    const plan = await this.fixLogic(params, first);
     // Smaller models write better in small pieces: each conversation, then the journal, gets its own request.
     return this.free ? this.polish(plan, source) : plan;
   }
@@ -388,7 +391,7 @@ export class QuestPlanner {
     const unsaid = plan.steps.filter((st) => st.kind === 'talk' && !stagesSaid(plan).has(st.to));
     if (unsaid.length) await this.addWrittenDialogue(plan, blocks, context, unsaid);
     // Stages the plan ran together (talking, then doing; doing, then reporting back) and gold paid twice, now the lines are in.
-    const mended = [...doubledRewards(plan), ...reportStages(plan), ...backwardStages(plan), ...talkThenDeed(plan)];
+    const mended = mendStages(plan);
     if (mended.length) plan.assumptions = [...(plan.assumptions ?? []), ...mended.map((x) => x[0]!.toUpperCase() + x.slice(1))];
     const blocking = blockingIssues(validatePlan(plan));
     if (blocking.length) this.onStep?.(`fixing what would leave the quest stuck (${blocking[0]!.message}${blocking.length > 1 ? `, and ${blocking.length - 1} more` : ''})`);
