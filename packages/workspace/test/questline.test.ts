@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { FormKey } from '@tes5/esp';
+import { Plugin, PluginRecord, applyTyped, placeRecord, type FormKey } from '@tes5/esp';
 import {
   DialogueService,
   EnvironmentService,
@@ -413,6 +413,32 @@ describe('questline mechanics', () => {
     expect(collect.match(/If Game\.GetPlayer\(\)\.GetItemCount\(Page\) >= 3 && !Fired0/g)).toHaveLength(2);
     const wait = generateTriggerScript('T', 'ReferenceAlias', [{ id: 'c', event: { kind: 'wait', hours: 24 }, conditions: [], actions: [{ kind: 'setStage', quest: q, stage: 40 }], once: true }], () => 'Q').source;
     expect(wait).toContain('Event OnUpdateGameTime()');
+  });
+
+  it("names the player's reference by its ID, 0x14, which Skyrim.esm itself doesn't hold", async () => {
+    // A stand-in Skyrim.esm with the Player (0x7) and, as in the real file, no record 0x14.
+    const fs = new MemoryFileSystem();
+    const demo = createDemoData(fs);
+    const skyrim = Plugin.create('Skyrim.esm', {});
+    const player = PluginRecord.create('NPC_', 0x7, [], 0);
+    applyTyped(player, { editorId: 'Player', name: 'Prisoner' });
+    placeRecord(skyrim, player);
+    skyrim.updateHeaderBookkeeping();
+    fs.writeFileSync(`${demo.dataDir}/Skyrim.esm`, skyrim.serialize());
+    const ws = new Workspace(fs, { game: 'SkyrimSE', roots: [demo.dataDir], outputDir: demo.dataDir, loadOrder: [{ name: 'Skyrim.esm', active: true }, { name: 'DemoWorld.esm', active: true }] });
+    await ws.scan();
+    await ws.load();
+    ws.createPlugin('Built.esp');
+    const scripts = new ScriptService(ws);
+    scripts.refresh();
+    const quests = new QuestService(ws, scripts);
+    const graphs = new QuestGraphService(ws, quests, scripts, new TriggerService(ws, scripts));
+    const q = quests.createQuest('PlayerAliasQuest');
+    const alias = graphs.playerAlias(q);
+    expect(graphs.playerAlias(q)).toBe(alias);
+    const a = quests.quest(q).aliases.find((x) => x.id === alias)!;
+    expect(a.name).toBe('Player');
+    expect(JSON.stringify(a.fill)).toContain('000014:Skyrim.esm');
   });
 
   it('builds notes with their words, several copies, locked containers, waits, collecting and ambushes', async () => {

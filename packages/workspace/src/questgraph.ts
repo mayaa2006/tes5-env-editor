@@ -450,9 +450,13 @@ export class QuestGraphService {
 
   /** The quest alias for the player (made the first time it's needed). */
   playerAlias(quest: FormKey): number {
-    const player = this.ws.view(PLAYER_REF) ? PLAYER_REF : this.ws.byEditorId('PlayerRef');
+    // The game makes the player's reference itself (it isn't a record in Skyrim.esm), but quests name it by its ID,
+    // 0x14: that's used whenever Skyrim.esm is loaded (its Player, 0x7, is there); otherwise a reference called PlayerRef.
+    const player = this.ws.view(PLAYER_REF) || this.ws.view('000007:Skyrim.esm' as FormKey) ? PLAYER_REF : this.ws.byEditorId('PlayerRef');
     if (!player) throw new WorkspaceError('The player reference (PlayerRef, from Skyrim.esm) isn’t loaded');
-    return this.aliasFor(quest, player);
+    if (player !== PLAYER_REF || this.ws.view(PLAYER_REF)) return this.aliasFor(quest, player);
+    const existing = this.quests.quest(quest).aliases.find((a) => a.kind === 'ref' && this.aliasTarget(a) === PLAYER_REF);
+    return existing ? existing.id : this.quests.addReferenceAlias(quest, this.uniqueAliasName(quest, 'Player'), { specificReference: PLAYER_REF });
   }
 
   /** The stage-script line that starts a wait on the player's alias, or makes it check the player's inventory now. */

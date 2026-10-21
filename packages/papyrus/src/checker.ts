@@ -172,7 +172,8 @@ export class Checker {
 
   private checkFunction(fn: FunctionDecl): void {
     this.fn = fn;
-    if (fn.kind === 'event' && !fn.isNative && this.script.extends && this.authoritative(this.script.extends)) {
+    // OnInit, OnBeginState and OnEndState belong to the language: every script has them, though no .psc declares them.
+    if (fn.kind === 'event' && !fn.isNative && this.script.extends && this.authoritative(this.script.extends) && !['oninit', 'onbeginstate', 'onendstate'].includes(fn.lower)) {
       const found = this.index.findFunction(this.script.extends, fn.lower);
       if (!found || found.fn.kind !== 'event') {
         this.err(`Event "${fn.name}" does not exist on any parent of ${this.script.name}; non-native scripts cannot declare new events`, fn.nameRange, 'unknown-event');
