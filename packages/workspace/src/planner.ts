@@ -395,7 +395,8 @@ export class QuestPlanner {
     if (mended.length) plan.assumptions = [...(plan.assumptions ?? []), ...mended.map((x) => x[0]!.toUpperCase() + x.slice(1))];
     const blocking = blockingIssues(validatePlan(plan));
     if (blocking.length) this.onStep?.(`fixing what would leave the quest stuck (${blocking[0]!.message}${blocking.length > 1 ? `, and ${blocking.length - 1} more` : ''})`);
-    plan = await this.fixLogic(params, plan, true);
+    // A free AI fixes only the stages, steps and objectives (a few hundred words, not the whole plan again).
+    plan = this.free ? await this.fixSteps(plan) : await this.fixLogic(params, plan, true);
     if (this.free) {
       this.onStep?.('filling gaps in the dialogue and journal');
       const brief = planBrief(plan, source);
@@ -486,6 +487,46 @@ export class QuestPlanner {
       }
     } catch {
       // Left empty; the review shows it.
+    }
+  }
+
+  /**
+   * For free AIs: what would leave the quest stuck, fixed in the quest's stages, steps and objectives only (the rest of
+   * the plan and the dialogue stay as they are), then mended again. Kept only when it leaves fewer problems.
+   */
+  private async fixSteps(plan: QuestPlan): Promise<QuestPlan> {
+    const problems = blockingIssues(validatePlan(plan));
+    if (!problems.length) return plan;
+    const said = [...stagesSaid(plan)].sort((a, b) => a - b);
+    const lines = plan.conversations.flatMap((c) =>
+      c.screenplay
+        .split(/\r?\n/)
+        .filter((l) => /\[(stage|if stage|if\s+\d)/i.test(l))
+        .map((l) => `${c.title.replace(/^✎\s*/, '')}: ${l.trim().slice(0, 140)}`),
+    );
+    try {
+      const fixed = await this.run(
+        {
+          model: this.model,
+          max_tokens: 4000,
+          output_config: { effort: 'medium', format: betaZodOutputFormat(StepsFixSchema) },
+          system: [{ type: 'text', text: STEPS_FIX_RULES }],
+          messages: [
+            {
+              role: 'user',
+              content: `${planBrief(plan, '')}\n\nThe lines of dialogue that check or set a stage:\n${lines.join('\n') || '(none)'}\n\nStages the dialogue sets: ${said.join(', ') || 'none'}. Keep those numbers.\n\nWhat would leave the quest stuck:\n${problems.map((p) => `- ${p.message}`).join('\n')}\n\n${planIndex(plan)}\n\nNow: ${JSON.stringify({ stages: plan.stages, steps: plan.steps, objectives: plan.objectives })}\n\nReturn the corrected stages, steps and objectives.`,
+            },
+          ],
+        },
+        StepsFixSchema,
+      );
+      const next = structuredClone(plan);
+      Object.assign(next, { stages: fixed.stages, steps: fixed.steps, objectives: fixed.objectives });
+      repairPlan(normalizePlan(next));
+      mendStages(next);
+      return blockingIssues(validatePlan(next)).length < problems.length ? next : plan;
+    } catch {
+      return plan;
     }
   }
 
@@ -918,6 +959,20 @@ function planBrief(plan: QuestPlan, source: string): string {
 export function blockingIssues(issues: PlanIssue[]): PlanIssue[] {
   return issues.filter((i) => i.severity === 'error' || /^(Nothing moves the quest|Nothing starts the quest|No stage completes|The player needs|The player loses|A line in .* sets stage|The quest starts with the game, so stage|.* fails the quest as soon as stage|.* whenever it's chosen, even before|The player has to pick up)/.test(i.message));
 }
+
+/** The part of a plan a free AI is asked to fix: stages, steps and objectives. */
+const StepsFixSchema = z.object({
+  stages: QuestPlanSchema.shape.stages,
+  steps: QuestPlanSchema.shape.steps,
+  objectives: QuestPlanSchema.shape.objectives,
+});
+
+const STEPS_FIX_RULES = `You fix the stages of a Skyrim quest so it can be played from start to end. The quest's characters, items, places and dialogue are already decided; you only change its stages, its steps (what moves the quest from one stage to the next) and its objectives. Answer in the JSON format given.
+
+- Every stage after the first needs something that reaches it: a step, or a line of dialogue with [stage N] (listed for you).
+- A step's kind says what the player does: talk (a line of dialogue does it), pickup, read, activate, death, arrive, clear (every enemy in a group dead), wait (in-game hours after its "from" stage), script (right away).
+- Keep the stage numbers the dialogue uses. Add a stage when two things the author describes happen one after the other (fetch something, then bring it back; wait a day, then come back).
+- Exactly one stage starts the quest; the last one completes it.`;
 
 const JournalDraftSchema = z.object({
   stages: z.array(z.object({ index: z.number().int(), journal: z.string() })),

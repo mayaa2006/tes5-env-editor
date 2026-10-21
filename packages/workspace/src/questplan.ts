@@ -814,7 +814,41 @@ export function talkThenDeed(plan: QuestPlan): string[] {
  * tags): stages run together pulled apart, stages the quest is past dropped, gold paid twice paid once.
  */
 export function mendStages(plan: QuestPlan): string[] {
-  return [...doubledRewards(plan), ...reportStages(plan), ...backwardStages(plan), ...talkThenDeed(plan)];
+  return [...doubledRewards(plan), ...reportStages(plan), ...backwardStages(plan), ...talkThenDeed(plan), ...talkStepSpeakers(plan)];
+}
+
+/**
+ * A talk step that names who the player talks to ("Hulda tells the player Varro keeps strange hours"), where nothing
+ * that character says in the author's conversation moves the quest on: their first answer does, offered at the step's
+ * stage. Returns what changed.
+ */
+export function talkStepSpeakers(plan: QuestPlan): string[] {
+  const out: string[] = [];
+  if (!Array.isArray(plan.steps) || !Array.isArray(plan.conversations) || !Array.isArray(plan.characters)) return out;
+  for (const st of plan.steps.filter((x) => x && x.kind === 'talk' && typeof x.from === 'number')) {
+    if (stagesSaid(plan).has(st.to)) continue;
+    const note = (st.note ?? '').toLowerCase();
+    // Who the step names first ("Hulda tells the player Varro…" is about Hulda), among those with a conversation that
+    // moves nothing on yet.
+    const at = (c: PlanCharacter) =>
+      Math.min(...[c.name, c.name?.split(/\s+/)[0], c.key].filter((n): n is string => !!n && n.length > 2).map((n) => note.search(new RegExp(`\\b${n.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`))).filter((i) => i >= 0));
+    // (Only the author's own conversations, ✎: where the AI writes the dialogue, it writes the line that's missing.)
+    const conv = (ch: PlanCharacter) => plan.conversations.find((c) => c.title === `✎ ${ch.name}` && !/\[stage\s+\d+\]/i.test(c.screenplay));
+    const named = plan.characters.filter((c) => Number.isFinite(at(c)) && conv(c)).sort((a, b) => at(a) - at(b));
+    if (!named.length) continue;
+    const c = conv(named[0]!)!;
+    const first = parseScreenplay(c.screenplay).topics[0];
+    const answer = first?.responses[0];
+    if (!first || !answer) continue;
+    const rows = c.screenplay.split(/\r?\n/);
+    const last = answer.line + answer.lines.length - 1;
+    if (rows[last - 1] === undefined || rows[first.line - 1] === undefined) continue;
+    rows[last - 1] = `${rows[last - 1]!.trimEnd()} [stage ${st.to}]`;
+    if (!/\[if\s+(?:stage\s*)?(?:[<>=!]=?\s*)?\d+\]/i.test(rows[first.line - 1]!)) rows[first.line - 1] = `${rows[first.line - 1]!.trimEnd()} [if stage ${st.from}]`;
+    c.screenplay = rows.join('\n');
+    out.push(`“${st.note}”: what ${named[0]!.name} answers to “${first.text}” moves the quest to stage ${st.to}`);
+  }
+  return out;
 }
 
 /**
@@ -1101,8 +1135,10 @@ export function validatePlan(input: QuestPlan): PlanIssue[] {
     const dies = (plan.steps ?? []).some((st) => st.kind === 'death' && st.targetKey === c.key) || (plan.events ?? []).some((e) => (e.kind === 'kill' || e.kind === 'hostile') && e.targetKey === c.key) || !!c.combat?.hostile;
     return hands || dies;
   };
+  // (Pickpocketing it, stealing it or taking it from them counts: the quest watches the item itself.)
+  const taken = (i: PlanItem) => (plan.steps ?? []).some((st) => st.kind === 'pickup' && st.targetKey === i.key && /pickpocket|steal|stole|take .*from|takes? it from|loot/i.test(st.note ?? ''));
   for (const i of plan.items ?? [])
-    if ((plan.steps ?? []).some((st) => st.kind === 'pickup' && st.targetKey === i.key) && !released(i)) {
+    if ((plan.steps ?? []).some((st) => st.kind === 'pickup' && st.targetKey === i.key) && !released(i) && !taken(i)) {
       const c = (plan.characters ?? []).find((x) => x.key === i.startsAtKey)!;
       warn(`The player has to pick up ${i.name}, but ${c.name} carries it and never hands it over or dies: put it on the character it should be taken from (one who fights or dies), somewhere to pick up, or have ${c.name} hand it over with [gives ${i.key} x1]`);
     }

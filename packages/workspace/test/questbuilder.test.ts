@@ -327,6 +327,23 @@ describe('plans that would play wrong', () => {
     expect(validatePlan(plan).filter((i) => i.severity === 'error')).toEqual([]);
   });
 
+  it('has the character a talk step names move the quest on, and lets a key be pickpocketed', () => {
+    // As Qwen3.5 4B planned "Business After Dark": "Hulda tells the player Varro keeps strange hours" (0 → 10), with
+    // nothing Hulda says tagged; Varro's key to be pickpocketed.
+    const plan = exampleQuestPlan();
+    plan.characters[1] = { ...plan.characters[1]!, key: 'hulda', name: 'Hulda' };
+    plan.characters.push({ ...plan.characters[1]!, key: 'varro', name: 'Varro Tullius' });
+    plan.steps[0] = { from: 0, to: 10, kind: 'talk', targetKey: null, count: null, hours: null, note: 'Hulda tells the player Varro keeps strange hours' };
+    plan.conversations[1] = { title: '✎ Hulda', screenplay: "PLAYER: I'm looking for an Imperial called Varro. [if day]\nHULDA: The Imperial? He keeps strange hours." };
+    plan.conversations.push({ title: '✎ Varro Tullius', screenplay: 'PLAYER: Who are you? [if night]\nVARRO: A collector.' });
+    plan.conversations[0]!.screenplay = plan.conversations[0]!.screenplay.replace(' [stage 10]', '');
+    plan.items.push({ key: 'key', name: "Varro's Strongbox Key", kind: 'key', existing: null, basedOn: null, value: null, startsWith: 'character', startsAtKey: 'varro', spot: null, copies: null, text: null, lockedWith: null });
+    plan.steps[1] = { ...plan.steps[1]!, targetKey: 'key', note: 'Player pickpockets the key from Varro' };
+    expect(mendStages(plan)).toContain('“Hulda tells the player Varro keeps strange hours”: what Hulda answers to “I\'m looking for an Imperial called Varro.” moves the quest to stage 10');
+    expect(plan.conversations[1]!.screenplay).toBe("PLAYER: I'm looking for an Imperial called Varro. [if day] [if stage 0]\nHULDA: The Imperial? He keeps strange hours. [stage 10]");
+    expect(validatePlan(plan).map((i) => i.message).filter((m) => /stage 10|pick up/.test(m))).toEqual([]);
+  });
+
   it('puts an item locked away with a key in a strongbox where its holder stays', () => {
     // As Qwen3.5 4B planned "Business After Dark": the ledger locked with Varro's key, but carried by Varro.
     const plan = exampleQuestPlan();
