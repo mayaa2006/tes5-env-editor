@@ -55,6 +55,8 @@ export interface BeatReadOptions {
 
 const ITEM_KINDS = ['misc', 'book', 'key', 'clothing', 'armor', 'weapon', 'potion', 'other'] as const;
 
+const WRITE_RULES = `You write the words a Skyrim quest needs that its author didn't write, in the author's tone: short, plain, in the game's style, no game terms. Answer only in the JSON format given.`;
+
 const READ_RULES = `You read a Skyrim quest an author has written, to help turn it into a working quest. Answer only from what the text says, in the JSON format given. Quote the author's sentence each answer comes from, word for word. Where the text doesn't say, use null or an empty list; don't invent.`;
 
 const EntitiesSchema = z.object({
@@ -135,18 +137,19 @@ const BeatShape = z.object({
   then: z.string().nullable().describe("Anything else that happens when it's done (the player is paid or given something, someone leaves, attacks, follows or appears), in the author's words; null if nothing"),
 });
 
-/** What happens along with the beats that say "then". */
-const ThenSchema = z.object({
-  beats: z.array(z.object({ n: z.number().int().describe('The beat number'), ...EffectsShape })),
-});
+/** What happens along with the beats that say "then": only those beats, by number. */
+const thenSchema = (numbers: number[]) =>
+  z.object({
+    beats: z.array(z.object({ n: z.number().int().describe(`The beat number {enum: ${JSON.stringify(numbers)}}`), ...EffectsShape })).describe(`One entry for each of beats ${numbers.join(', ')}`),
+  });
 
 /** What the player is told, and what the journal says, for each beat. */
 const WordsSchema = z.object({
   beats: z.array(
     z.object({
       n: z.number().int().describe('The beat number'),
-      objective: z.string().describe('What the player is told to do to make this beat happen, short ("Find the three pages"); the author\'s words where given'),
-      journal: z.string().describe("The player's journal once it's done, in the first person; the author's words where given"),
+      objective: z.string().describe('What the player is told to do to make this beat happen: an order of a few words, e.g. "Talk to Gerdur", "Find the note", "Kill the bandits"'),
+      journal: z.string().describe("The player's journal once it's done: one or two sentences, first person, past tense, e.g. \"Gerdur asked me to find out what happened to her lumber.\""),
     }),
   ),
 });
@@ -353,6 +356,13 @@ export class BeatReader {
     return [names('People', sheet.people), names('Places', sheet.places), names('Items', sheet.items), names('Enemies', sheet.groups.map((g) => ({ name: g.what }))), `Beats so far:\n${beats.join('\n') || '(none yet)'}`].join('\n');
   }
 
+  /** The beats as a short numbered list (what is done to whom, and after which), with one of them marked. */
+  private outline(sheet: BeatSheet, mark?: string): string {
+    return sheet.beats
+      .map((b, i) => `${i + 1}. ${b.does}${b.target ? ` ${this.nameOf(sheet, b.target)}` : ''}${b.after.length ? ` (after ${b.after.map((a) => this.number(sheet, a)).join(' or ')})` : ''}${b.ends ? ` — ${b.ends === 'complete' ? 'completes' : 'fails'} the quest` : ''}${b.id === mark ? '   ← this one' : ''}`)
+      .join('\n');
+  }
+
   private nameOf(sheet: BeatSheet, key: string): string {
     return [...sheet.people, ...sheet.places, ...sheet.items].find((x) => x.key === key)?.name ?? sheet.groups.find((g) => g.key === key)?.what ?? key;
   }
@@ -366,6 +376,11 @@ export class BeatReader {
     if (!name) return null;
     const pools: Record<BeatEntityKind, { key: string; name: string }[]> = { person: sheet.people, place: sheet.places, item: sheet.items, group: sheet.groups.map((g) => ({ key: g.key, name: g.what })) };
     for (const k of kinds) {
+      const hit = byName(pools[k], name);
+      if (hit) return hit.key;
+    }
+    // Something of another kind (an enemy group where a person was expected): its key, for the checks to ask about.
+    for (const k of ['person', 'place', 'item', 'group'] as const) {
       const hit = byName(pools[k], name);
       if (hit) return hit.key;
     }
@@ -498,7 +513,7 @@ export class BeatReader {
 
   private async reask(sheet: BeatSheet, questions: BeatQuestion[], text: string, blocks: WrittenBlock[], opts: BeatReadOptions): Promise<void> {
     const byBeat = new Map<string, BeatQuestion[]>();
-    for (const q of questions) byBeat.set(q.about, [...(byBeat.get(q.about) ?? []), q]);
+    for (const q of questions.filter((x) => !x.unsaid)) byBeat.set(q.about, [...(byBeat.get(q.about) ?? []), q]);
     for (const [about, qs] of byBeat) {
       const i = sheet.beats.findIndex((b) => b.id === about);
       if (i >= 0) {
@@ -515,6 +530,28 @@ export class BeatReader {
           else this.then.delete(b.id);
         } catch {
           // Left as it was; the review shows the question.
+        }
+        continue;
+      }
+      const picks = qs.filter((q) => q.pick);
+      if (picks.length) {
+        // A person, item or group naming something missing: picked from what there is.
+        const pools: Record<BeatEntityKind, { key: string; name: string }[]> = { person: sheet.people, place: sheet.places, item: sheet.items, group: sheet.groups.map((g) => ({ key: g.key, name: g.what })) };
+        const owner = [...sheet.people, ...sheet.items, ...sheet.groups].find((x) => x.key === about) as Record<string, unknown> | undefined;
+        for (const q of picks) {
+          const pool = pools[q.pick!.kind];
+          if (!owner || !pool.length) continue;
+          try {
+            const a = await this.ai.ask(
+              READ_RULES,
+              `The quest:\n<quest>\n${text.trim()}\n</quest>\n\n${q.message} Which ${q.pick!.kind} is meant?`,
+              z.object({ answer: z.string().nullable().describe(`{enum: ${JSON.stringify(pool.map((x) => x.name))}} null if none of them`) }),
+              200,
+            );
+            owner[q.pick!.field] = a.answer ? (byName(pool, a.answer)?.key ?? null) : null;
+          } catch {
+            // Left as it was.
+          }
         }
         continue;
       }
@@ -542,7 +579,7 @@ export class BeatReader {
       const a = await this.ai.ask(
         READ_RULES,
         `${this.context(sheet)}\n\nWhat else happens along with these beats:\n${list.map(([b, n]) => `Beat ${n}: “${this.then.get(b.id)}”`).join('\n')}\n\nFor each, give what it does to the game: gold, items given or taken, a choice remembered, people attacking, leaving, following or appearing.`,
-        ThenSchema,
+        thenSchema(list.map(([, n]) => n)),
       );
       for (const e of a.beats) {
         const b = sheet.beats[e.n - 1];
@@ -557,8 +594,8 @@ export class BeatReader {
     if (!sheet.beats.length) return;
     try {
       const a = await this.ai.ask(
-        READ_RULES,
-        `The quest:\n<quest>\n${text.trim()}\n</quest>\n\n${this.context(sheet)}\n\nFor every beat: what the player is told to do to make it happen, and what their journal says once it's done.`,
+        WRITE_RULES,
+        `The quest:\n<quest>\n${text.trim()}\n</quest>\n\nIts beats, in order:\n${this.outline(sheet)}\n\nFor every beat: the objective the player is shown to make it happen, and their journal entry once it's done. Write them in your own words; where the author wrote an objective or journal entry, use it.`,
         WordsSchema,
         Math.min(4000, 400 + sheet.beats.length * 120),
       );
@@ -578,9 +615,10 @@ export class BeatReader {
   private async saying(sheet: BeatSheet, b: Beat, text: string): Promise<void> {
     const who = sheet.people.find((p) => p.key === b.target);
     try {
+      const n = this.number(sheet, b.id);
       const a = await this.ai.ask(
-        `You write one exchange of dialogue for a Skyrim quest, in the author's tone: what the player says, and the answer. Short, plain, no game terms. Answer in the JSON format given.`,
-        `The quest:\n<quest>\n${text.trim()}\n</quest>\n\nWrite what the player says to ${who?.name ?? 'them'}, and the answer, for this moment: “${b.quote}”.`,
+        WRITE_RULES,
+        `The quest:\n<quest>\n${text.trim()}\n</quest>\n\nIts beats, in order:\n${this.outline(sheet, b.id)}\n\nWrite beat ${n}: what the player says to ${who?.name ?? 'them'}, and the answer. It's said ${b.after.length ? `once ${b.after.map((x) => `beat ${this.number(sheet, x)}`).join(' or ')} has happened` : 'when the quest begins'}${b.ends === 'complete' ? ', and finishes the quest' : ''}; say only what belongs to this moment (“${b.quote}”).`,
         SayingSchema,
         600,
       );

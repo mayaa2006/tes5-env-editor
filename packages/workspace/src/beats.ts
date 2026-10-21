@@ -196,6 +196,10 @@ export interface BeatQuestion {
   /** The beat, entity or dialogue block it's about. */
   about: string;
   message: string;
+  /** A talk beat nothing says yet: answered by writing its line, not by reading the beat again. */
+  unsaid?: true;
+  /** A person's, item's or group's field that names something missing: answered by picking one of that kind. */
+  pick?: { field: 'place' | 'carriedBy' | 'lockedWith'; kind: BeatEntityKind };
 }
 
 // ------------------------------------------------------------------ checks
@@ -229,7 +233,8 @@ export function beatOrder(beats: Beat[]): Beat[] | undefined {
  */
 export function checkBeats(sheet: BeatSheet, opts: { earlierChoices?: string[]; blocks?: WrittenBlock[] } = {}): BeatQuestion[] {
   const q: BeatQuestion[] = [];
-  const ask = (about: string, message: string) => q.push({ about, message });
+  const ask = (about: string, message: string, unsaid?: true) => q.push({ about, message, ...(unsaid ? { unsaid } : {}) });
+  const pick = (about: string, message: string, field: 'place' | 'carriedBy' | 'lockedWith', kind: BeatEntityKind) => q.push({ about, message, pick: { field, kind } });
   const kinds = new Map<string, BeatEntityKind>([
     ...sheet.people.map((x) => [x.key, 'person'] as const),
     ...sheet.places.map((x) => [x.key, 'place'] as const),
@@ -247,7 +252,12 @@ export function checkBeats(sheet: BeatSheet, opts: { earlierChoices?: string[]; 
     const want = ACTION_TARGET[b.does];
     if (!want && b.target) ask(b.id, `“${b.quote}”: a ${b.does} beat doesn't act on anything, but it names “${b.target}”.`);
     if (want === 'person|item' && !(is(b.target, 'person') || is(b.target, 'item'))) ask(b.id, `“${b.quote}”: the player uses something here; which person or item (one of: ${[...sheet.people, ...sheet.items].map((x) => x.key).join(', ') || 'none yet'})?`);
-    else if (want && want !== 'person|item' && !is(b.target, want)) ask(b.id, `“${b.quote}”: the player does “${b.does}” to a ${want}, but “${b.target ?? 'nothing'}” isn't one. Which ${want} (one of: ${keysOf(sheet, want).join(', ') || 'none yet'})?`);
+    else if (want && want !== 'person|item' && !is(b.target, want)) {
+      // Something of another kind: say which, and what can be done to it.
+      const other = b.target ? kinds.get(b.target) : undefined;
+      const fits = other ? BEAT_ACTIONS.filter((a) => ACTION_TARGET[a] === other || (ACTION_TARGET[a] === 'person|item' && (other === 'person' || other === 'item'))) : [];
+      ask(b.id, `“${b.quote}”: the player does “${b.does}” to a ${want}, but “${b.target ?? 'nothing'}” isn't one${other ? ` (it's ${other === 'group' ? 'an enemy group' : `a ${other}`}, which the player can ${fits.join(' or ')})` : ''}. Which ${want} (one of: ${keysOf(sheet, want).join(', ') || 'none yet'})${other ? `, or is the action “${fits.join('” or “')}”` : ''}?`);
+    }
     if (b.does === 'wait' && !((b.hours ?? 0) > 0)) ask(b.id, `“${b.quote}”: how many in-game hours does the player wait?`);
     for (const a of b.after) if (!beatIds.has(a)) ask(b.id, `“${b.quote}” comes after “${a}”, which isn't a beat.`);
     const e = b.effects ?? {};
@@ -265,16 +275,16 @@ export function checkBeats(sheet: BeatSheet, opts: { earlierChoices?: string[]; 
 
   // What's picked up or read has to be somewhere; what's used up in dialogue has to be given first.
   for (const i of sheet.items) {
-    if (i.place && !is(i.place, 'place')) ask(i.key, `${i.name} lies in “${i.place}”, which isn't a place in the sheet.`);
-    if (i.carriedBy && !is(i.carriedBy, 'person')) ask(i.key, `${i.name} is carried by “${i.carriedBy}”, who isn't a person in the sheet.`);
-    if (i.lockedWith && !is(i.lockedWith, 'item')) ask(i.key, `${i.name} is locked with “${i.lockedWith}”, which isn't an item in the sheet.`);
+    if (i.place && !is(i.place, 'place')) pick(i.key, `${i.name} lies in “${i.place}”, which isn't a place in the sheet.`, 'place', 'place');
+    if (i.carriedBy && !is(i.carriedBy, 'person')) pick(i.key, `${i.name} is carried by “${i.carriedBy}”, who isn't a person in the sheet.`, 'carriedBy', 'person');
+    if (i.lockedWith && !is(i.lockedWith, 'item')) pick(i.key, `${i.name} is locked with “${i.lockedWith}”, which isn't an item in the sheet.`, 'lockedWith', 'item');
     const needed = sheet.beats.some((b) => (b.does === 'pickup' || b.does === 'read') && b.target === i.key);
     const given = sheet.beats.some((b) => (b.effects?.gives ?? []).some((g) => g.item === i.key));
     if (needed && !i.place && !i.carriedBy && !given) ask(i.key, `The player has to find ${i.name}, but it isn't anywhere: where is it, or who has it?`);
   }
-  for (const p of sheet.people) if (p.place && !is(p.place, 'place')) ask(p.key, `${p.name} is at “${p.place}”, which isn't a place in the sheet.`);
+  for (const p of sheet.people) if (p.place && !is(p.place, 'place')) pick(p.key, `${p.name} is at “${p.place}”, which isn't a place in the sheet.`, 'place', 'place');
   for (const g of sheet.groups) {
-    if (!is(g.place, 'place')) ask(g.key, `The ${g.what} are at “${g.place}”, which isn't a place in the sheet.`);
+    if (!is(g.place, 'place')) pick(g.key, `The ${g.what} are at “${g.place}”, which isn't a place in the sheet.`, 'place', 'place');
     if (g.hidden && !sheet.beats.some((b) => (b.effects?.appears ?? []).includes(g.key))) ask(g.key, `The ${g.what} are hidden until something shows them, but no beat does: which beat makes them appear?`);
   }
   const start = sheet.start;
@@ -307,7 +317,7 @@ export function checkBeats(sheet: BeatSheet, opts: { earlierChoices?: string[]; 
   for (const l of sheet.lines) if (!beatIds.has(l.beat)) ask(l.beat, `A written line is for “${l.beat}”, which isn't a beat.`);
   for (const b of sheet.beats.filter((x) => x.does === 'talk')) {
     const said = sheet.dialogue.some((d) => d.lines.some((x) => x.beat === b.id)) || sheet.lines.some((l) => l.beat === b.id);
-    if (!said) ask(b.id, `“${b.quote}” happens in a conversation: which line does it (or what's said, if the author didn't write it)?`);
+    if (!said) ask(b.id, `“${b.quote}” happens in a conversation: which line does it (or what's said, if the author didn't write it)?`, true);
   }
   return q;
 }

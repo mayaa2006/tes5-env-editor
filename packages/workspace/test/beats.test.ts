@@ -124,6 +124,15 @@ describe('beat sheets', () => {
       'Line 3 of conversation 4 is said only if the player chose “haggled”, but nothing remembers that choice. Which one is it (promised), or which line or beat should remember it?',
       '“When the player takes the job” happens in a conversation: which line does it (or what\'s said, if the author didn\'t write it)?',
     ]);
+    // Talking isn't asked again as a beat: its line gets written.
+    expect(checkBeats(sheet, { blocks: quest1() }).filter((q) => q.unsaid).map((q) => q.about)).toEqual(['job']);
+    // Killing an enemy group is clearing it: the question says what the target is and what fits it.
+    sheet.groups = [{ key: 'bandit', what: 'bandit', count: 3, place: 'inn', spot: null, hidden: false, quote: '' }];
+    sheet.beats[1] = { ...sheet.beats[1]!, does: 'kill', target: 'bandit' };
+    // A group somewhere unknown is asked as a pick among the places there are.
+    sheet.groups[0]!.place = 'at the inn';
+    expect(checkBeats(sheet).find((q) => q.about === 'bandit')).toEqual({ about: 'bandit', message: 'The bandit are at “at the inn”, which isn\'t a place in the sheet.', pick: { field: 'place', kind: 'place' } });
+    expect(checkBeats(sheet).map((q) => q.message)).toContain('“The player has to find all three pages.”: the player does “kill” to a person, but “bandit” isn\'t one (it\'s an enemy group, which the player can clear). Which person (one of: hesta, lucan), or is the action “clear”?');
   });
 
   it('order beats by what each needs first, and join branches', () => {
@@ -233,7 +242,7 @@ describe('beat sheets', () => {
             ],
           });
         if (user.includes('What else happens')) return reply({ beats: [{ n: 3, ...none, takes: [{ item: 'letter', count: 1 }], gives: [{ item: 'axe', count: 1 }] }] });
-        if (user.includes('their journal says'))
+        if (user.includes('their journal entry'))
           return reply({
             beats: [
               { n: 1, objective: 'Talk to Tilda', journal: 'Tilda asked me to find out what happened to her son.' },
@@ -241,7 +250,7 @@ describe('beat sheets', () => {
               { n: 3, objective: 'Bring the letter to Tilda', journal: 'Tilda read the letter.' },
             ],
           });
-        if (user.includes('Write what the player says')) return reply(user.includes('moment: “When the player brings') ? { player: 'I found Arn.', answer: 'Then he is gone. Take this.' } : { player: 'Why the lantern?', answer: 'For my son. Will you look for him?' });
+        if (user.includes('what the player says to')) return reply(user.includes('(“When the player brings') ? { player: 'I found Arn.', answer: 'Then he is gone. Take this.' } : { player: 'Why the lantern?', answer: 'For my son. Will you look for him?' });
         throw new Error(`unexpected: ${user.slice(0, 80)}`);
       },
     });
