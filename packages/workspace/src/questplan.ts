@@ -294,6 +294,25 @@ export function repairPlan(plan: QuestPlan): string[] {
   type Obj = Record<string, unknown>;
   const list = (v: unknown): Obj[] => (Array.isArray(v) ? v.filter((x): x is Obj => !!x && typeof x === 'object') : []);
   const p = plan as unknown as Obj;
+  // Kinds of step and event the format doesn't have, written the way people say them ("travel" to the stones).
+  const STEP_NEAR: Record<string, string> = { travel: 'arrive', go: 'arrive', goto: 'arrive', reach: 'arrive', enter: 'arrive', escort: 'arrive', visit: 'arrive', location: 'arrive', speak: 'talk', dialogue: 'talk', conversation: 'talk', ask: 'talk', report: 'talk', find: 'pickup', take: 'pickup', collect: 'pickup', get: 'pickup', loot: 'pickup', steal: 'pickup', use: 'activate', open: 'activate', kill: 'death', dies: 'death', die: 'death', defeat: 'clear', fight: 'clear', combat: 'clear', ambush: 'clear', time: 'wait', later: 'wait', sleep: 'wait', give: 'drop', deliver: 'talk', immediately: 'script', auto: 'script', automatic: 'script' };
+  const STEP_KINDS = new Set(['talk', 'pickup', 'activate', 'death', 'arrive', 'read', 'equip', 'drop', 'script', 'clear', 'wait']);
+  for (const st of list(p.steps)) {
+    const k = typeof st.kind === 'string' ? st.kind.trim().toLowerCase() : '';
+    if (STEP_KINDS.has(k)) continue;
+    const to = STEP_NEAR[k] ?? 'script';
+    changes.push(`the step “${(st.note as string) || k}” is ${/^[aeiou]/.test(to) ? 'an' : 'a'} ${to} step (“${String(st.kind)}” isn't a kind of step)`);
+    st.kind = to;
+  }
+  const EVENT_NEAR: Record<string, string> = { appear: 'show', enable: 'show', reveal: 'show', disappear: 'hide', disable: 'hide', vanish: 'hide', attack: 'hostile', attacks: 'hostile', calm: 'friendly', teleport: 'moveTo', move: 'moveTo', travel: 'moveTo', notification: 'message', notify: 'message', die: 'kill', dies: 'kill', music: 'sound', play: 'sound', start: 'startQuest' };
+  for (const e of list(p.events)) {
+    const k = typeof e.kind === 'string' ? e.kind.trim() : '';
+    if ((PLAN_EVENT_KINDS as readonly string[]).includes(k)) continue;
+    const to = EVENT_NEAR[k.toLowerCase()] ?? (PLAN_EVENT_KINDS as readonly string[]).find((x) => x.toLowerCase() === k.toLowerCase());
+    if (!to) continue;
+    changes.push(`the event “${(e.note as string) || k}” is a ${to} event`);
+    e.kind = to;
+  }
   // The same key twice: a "character" that is really one of the plan's items (it never speaks and stands nowhere) is
   // dropped; two entries in one list get told apart.
   {
@@ -639,9 +658,11 @@ export function repairPlan(plan: QuestPlan): string[] {
       const l = list(p.locations).find((x) => x.key === key);
       return [key, l?.name, l?.existing].filter((n): n is string => typeof n === 'string' && n.length > 2).map((n) => n.toLowerCase());
     };
+    // (A spawn by the player at the stage they reach that place is there too.)
+    const arrivesAt = (stage: unknown, place: unknown) => list(p.steps).some((st) => st.kind === 'arrive' && st.to === stage && st.targetKey === place);
     const doubled = (e: Obj) =>
       e.kind === 'spawn' && typeof e.what === 'string'
-        ? list(p.encounters).find((x) => word(String(x.what ?? '')) === word(e.what as string) && (e.targetKey === x.locationKey || placeNames(x.locationKey).some((n) => String(e.note ?? '').toLowerCase().includes(n))))
+        ? list(p.encounters).find((x) => word(String(x.what ?? '')) === word(e.what as string) && (e.targetKey === x.locationKey || placeNames(x.locationKey).some((n) => String(e.note ?? '').toLowerCase().includes(n)) || (blank(e.targetKey) && arrivesAt(e.atStage, x.locationKey))))
         : undefined;
     const events = list(p.events);
     const kept: Obj[] = [];
@@ -865,6 +886,10 @@ export function validatePlan(input: QuestPlan): PlanIssue[] {
   for (const s of plan.steps ?? []) {
     if (!stages.has(s.to)) err(`A step sets stage ${s.to}, which doesn't exist`);
     if (s.from !== null && !stages.has(s.from)) err(`A step starts from stage ${s.from}, which doesn't exist`);
+    if (!need[s.kind]) {
+      err(`The "${s.note || s.kind}" step is a kind of step there isn't (“${String(s.kind)}”)`);
+      continue;
+    }
     if (need[s.kind].length && !isKind(s.targetKey, ...need[s.kind])) err(`The "${s.note || s.kind}" step needs a ${need[s.kind].join(' or ')} key, but has "${s.targetKey ?? 'none'}"`);
     if (s.kind === 'wait' && s.from === null) err(`“${s.note || 'Wait'}” waits after a stage, but doesn't say which (from)`);
     if (s.kind === 'wait' && !((s.hours ?? 0) > 0)) err(`“${s.note || 'Wait'}” needs the in-game hours to wait (24 for a day)`);

@@ -57,6 +57,18 @@ export interface ExteriorArea {
   terrain: CellTerrain[];
 }
 
+export interface MapMarker {
+  name: string;
+  ref: FormKey;
+  /** The outdoor cell it stands in. */
+  cell: FormKey;
+  position: Vec3;
+}
+
+/** Skyrim.esm's MapMarker static, the base of every map marker. */
+const MAP_MARKER = '000010:Skyrim.esm' as FormKey;
+const MARKERS = new WeakMap<object, { revision: number; markers: MapMarker[] }>();
+
 export interface PlacedRef {
   formKey: FormKey;
   sig: string;
@@ -281,6 +293,37 @@ export class WorldService {
     if (typeof d.waterHeight === 'number' && Math.abs(d.waterHeight) < 1e7) return d.waterHeight;
     const w = info.worldspace ? (this.ws.view(info.worldspace)?.data as { landData?: { defaultWaterHeight?: number } } | undefined) : undefined;
     return w?.landData?.defaultWaterHeight;
+  }
+
+  /**
+   * Named places on the world map ("The Guardian Stones", "Embershard Mine"): each map marker with the outdoor cell it
+   * stands in, since wilderness cells have no names of their own. Read once per change to the plugins.
+   */
+  mapMarkers(): MapMarker[] {
+    const cached = MARKERS.get(this.ws);
+    if (cached && cached.revision === this.ws.revision) return cached.markers;
+    const markers: MapMarker[] = [];
+    const cells = this.cells();
+    for (const pc of cells.filter((c) => c.persistentCell && c.worldspace)) {
+      for (const r of this.references(pc.formKey)) {
+        if (r.base !== MAP_MARKER) continue;
+        const name = (this.ws.view(r.formKey)?.data as { mapMarker?: { name?: string } } | undefined)?.mapMarker?.name;
+        const pos = r.transform.position;
+        const cell = name ? this.cellAt(pc.worldspace, { x: Math.floor(pos.x / 4096), y: Math.floor(pos.y / 4096) }) : undefined;
+        if (name && cell) markers.push({ name, ref: r.formKey, cell, position: { ...pos } });
+      }
+    }
+    MARKERS.set(this.ws, { revision: this.ws.revision, markers });
+    return markers;
+  }
+
+  /** The map marker a place is called by ("Guardian Stones" finds "The Guardian Stones"), if just one is. */
+  mapMarker(name: string): MapMarker | undefined {
+    const norm = (t: string) => t.toLowerCase().replace(/['’]/g, '').replace(/^the\s+/, '').replace(/\s+/g, ' ').trim();
+    const want = norm(name);
+    if (!want) return undefined;
+    const hits = this.mapMarkers().filter((m) => norm(m.name) === want);
+    return hits.length === 1 ? hits[0] : undefined;
   }
 
   /** The persistent cell of an outdoor cell's worldspace, where the game keeps persistent references that stand outside. */

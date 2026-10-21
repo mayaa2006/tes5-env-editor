@@ -328,6 +328,19 @@ export class QuestBuilder {
       out.push(t ? { kind: 'character', key: c.key, name: c.name, existing: null, template: t, text: `New, copied from ${this.label(t)}${note}`, changes } : { kind: 'character', key: c.key, name: c.name, existing: null, template: null, text: 'No character to copy from', error: `${c.name}: there's no character in the load order to copy` });
     }
     for (const l of plan.locations) {
+      // A place the plan names without a cell: the interior of that name, or else (wilderness cells have no names) the
+      // map marker of that name, outdoors.
+      const unplanned = !l.existing && !l.layoutLike && !l.doorFrom;
+      const inside = unplanned ? this.findForm(['CELL'], l.name) : undefined;
+      if (inside) {
+        out.push({ kind: 'location', key: l.key, name: l.name, existing: inside, template: null, text: `Uses ${this.label(inside)}${this.isOutdoors(inside) ? ' (outdoors)' : ''}` });
+        continue;
+      }
+      const marker = unplanned || (l.existing && !this.findForm(['CELL'], l.existing) && !this.findForm(['CELL'], l.name)) ? this.world.mapMarker(l.existing ?? l.name) ?? this.world.mapMarker(l.name) : undefined;
+      if (marker) {
+        out.push({ kind: 'location', key: l.key, name: l.name, existing: marker.cell, template: null, text: `Uses ${this.label(marker.cell)} (outdoors, by the map marker “${marker.name}”)` });
+        continue;
+      }
       if (l.existing) {
         const k = this.findForm(['CELL'], l.existing) ?? this.findForm(['CELL'], l.name);
         out.push(k ? { kind: 'location', key: l.key, name: l.name, existing: k, template: null, text: `Uses ${this.label(k)}${this.isOutdoors(k) ? ' (outdoors)' : ''}` } : { kind: 'location', key: l.key, name: l.name, existing: null, template: null, text: `No cell called “${l.existing}”`, error: `${l.name}: no cell called “${l.existing}” in the load order` });
@@ -472,6 +485,9 @@ export class QuestBuilder {
     if (r.existing) {
       s.cells.set(l.key, r.existing);
       s.report.reused.push({ kind: 'location', formKey: r.existing, label: this.label(r.existing) });
+      // Found by its map marker: people and enemies there stand near it.
+      const marker = /by the map marker/.test(r.text) ? this.world.mapMarker(l.existing ?? l.name) ?? this.world.mapMarker(l.name) : undefined;
+      if (marker && !s.focus.has(l.key)) s.focus.set(l.key, marker.position);
       return;
     }
     const editorId = this.ws.uniqueEditorId(`${s.prefix}${pascal(l.name)}`);

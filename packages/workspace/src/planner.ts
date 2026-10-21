@@ -258,6 +258,10 @@ export function planCatalog(ws: Workspace, opts: { limit?: number; text?: string
         .slice(0, 24)
         .map((c) => (c.name && c.name.replace(/\s+/g, '') !== c.editorId ? `${c.editorId!} (${c.name})` : c.editorId!))
     : [];
+  // Places on the world map the text names ("the Guardian Stones"): outdoors, found by their map marker.
+  const lower = (text ?? '').toLowerCase();
+  const marked = text ? [...new Set(world.mapMarkers().map((m) => m.name))].filter((n) => n.length > 3 && lower.includes(n.toLowerCase().replace(/^the\s+/, ''))).slice(0, 12) : [];
+  if (marked.length) outside.push(...marked.map((n) => `"${n}" (a place on the map: give this name as existing)`));
   return [
     `Characters (Editor ID "Name"${text ? ', with details for the ones your text seems to mention' : ''}):\n${list(['NPC_'], undefined, true, limit)}`,
     `Interior locations:\n${cells.join('\n') || '(none)'}`,

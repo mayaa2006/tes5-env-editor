@@ -265,6 +265,22 @@ describe('plans that would play wrong', () => {
     expect(validatePlan(plan).filter((i) => i.severity === 'error')).toEqual([]);
   });
 
+  it('mends kinds of step and event a free AI makes up, and an ambush where the player arrives', () => {
+    // As Qwen3.5 4B planned "The Apprentice's Road": escorting Rulnik to the stones as a "travel" step, and 4 bandits
+    // spawned by the player as they arrive where the plan's encounter already waits.
+    const plan = exampleQuestPlan();
+    plan.locations.push({ key: 'stones', name: 'The Guardian Stones', existing: null, description: 'Outside', layoutLike: null, doorFrom: null });
+    plan.encounters = [{ key: 'bandits', what: 'LvlBanditAmbushMeleeNordM', count: 4, locationKey: 'stones', spot: 'around the stones' }];
+    plan.steps[1] = { from: 10, to: 20, kind: 'travel' as never, targetKey: 'stones', count: null, hours: null, note: 'Escort Rulnik to the stones' };
+    plan.events = [{ atStage: 20, kind: 'appear' as never, targetKey: 'bandits', toKey: null, what: null, count: null, note: 'Bandits appear' }];
+    expect(validatePlan(plan).map((i) => i.message)).toContain('The "Escort Rulnik to the stones" step is a kind of step there isn\'t (“travel”)');
+    plan.events.push({ atStage: 20, kind: 'spawn', targetKey: null, toKey: null, what: 'LvlBanditAmbushMeleeNordM', count: 4, note: 'Bandits ambush the player and Rulnik' });
+    const changes = repairPlan(plan);
+    expect(changes).toEqual(expect.arrayContaining(['the step “Escort Rulnik to the stones” is an arrive step (“travel” isn\'t a kind of step)', 'the event “Bandits appear” is a show event', "left out the spawn “Bandits ambush the player and Rulnik”: the plan's encounter already has them there"]));
+    expect(plan.steps[1]!.kind).toBe('arrive');
+    expect(plan.events.map((e) => e.kind)).toEqual(['show']);
+  });
+
   it('leaves alone items of one name in different places, an ambush away from the encounter, and gold no line pays', () => {
     const plan = exampleQuestPlan();
     plan.items.push({ ...plan.items[0]!, key: 'ring2', startsAtKey: 'cellar' });
