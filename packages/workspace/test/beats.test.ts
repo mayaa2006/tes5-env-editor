@@ -12,7 +12,10 @@ import {
   ScriptService,
   TriggerService,
   Workspace,
+  BeatReader,
+  QuestPlanner,
   beatOrder,
+  passages,
   checkBeats,
   compileBeats,
   createDemoData,
@@ -21,6 +24,7 @@ import {
   splitQuestline,
   validatePlan,
   type BeatSheet,
+  type PlannerReply,
 } from '../src';
 
 const CARTOGRAPHER = readFileSync(join(import.meta.dirname, '../../../apps/studio/test/models/questline-cartographer.md'), 'utf8');
@@ -191,5 +195,69 @@ describe('beat sheets', () => {
     expect(r.problems ?? []).toEqual([]);
     const g = await graphs.graph(r.quest!);
     expect(g.problems).toEqual([]);
+  });
+
+  it('are read from loose prose in small questions, the AI naming things and the code keeping the books', async () => {
+    const doc = readFileSync(join(import.meta.dirname, '../../../apps/studio/test/models/beats/prose.md'), 'utf8');
+    // Short enough to be asked about in one go.
+    expect(passages(doc).map((p) => p.kind)).toEqual(['prose']);
+    const asked: string[] = [];
+    const reply = (o: unknown): PlannerReply => ({ content: [{ type: 'text', text: JSON.stringify(o) }], stop_reason: 'end_turn' });
+    const none = { gold: null, gives: [], takes: [], remembers: null, attacks: [], leaves: [], follows: [], stopsFollowing: [], appears: [], moves: [] };
+    const planner = new QuestPlanner({
+      send: async (p) => {
+        const user = String(p.messages.at(-1)!.content);
+        asked.push(user.split('\n').at(-1)!);
+        if (user.includes('List the people')) {
+          return reply({
+            summary: "An old woman's son never came back from Bleak Falls Barrow.",
+            start: { how: 'talking', what: null },
+            people: [{ name: 'Tilda Grey-Hand', description: 'An old woman', sex: 'female', race: null, where: "Tilda's house", spot: null, canDie: 'not said', hostile: false, quote: 'an old woman called Tilda Grey-Hand' }],
+            places: [
+              { name: "Tilda's house", description: 'A small house by the river', partOf: 'Riverwood', quote: 'a small house of her own by the river' },
+              { name: 'Bleak Falls Barrow', description: 'An old tomb', partOf: null, quote: 'went up to Bleak Falls Barrow' },
+            ],
+            items: [
+              { name: "Arn's Letter", kind: 'book', where: 'Bleak Falls Barrow', carriedBy: null, spot: 'just inside the entrance', count: 1, text: null, lockedWith: null, quote: 'a letter he never sent' },
+              { name: "Tilda's Husband's Axe", kind: 'weapon', where: null, carriedBy: 'Tilda', spot: null, count: 1, text: null, lockedWith: null, quote: "her late husband's axe" },
+            ],
+            enemies: [],
+          });
+        }
+        if (user.includes('<passage>'))
+          return reply({
+            beats: [
+              { does: 'talk', target: 'Tilda', count: null, hours: null, after: [], quote: 'she tells them about Arn and begs them to find out what happened to him', journal: 'Tilda asked me to find out what happened to her son.', objective: null, ends: 'no', ...none },
+              { does: 'pickup', target: 'letter', count: null, hours: null, after: [1], quote: 'on him a letter he never sent', journal: 'I found Arn and his letter.', objective: 'Find out what happened to Arn', ends: 'no', ...none },
+              { does: 'talk', target: 'Tilda Grey-Hand', count: null, hours: null, after: [2], quote: 'When the player brings the letter back', journal: 'Tilda read the letter.', objective: 'Bring the letter to Tilda', ends: 'complete', ...none, takes: [{ item: 'letter', count: 1 }], gives: [{ item: 'axe', count: 1 }] },
+            ],
+          });
+        if (user.includes('Write what the player says')) return reply(user.includes('moment: “When the player brings') ? { player: 'I found Arn.', answer: 'Then he is gone. Take this.' } : { player: 'Why the lantern?', answer: 'For my son. Will you look for him?' });
+        throw new Error(`unexpected: ${user.slice(0, 80)}`);
+      },
+    });
+    // Riverwood is on the world map; nothing else is in the game.
+    const lookup = { person: () => null, place: (n: string) => (n === 'Riverwood' ? 'Riverwood' : n === 'Bleak Falls Barrow' ? 'Bleak Falls Barrow' : null), item: () => null };
+    const steps: string[] = [];
+    const { sheet, questions } = await new BeatReader(planner).read(doc, { title: 'The Lantern by the River', editorId: 'LanternByTheRiver', lookup, onStep: (s) => steps.push(s) });
+    expect(questions).toEqual([]);
+    expect(sheet.people.map((p) => [p.key, p.existing])).toEqual([['tilda', null]]);
+    // "Tilda's house" is part of Riverwood: it's there, outside.
+    expect(sheet.places.map((p) => [p.key, p.existing])).toEqual([
+      ['tildaHouse', 'Riverwood'],
+      ['bleakFallsBarrow', 'Bleak Falls Barrow'],
+    ]);
+    expect(sheet.items.map((i) => [i.key, i.place, i.carriedBy])).toEqual([
+      ['arnLetter', 'bleakFallsBarrow', null],
+      ['tildaHusbandAxe', null, 'tilda'],
+    ]);
+    expect(sheet.beats.map((b) => `${b.id} ${b.does} ${b.target} after ${b.after.join(',')}`)).toEqual(['b1 talk tilda after ', 'b2 pickup arnLetter after b1', 'b3 talk tilda after b2']);
+    expect(sheet.beats[2]!.effects).toEqual({ takes: [{ item: 'arnLetter', count: 1 }], gives: [{ item: 'tildaHusbandAxe', count: 1 }] });
+    // Nothing written out: the AI wrote one exchange for each talk beat.
+    expect(sheet.lines.map((l) => l.beat)).toEqual(['b1', 'b3']);
+    expect(steps).toContain('reading part 1 of 1');
+    const plan = compileBeats(sheet);
+    expect(validatePlan(plan).filter((i) => i.severity === 'error')).toEqual([]);
+    expect(plan.conversations[0]!.screenplay).toBe("PLAYER: Why the lantern? [if stage 0]\nTILDA: For my son. Will you look for him? [stage 10]\nPLAYER: I found Arn. [if stage 20]\nTILDA: Then he is gone. Take this. [stage 30] [gives tildaHusbandAxe x1] [takes arnLetter x1]");
   });
 });

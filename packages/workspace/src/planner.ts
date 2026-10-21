@@ -472,6 +472,22 @@ export class QuestPlanner {
     );
   }
 
+  /**
+   * One small question to the AI, answered in a given shape (checked, with one chance to fix it). The beat reader
+   * (beatreader.ts) asks all its questions through this.
+   */
+  async ask<T>(system: string, user: string, schema: z.ZodType<T>, maxTokens = 2000): Promise<T> {
+    return this.run(
+      { model: this.model, max_tokens: maxTokens, output_config: { effort: 'low', format: betaZodOutputFormat(schema as never) }, system: [{ type: 'text', text: system }], messages: [{ role: 'user', content: user }] },
+      schema,
+    );
+  }
+
+  /** Whether this is a free AI (smaller, slower): the reader then asks smaller questions. */
+  get isFree(): boolean {
+    return this.free;
+  }
+
   /** For free AIs: journal entries and objectives for stages that have none (the author's own are kept). */
   private async writeJournal2(plan: QuestPlan, brief: string): Promise<void> {
     const empty = plan.stages.filter((st) => !st.journal.trim() && !st.startsQuest);
