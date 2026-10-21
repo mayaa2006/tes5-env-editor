@@ -40,6 +40,8 @@ for (const size of [
               }
             }
             st.runtimeInstalled = true;
+            // Once the runner is here, it reports the graphics card (a 6 GB one).
+            st.gpus = [{ name: 'NVIDIA GeForce GTX 1660', memoryMb: 6144, freeMb: 5800 }];
             st.installed.push(id);
             delete st.download;
             send();
@@ -56,7 +58,7 @@ for (const size of [
             st.server = { state: 'starting', model: id };
             send();
             await wait(200);
-            st.server = { state: 'running', model: id, device: 'processor' };
+            st.server = (window as any).__onCard ? { state: 'running', model: id, device: 'NVIDIA GeForce GTX 1660', offload: { layers: 20, of: 33 } } : { state: 'running', model: id, device: 'processor' };
             send();
             return api;
           },
@@ -91,10 +93,14 @@ for (const size of [
     await page.getByTestId('ai-kind-local').click();
     await expect(page.getByTestId('local-kind-builtin')).toHaveAttribute('aria-pressed', 'true');
 
-    // Each model says what it's for, how big it is and what it needs; one is recommended.
+    // Each model says what it's for, how big it is and what it needs; one is recommended. The graphics card is checked
+    // when the first model comes down.
     const rows = page.locator('[data-testid^="local-model-"]');
     expect(await rows.count()).toBeGreaterThan(1);
     await expect(page.getByTestId('local-ai')).toContainText('Recommended');
+    await expect(page.getByTestId('local-gpu')).toContainText('Your graphics card is checked when the first model is downloaded');
+    await expect(page.getByTestId('local-recommended')).toHaveCount(1);
+    await expect(page.getByTestId('local-model-qwen3.5-4b').getByTestId('local-recommended')).toBeVisible();
     await expect(rows.first()).toContainText('needs about');
     await expect(rows.first().getByTestId('local-download')).toHaveAttribute('title', /program that runs it \(llama\.cpp/);
     const first = rows.first();
@@ -104,6 +110,12 @@ for (const size of [
     await expect(first.getByTestId('local-progress')).toBeVisible();
     await expect(first.getByTestId('local-progress')).toContainText(/AI runner|Model/);
     await expect(first.getByTestId('local-in-use')).toBeVisible({ timeout: 10000 });
+    // A 6 GB card: Qwen3.5 2B runs entirely on it, so it's the one recommended; the 4B would be partly on the processor.
+    await expect(page.getByTestId('local-gpu')).toContainText('Your graphics card: NVIDIA GeForce GTX 1660, 6.0 GB (5.7 GB free)');
+    await expect(page.getByTestId('local-model-qwen3.5-2b').getByTestId('local-recommended')).toBeVisible();
+    await expect(page.getByTestId('local-model-qwen3.5-2b').getByTestId('local-fits')).toBeVisible();
+    await expect(page.getByTestId('local-model-qwen3.5-4b').getByTestId('local-too-big')).toContainText('Partly on the processor');
+    await expect(page.getByTestId('local-recommended')).toHaveCount(1);
     await expect(page.getByTestId('local-server')).toContainText('starts when the AI is first needed');
     if (process.env.SCREENSHOT_DIR) await page.getByTestId('ai-settings').screenshot({ path: `${process.env.SCREENSHOT_DIR}/local-ai-${size.width}.png` });
     await page.getByTestId('ai-done').click();
@@ -121,6 +133,13 @@ for (const size of [
     // Running on the processor, with a way to stop it; then remove the download.
     await page.getByTestId('ai-change').click();
     await expect(page.getByTestId('local-server')).toContainText('running on the processor');
+    await page.getByTestId('local-stop').click();
+    // Partly on the graphics card: it says so, and which model would fit entirely.
+    await page.evaluate(() => ((window as any).__onCard = true));
+    await page.getByTestId('local-start').click();
+    await expect(page.getByTestId('local-server')).toContainText('running partly on your graphics card (NVIDIA GeForce GTX 1660: 20 of its 33 layers)');
+    await expect(page.getByTestId('local-server')).toContainText('Qwen3.5 2B fits on the card entirely');
+    if (process.env.SCREENSHOT_DIR) await page.getByTestId('ai-settings').screenshot({ path: `${process.env.SCREENSHOT_DIR}/local-ai-gpu-${size.width}.png` });
     await page.getByTestId('local-stop').click();
     await expect(page.getByTestId('local-server')).toContainText('starts when the AI is first needed');
     await first.getByTestId('local-remove').click();

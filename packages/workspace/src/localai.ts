@@ -32,6 +32,14 @@ export interface LocalModel {
   context: number;
   /** About how much free memory it needs while running, in GB. */
   memoryGb: number;
+  /**
+   * About how much graphics card memory it needs to run entirely there, in GB: the model, 32k tokens of conversation
+   * and the card's working memory. Measured for Qwen3.5 (llama.cpp's memory breakdown); the others are estimated from
+   * what they use on a processor.
+   */
+  gpuGb: number;
+  /** How many of the nine test jobs on Skyrim's data it got right. */
+  jobsRight: number;
   /** One line for the picker: what it's good for. */
   about: string;
   license: string;
@@ -58,6 +66,8 @@ export const LOCAL_MODELS: LocalModel[] = [
     sha256: '00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4',
     context: 32768,
     memoryGb: 6.5,
+    gpuGb: 4.8,
+    jobsRight: 7,
     about: 'Did best in our tests on Skyrim\'s data (7 of 9 jobs right). About 3 minutes a job on a processor; a graphics card should be several times quicker.',
     license: 'Apache-2.0',
     recommended: true,
@@ -71,6 +81,8 @@ export const LOCAL_MODELS: LocalModel[] = [
     sha256: 'aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223',
     context: 32768,
     memoryGb: 3,
+    gpuGb: 2.4,
+    jobsRight: 6,
     about: 'Half the size, quicker (about 2 minutes a job) and almost as good (6 of 9 jobs). The one to pick on a PC with 8 GB of memory.',
     license: 'Apache-2.0',
   },
@@ -83,6 +95,8 @@ export const LOCAL_MODELS: LocalModel[] = [
     sha256: '9ed150d4367e68df0ac8e1540f6ddc65b42d0ee26378329d1ecbca60f93fc5f8',
     context: 32768,
     memoryGb: 7.5,
+    gpuGb: 6,
+    jobsRight: 6,
     about: 'From Mistral. As good as Qwen3.5 2B (6 of 9 jobs) but slower, and it needs the most memory of these.',
     license: 'Apache-2.0',
   },
@@ -95,6 +109,8 @@ export const LOCAL_MODELS: LocalModel[] = [
     sha256: '8e30dff3ac4c8434c49a7036fa15564bdbb6044e42bf04550bf1a096ad7e6a52',
     context: 32768,
     memoryGb: 4.5,
+    gpuGb: 4,
+    jobsRight: 5,
     about: 'From Google. Quick (about a minute a job) and fine for single changes, but it often stops before a bigger job is finished (5 of 9 jobs).',
     license: 'Apache-2.0',
   },
@@ -107,10 +123,48 @@ export const LOCAL_MODELS: LocalModel[] = [
     sha256: 'b1b3de114215d9507409a662a501a631095a479a419584e8a2ded6304b19b4f5',
     context: 32768,
     memoryGb: 2,
+    gpuGb: 1.4,
+    jobsRight: 3,
     about: 'The smallest and quickest, for older PCs. Manages single changes such as a quest stage or a copied item, but got most jobs wrong (3 of 9).',
     license: 'LFM Open License v1.0 (free unless your company makes over $10M a year)',
   },
 ];
+
+/** A graphics card llama.cpp can run the AI on, as its --list-devices reports it. */
+export interface LocalGpu {
+  name: string;
+  memoryMb: number;
+  /** Free when it was checked (the app's own window uses some). */
+  freeMb: number;
+}
+
+/** Graphics card memory llama.cpp leaves free for the app's own window (its --fit-target). */
+export const GPU_MARGIN_MB = 1536;
+
+/** The card the AI runs on: the one with the most free memory. */
+export function mainGpu(gpus: LocalGpu[] | undefined): LocalGpu | undefined {
+  return gpus?.length ? gpus.reduce((a, b) => (b.freeMb > a.freeMb ? b : a)) : undefined;
+}
+
+/** Whether a model runs entirely on the graphics card (undefined until the card is known; false with no card). */
+export function fitsGpu(m: LocalModel, gpus: LocalGpu[] | undefined): boolean | undefined {
+  if (!gpus) return undefined;
+  const g = mainGpu(gpus);
+  return !!g && g.freeMb - GPU_MARGIN_MB >= m.gpuGb * 1024;
+}
+
+/**
+ * The model to recommend, among those that got most test jobs right: the best that runs entirely on this PC's graphics
+ * card (several times quicker than one split with the processor); on a card none of them fits, the smallest (most of it
+ * still on the card); with no card, the one that did best in the tests.
+ */
+export function recommendedModel(gpus?: LocalGpu[], models: LocalModel[] = LOCAL_MODELS): LocalModel | undefined {
+  const good = models.filter((m) => m.jobsRight >= 6);
+  const fits = good.find((m) => fitsGpu(m, gpus));
+  if (fits) return fits;
+  if (mainGpu(gpus) && good.length) return good.reduce((a, b) => (b.gpuGb < a.gpuGb ? b : a));
+  return models.find((m) => m.recommended) ?? models[0];
+}
 
 export function localModel(id: string): LocalModel | undefined {
   return LOCAL_MODELS.find((m) => m.id === id);
@@ -151,7 +205,16 @@ export interface LocalAiStatus {
   installed: string[];
   /** The download in progress: which model (its id), and whether it's the runner, the model or the final check. */
   download?: { model: string; what: 'runtime' | 'model' | 'checking'; done: number; total: number };
-  server: { state: 'stopped' | 'starting' | 'running' | 'error'; model?: string; device?: string; error?: string };
+  server: {
+    state: 'stopped' | 'starting' | 'running' | 'error';
+    model?: string;
+    device?: string;
+    /** How much of the model is on the graphics card (layers), when it's running. */
+    offload?: { layers: number; of: number };
+    error?: string;
+  };
+  /** The graphics cards the AI can run on (known once the runner is downloaded; empty when there's none). */
+  gpus?: LocalGpu[];
   /** Where it's set to run. */
   prefer?: LocalAiDevice;
   /** The graphics card failed while the AI was using it, so it runs on the processor for now (until 'auto' is chosen again). */

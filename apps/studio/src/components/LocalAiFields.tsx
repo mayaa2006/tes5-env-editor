@@ -5,7 +5,7 @@
  * as localAi events.
  */
 import { useEffect, useState } from 'react';
-import { LLAMA_CPP, LOCAL_MODELS, formatBytes, type LocalAiStatus, type LocalModel } from '@tes5/workspace';
+import { LLAMA_CPP, LOCAL_MODELS, fitsGpu, formatBytes, mainGpu, recommendedModel, type LocalAiStatus, type LocalModel } from '@tes5/workspace';
 import { useStore } from '../state/store';
 import { Help, Icon, Select } from './ui';
 
@@ -74,9 +74,26 @@ export function LocalAiFields() {
   const dl = status?.download;
   const server = status?.server;
   const current = LOCAL_MODELS.find((m) => m.id === s.localModel);
+  // The graphics card makes the AI several times quicker: the best model that runs entirely on it is recommended.
+  const gpus = status?.gpus;
+  const gpu = mainGpu(gpus);
+  const best = recommendedModel(gpus);
+  const gb = (mb: number) => `${(mb / 1024).toFixed(mb < 10240 ? 1 : 0)} GB`;
+  const offload = server?.state === 'running' && server.model === current?.id ? server.offload : undefined;
+  const partly = !!offload && offload.layers > 0 && offload.layers < offload.of;
+  const smaller = partly && current ? LOCAL_MODELS.find((m) => m.jobsRight >= 6 && m.gpuGb < current.gpuGb && fitsGpu(m, gpus)) : undefined;
   return (
     <div className="col" style={{ gap: 6 }} data-testid="local-ai">
       {!LOCAL_MODELS.length && <p className="dim small">No models are listed yet.</p>}
+      <div className="small dim" data-testid="local-gpu">
+        {!status?.runtimeInstalled
+          ? 'Your graphics card is checked when the first model is downloaded, and the best model that fits on it is recommended.'
+          : !gpus
+            ? 'Checking your graphics card…'
+            : gpu
+              ? `Your graphics card: ${gpu.name}, ${gb(gpu.memoryMb)} (${gb(gpu.freeMb)} free). Models marked “Fits on your graphics card” run entirely on it, several times quicker than on the processor.`
+              : 'No graphics card the AI can use was found, so it runs on the processor. That works, but slower: the smaller models are quicker there.'}
+      </div>
       <div className="col" style={{ gap: 4 }}>
         {LOCAL_MODELS.map((m) => {
           const have = installed.has(m.id);
@@ -86,7 +103,21 @@ export function LocalAiFields() {
             <div key={m.id} className={`local-model ${using ? 'selected' : ''}`} data-testid={`local-model-${m.id}`}>
               <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
                 <b title={`${m.file} from huggingface.co/${m.repo} · licence: ${m.license}`}>{m.label}</b>
-                {m.recommended && <span className="chip">Recommended</span>}
+                {best?.id === m.id && (
+                  <span className="chip" title={gpu && fitsGpu(m, gpus) ? `The best of these that runs entirely on your graphics card (${gpu.name})` : 'Did best in our tests on Skyrim’s data'} data-testid="local-recommended">
+                    Recommended
+                  </span>
+                )}
+                {gpu && fitsGpu(m, gpus) && (
+                  <span className="chip" style={{ color: 'var(--ok, #6c6)' }} title={`Needs about ${m.gpuGb} GB on the graphics card; ${gpu.name} has ${gb(gpu.freeMb)} free, and 1.5 GB is kept for this window`} data-testid="local-fits">
+                    Fits on your graphics card
+                  </span>
+                )}
+                {gpu && fitsGpu(m, gpus) === false && (
+                  <span className="small" style={{ color: 'var(--warn, #e0a040)' }} title={`Needs about ${m.gpuGb} GB on the graphics card; ${gpu.name} has ${gb(gpu.freeMb)} free, and 1.5 GB is kept for this window. What doesn't fit runs on the processor.`} data-testid="local-too-big">
+                    Partly on the processor (slower)
+                  </span>
+                )}
                 <span className="dim small" title="Download size, and about how much free memory it needs while it runs">
                   {formatBytes(m.size)} · needs about {m.memoryGb} GB of memory
                 </span>
@@ -163,7 +194,9 @@ export function LocalAiFields() {
             {server?.state === 'running' && server.model === current.id
               ? server.device === 'processor'
                 ? `${current.label} is running on the processor. It works, but a graphics card would make it several times faster.`
-                : `${current.label} is running on your graphics card (${server.device}).`
+                : partly
+                  ? `${current.label} is running partly on your graphics card (${server.device}: ${offload!.layers} of its ${offload!.of} layers); the rest is on the processor, which is slower.${smaller ? ` ${smaller.label} fits on the card entirely.` : ''}`
+                  : `${current.label} is running on your graphics card (${server.device}).`
               : server?.state === 'starting'
                 ? `Starting ${current.label}…`
                 : server?.state === 'error'
