@@ -181,7 +181,10 @@ export function newWhenRenamed(ws: Workspace, plan: QuestPlan, text: string): st
     const theirs = entryWords(npc.name, npc.editorId);
     const unique = ((ws.view(key!)?.data as { config?: { flags?: number } } | undefined)?.config?.flags ?? 0) & 0x20;
     const named = !!npc.name && new RegExp(`\\b${npc.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(text); // as a name: "Hulda", not "a farmer"
-    if (entryWords(c.name).some((w) => theirs.includes(w)) || (unique && named)) continue;
+    // …unless the character has a name of their own in the text ("Hesta Coldwater" planned as Gerda, whom the text
+    // names as someone else).
+    const ownName = /^[A-Z]/.test(c.name ?? '') && new RegExp(`\\b${(c.name ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(text);
+    if (entryWords(c.name).some((w) => theirs.includes(w)) || (unique && named && !ownName)) continue;
     out.push(`${c.name} is a new character, copied from ${npc.name ?? npc.editorId} (${npc.editorId ?? key})`);
     c.basedOn = c.existing;
     c.existing = null;

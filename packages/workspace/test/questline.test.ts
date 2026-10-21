@@ -433,7 +433,7 @@ describe('questline mechanics', () => {
     scripts.refresh();
     const quests = new QuestService(ws, scripts);
     const graphs = new QuestGraphService(ws, quests, scripts, new TriggerService(ws, scripts));
-    const q = quests.createQuest('PlayerAliasQuest');
+    const q = quests.createQuest('PlayerAliasQuest', 'Player Alias Quest');
     const alias = graphs.playerAlias(q);
     expect(graphs.playerAlias(q)).toBe(alias);
     const a = quests.quest(q).aliases.find((x) => x.id === alias)!;

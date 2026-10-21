@@ -221,7 +221,8 @@ describe('plans that would play wrong', () => {
     plan.locations.push({ key: 'mine', name: 'Embershard Mine', existing: 'EmbershardMine01', description: 'A bandit mine', layoutLike: null, doorFrom: null });
     plan.items = [
       { key: 'notice', name: 'Wanted Notice', kind: 'book', existing: null, basedOn: null, value: null, startsWith: 'location', startsAtKey: 'tavern', spot: 'on the board', copies: null, text: 'Cartographer wanted.', lockedWith: null },
-      ...['by the forge', 'in a chest', 'on a table near the back'].map((spot, n) => ({ key: `mapPage${n + 1}`, name: 'Torn Map Page', kind: 'misc' as const, existing: null, basedOn: null, value: null, startsWith: 'location' as const, startsAtKey: 'mine', spot, copies: null, text: null, lockedWith: null })),
+      // (Named "Torn Map Page 1", "2" and "3", as the model did on the next run.)
+      ...['by the forge', 'in a chest', 'on a table near the back'].map((spot, n) => ({ key: `mapPage${n + 1}`, name: `Torn Map Page ${n + 1}`, kind: 'misc' as const, existing: null, basedOn: null, value: null, startsWith: 'location' as const, startsAtKey: 'mine', spot, copies: null, text: null, lockedWith: null })),
     ];
     plan.encounters = [{ key: 'bandits', what: 'LvlBanditMelee', count: 3, locationKey: 'mine', spot: null }];
     plan.startsWithGame = false;
@@ -251,7 +252,7 @@ describe('plans that would play wrong', () => {
       ]),
     );
     expect(plan.items.map((i) => i.key)).toEqual(['notice', 'mapPage1']);
-    expect(plan.items[1]).toMatchObject({ copies: 3, spot: 'by the forge; in a chest; on a table near the back' });
+    expect(plan.items[1]).toMatchObject({ name: 'Torn Map Page', copies: 3, spot: 'by the forge; in a chest; on a table near the back' });
     expect(plan.steps.map((s) => `${s.from}→${s.to} ${s.kind} ${s.targetKey ?? ''} ${s.count ?? ''}`.trim())).toEqual(['0→10 script', '10→20 pickup mapPage1 3', '20→100 talk']);
     expect(plan.objectives.map((o) => o.targetKey)).toEqual(['mapPage1', 'brynja']);
     expect(plan.events).toEqual([{ atStage: 10, kind: 'show', targetKey: 'bandits', toKey: null, what: null, count: null, note: 'Bandits appear in Embershard Mine' }]);
@@ -330,6 +331,10 @@ describe('plans that would play wrong', () => {
     plan.characters[1] = { ...plan.characters[1]!, name: 'Halvar', existing: 'DemoBlacksmith', basedOn: null };
     expect(newWhenRenamed(ws, plan, 'Halvar saw the ring fall.')).toEqual([]);
     expect(plan.characters[1]!.existing).toBe('DemoBlacksmith');
+    // The text names them, but as someone else: a character with a name of their own is new (Hesta Coldwater planned
+    // as Gerda, on Skyrim's data).
+    plan.characters[1] = { ...plan.characters[1]!, name: 'Eirik Coldwater', existing: 'Halvar the Smith', basedOn: null };
+    expect(newWhenRenamed(ws, plan, 'Eirik Coldwater, a traveller, argues with Halvar the Smith.')).toEqual(['Eirik Coldwater is a new character, copied from Halvar the Smith (DemoBlacksmith)']);
   });
 });
 

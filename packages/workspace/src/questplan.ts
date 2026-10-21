@@ -284,6 +284,10 @@ export function normalizePlan(plan: QuestPlan): QuestPlan {
  * - stages with no start (the first one starts the quest).
  * Returns what was changed, in words.
  */
+/** "Torn Map Page 1", "Torn Map Page #2", "Torn Map Page (3)": a copy's number after the name. */
+const NUMBERED = /(?:\s+(?:\(\d+\)|\d+|[IVX]+)|\s*#\s*\d+)$/;
+const baseName = (name: string) => name.trim().replace(NUMBERED, '').toLowerCase();
+
 export function repairPlan(plan: QuestPlan): string[] {
   const changes: string[] = [];
   // Called on raw answers before they're checked: anything not shaped as expected is left for the check to report.
@@ -548,7 +552,7 @@ export function repairPlan(plan: QuestPlan): string[] {
     const groups = new Map<string, Obj[]>();
     for (const i of list(p.items)) {
       if (typeof i.name !== 'string' || !i.name.trim() || i.startsWith !== 'location' || typeof i.startsAtKey !== 'string' || i.existing || i.lockedWith) continue;
-      const k = `${i.name.trim().toLowerCase()}\u0000${i.startsAtKey}\u0000${String(i.kind)}`;
+      const k = `${baseName(i.name)}\u0000${i.startsAtKey}\u0000${String(i.kind)}`;
       groups.set(k, [...(groups.get(k) ?? []), i]);
     }
     for (const same of groups.values()) {
@@ -560,6 +564,8 @@ export function repairPlan(plan: QuestPlan): string[] {
       const spots = same.flatMap((x) => (typeof x.spot === 'string' && x.spot.trim() ? x.spot.split(';').map((s) => s.trim()).filter(Boolean) : []));
       first.copies = total;
       first.spot = spots.length ? spots.join('; ') : null;
+      // "Torn Map Page 1", "2", "3": one name for all of them.
+      first.name = (first.name as string).trim().replace(NUMBERED, '');
       p.items = list(p.items).filter((x) => !restKeys.has(x.key as string));
       // Everything that pointed at a copy points at the one item.
       const point = (o: Obj, field: string) => {
