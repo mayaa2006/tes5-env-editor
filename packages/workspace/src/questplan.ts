@@ -619,14 +619,22 @@ export function repairPlan(plan: QuestPlan): string[] {
       const l = list(p.locations).find((x) => x.key === key);
       return [key, l?.name, l?.existing].filter((n): n is string => typeof n === 'string' && n.length > 2).map((n) => n.toLowerCase());
     };
-    const doubles = (e: Obj) =>
-      e.kind === 'spawn' &&
-      typeof e.what === 'string' &&
-      list(p.encounters).some((x) => word(String(x.what ?? '')) === word(e.what as string) && (e.targetKey === x.locationKey || placeNames(x.locationKey).some((n) => String(e.note ?? '').toLowerCase().includes(n))));
+    const doubled = (e: Obj) =>
+      e.kind === 'spawn' && typeof e.what === 'string'
+        ? list(p.encounters).find((x) => word(String(x.what ?? '')) === word(e.what as string) && (e.targetKey === x.locationKey || placeNames(x.locationKey).some((n) => String(e.note ?? '').toLowerCase().includes(n))))
+        : undefined;
     const events = list(p.events);
-    const kept = events.filter((e) => !doubles(e));
-    for (const e of events.filter((x) => !kept.includes(x))) changes.push(`left out the spawn “${(e.note as string) || (e.what as string)}”: the plan's encounter already has them waiting`);
-    if (kept.length < events.length) p.events = kept;
+    const kept: Obj[] = [];
+    for (const e of events) {
+      const enc = doubled(e);
+      if (!enc) kept.push(e);
+      // They appear then: the encounter is hidden until that stage (unless something already shows it).
+      else if (!events.some((x) => x.kind === 'show' && x.targetKey === enc.key) && !kept.some((x) => x.kind === 'show' && x.targetKey === enc.key)) {
+        kept.push({ atStage: e.atStage, kind: 'show', targetKey: enc.key, toKey: null, what: null, count: null, note: (e.note as string) || 'They appear' });
+        changes.push(`the spawn “${(e.note as string) || (e.what as string)}” now shows the plan's encounter “${enc.key as string}” at stage ${String(e.atStage)} (it waits there hidden until then)`);
+      } else changes.push(`left out the spawn “${(e.note as string) || (e.what as string)}”: the plan's encounter already has them there`);
+    }
+    if (kept.length !== events.length || kept.some((x, i) => x !== events[i])) p.events = kept;
   }
   changes.push(...doubledRewards(plan));
   const stages = list(p.stages).filter((s) => typeof s.index === 'number');

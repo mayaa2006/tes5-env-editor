@@ -246,7 +246,7 @@ describe('plans that would play wrong', () => {
       expect.arrayContaining([
         '3 items called “Torn Map Page” in one place are now one item with 3 copies, found by one step that counts them',
         'the step “The player reads the notice” is what starts the quest, so the quest goes straight on from stage 0 to 10',
-        "left out the spawn “Bandits appear in Embershard Mine”: the plan's encounter already has them waiting",
+        'the spawn “Bandits appear in Embershard Mine” now shows the plan\'s encounter “bandits” at stage 10 (it waits there hidden until then)',
         'the reward of 100 gold at stage 100 is left out: the line that reaches that stage already pays it',
       ]),
     );
@@ -254,7 +254,7 @@ describe('plans that would play wrong', () => {
     expect(plan.items[1]).toMatchObject({ copies: 3, spot: 'by the forge; in a chest; on a table near the back' });
     expect(plan.steps.map((s) => `${s.from}→${s.to} ${s.kind} ${s.targetKey ?? ''} ${s.count ?? ''}`.trim())).toEqual(['0→10 script', '10→20 pickup mapPage1 3', '20→100 talk']);
     expect(plan.objectives.map((o) => o.targetKey)).toEqual(['mapPage1', 'brynja']);
-    expect(plan.events).toEqual([]);
+    expect(plan.events).toEqual([{ atStage: 10, kind: 'show', targetKey: 'bandits', toKey: null, what: null, count: null, note: 'Bandits appear in Embershard Mine' }]);
     expect(plan.rewards).toEqual([]);
     expect(validatePlan(plan).filter((i) => i.severity === 'error')).toEqual([]);
   });
