@@ -701,6 +701,20 @@ export function repairPlan(plan: QuestPlan): string[] {
     }
     if (kept.length !== events.length || kept.some((x, i) => x !== events[i])) p.events = kept;
   }
+  // One of the plan's own items written into a character's inventory as well ("VarroStrongboxKey"): the item says who
+  // carries it, so it isn't looked for in the load order too.
+  for (const c of list(p.characters)) {
+    if (!Array.isArray(c.inventory)) continue;
+    const mine = (name: unknown) => list(p.items).find((i) => typeof name === 'string' && [i.key, i.name].some((n) => typeof n === 'string' && n.toLowerCase().replace(/[^a-z0-9]/g, '') === name.toLowerCase().replace(/[^a-z0-9]/g, '')));
+    const kept = list(c.inventory).filter((e) => {
+      const item = mine(e.item);
+      if (!item) return true;
+      if (item.startsWith !== 'character') Object.assign(item, { startsWith: 'character', startsAtKey: c.key, spot: null });
+      changes.push(`${String(c.name)} carries ${String(item.name)}, the plan's own item`);
+      return false;
+    });
+    if (kept.length < list(c.inventory).length) c.inventory = kept;
+  }
   // A container locked with the plan's key: what's in it lies in a strongbox where its holder stays, not on them.
   for (const i of list(p.items)) {
     if (typeof i.lockedWith !== 'string' || !i.lockedWith || i.startsWith !== 'character') continue;

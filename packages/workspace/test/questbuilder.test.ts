@@ -364,7 +364,12 @@ describe('plans that would play wrong', () => {
       { key: 'strongboxKey', name: "Varro's Strongbox Key", kind: 'key', existing: null, basedOn: null, value: null, startsWith: 'character', startsAtKey: 'eirik', spot: null, copies: null, text: null, lockedWith: null },
       { key: 'ledger', name: "Varro's Ledger", kind: 'book', existing: null, basedOn: null, value: null, startsWith: 'character', startsAtKey: 'eirik', spot: null, copies: null, text: 'Paid half.', lockedWith: 'strongboxKey' },
     );
-    expect(repairPlan(plan)).toContain("Varro's Ledger is locked away with strongboxKey, so it lies in a strongbox where Eirik stays");
+    plan.characters[1]!.inventory = [{ item: 'StrongboxKey', count: 1 }, { item: 'Bottle of Mead', count: 2 }];
+    const changes = repairPlan(plan);
+    expect(changes).toContain("Varro's Ledger is locked away with strongboxKey, so it lies in a strongbox where Eirik stays");
+    // The key in Eirik's inventory is the plan's own key: it isn't looked for in the load order as well.
+    expect(changes).toContain("Eirik carries Varro's Strongbox Key, the plan's own item");
+    expect(plan.characters[1]!.inventory).toEqual([{ item: 'Bottle of Mead', count: 2 }]);
     expect(plan.items.at(-1)).toMatchObject({ startsWith: 'location', startsAtKey: 'tavern', spot: 'in a locked strongbox' });
     expect(validatePlan(plan).filter((i) => /locked|isn't put in a container/.test(i.message))).toEqual([]);
   });
@@ -628,6 +633,16 @@ describe('quest builder', () => {
     plan.items[0] = { ...plan.items[0]!, name: "Brynja's Old Bowl", basedOn: null };
     const res = builder.resolve(plan).find((r) => r.kind === 'item')!;
     expect(res.text).toBe('New, copied from Bowl (DemoBowl)');
+  });
+
+  it('copies a key only from a key, so it can lock something', async () => {
+    const { builder, ws } = await setup();
+    ws.createRecord('KEYM', { editorId: 'DemoOldKey', name: 'Old Key', model: { file: 'clutter\\key01.nif' } });
+    const plan = exampleQuestPlan();
+    // As Qwen3.5 4B planned it: "Varro's Strongbox Key", based on Fine Clothes.
+    plan.items[0] = { ...plan.items[0]!, kind: 'key', name: "Varro's Strongbox Key", basedOn: 'Blue Fine Clothes' };
+    const res = builder.resolve(plan).find((r) => r.kind === 'item')!;
+    expect(ws.summary(res.template!)?.sig).toBe('KEYM');
   });
 
   it('follows quest items characters carry: taken from their body, handed over, delivered', async () => {

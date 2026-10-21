@@ -361,7 +361,10 @@ export class QuestBuilder {
         out.push({ kind: 'item', key: i.key, name: i.name, existing: null, template: null, text: `No item called “${i.existing}”`, error: `${i.name}: no item called “${i.existing}” in the load order` });
         continue;
       }
-      const based = i.basedOn ? this.characters.findLoose([ITEM_TEMPLATE_SIG[i.kind]], i.basedOn) ?? this.characters.findLoose(ITEM_SIGS, i.basedOn) : undefined;
+      // A key or a book is only copied from one of its own kind: a key copied from clothes opens nothing, and a book
+      // copied from anything else can't be read.
+      const strict = i.kind === 'key' || i.kind === 'book';
+      const based = i.basedOn ? this.characters.findLoose([ITEM_TEMPLATE_SIG[i.kind]], i.basedOn) ?? (strict ? undefined : this.characters.findLoose(ITEM_SIGS, i.basedOn)) : undefined;
       const t = based ?? this.itemTemplate(i.kind, i.name);
       out.push(t ? { kind: 'item', key: i.key, name: i.name, existing: null, template: t, text: `New, copied from ${this.label(t)}${i.basedOn && !based ? ` (no “${i.basedOn}” found)` : ''}` } : { kind: 'item', key: i.key, name: i.name, existing: null, template: null, text: 'No item to copy from', error: `${i.name}: there's no item in the load order to copy` });
     }
