@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Plugin, PluginRecord, applyTyped, placeRecord, type FormKey } from '@tes5/esp';
 import {
+  adoptStages,
   DialogueService,
   EnvironmentService,
   MemoryFileSystem,
@@ -364,6 +365,17 @@ describe('written dialogue', () => {
     expect(text).toContain("VARRO: My partner! You've brought the pages, I hope? [if chose deal]");
     expect(text).toContain("VARRO: Hesta's dog. I wondered when you'd turn up. [if not chose deal]");
     expect(text).not.toMatch(/PLAYER: Why do you want her maps so badly\?.*\[if chose deal\]/);
+  });
+
+  it("puts a stage the AI gave its copy of an author's line on the author's line, so the copy can go", () => {
+    const plan = exampleQuestPlan();
+    plan.conversations = [
+      { title: '✎ Brynja', screenplay: "PLAYER: It's done.\nBRYNJA: Dead, then. I won't pretend to weep. [stage 20]\nPLAYER: Anything else?\nBRYNJA: Gone back to Cyrodiil. [stage 20]" },
+      { title: 'Brynja', screenplay: "PLAYER: It's done.\nBRYNJA: Dead, then. I won't pretend to weep. [stage 100]" },
+    ];
+    expect(adoptStages(plan, ["Dead, then. I won't pretend to weep.", 'Gone back to Cyrodiil.'])).toEqual(["“Dead, then. I won't pretend to weep.” in ✎ Brynja moves the quest to stage 100"]);
+    expect(plan.conversations[0]!.screenplay).toContain("BRYNJA: Dead, then. I won't pretend to weep. [stage 100]");
+    expect(plan.conversations[0]!.screenplay).toContain('BRYNJA: Gone back to Cyrodiil. [stage 20]');
   });
 
   it('adds up what the lines of one answer give, and [or] starts another answer', () => {

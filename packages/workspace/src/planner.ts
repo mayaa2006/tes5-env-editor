@@ -404,8 +404,11 @@ export class QuestPlanner {
       const speakers = plan.characters.flatMap((c) => [c.key, c.name, ...(c.existing ? [c.existing] : [])]);
       await this.writeMissingLines(plan, brief, (text) => lintScreenplay(text, { stages, speakers }).filter((l) => l.severity === 'error').length);
       await this.writeJournal2(plan, brief);
-      // Lines it wrote that repeat the author's own are taken out again.
+      // Lines it wrote that repeat the author's own are taken out again; a stage one of them sets that nothing else
+      // does goes on the author's line it repeats.
       const authorLines = blocks.flatMap((b) => b.lines.map((l) => l.text));
+      const adopted = adoptStages(plan, authorLines);
+      if (adopted.length) plan.assumptions = [...(plan.assumptions ?? []), ...adopted];
       plan.conversations = plan.conversations.map((c) => (c.title.startsWith('✎ ') ? c : { ...c, screenplay: withoutAuthorLines(c.screenplay, authorLines) })).filter((c) => c.screenplay.trim());
     }
     return plan;
@@ -882,6 +885,41 @@ function followDirections(plan: QuestPlan, blocks: WrittenBlock[]): string[] {
       } else if (follow && follow.untilStage !== stage) {
         follow.untilStage = stage;
         out.push(`${who.name} stops following the player at stage ${stage}`);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Where the AI wrote one of the author's lines again with a stage the author's conversations don't set ("Dead, then.
+ * I won't pretend to weep. [stage 50]"), that stage goes on the author's own line (in place of one other lines set
+ * too). Returns what changed.
+ */
+export function adoptStages(plan: QuestPlan, author: string[]): string[] {
+  const out: string[] = [];
+  const mine = plan.conversations.filter((c) => c.title.startsWith('✎ '));
+  const stagesIn = (convs: typeof mine) => convs.flatMap((c) => [...c.screenplay.matchAll(/\[stage\s+(\d+)\]/gi)].map((m) => Number(m[1])));
+  for (const c of plan.conversations.filter((x) => !x.title.startsWith('✎ '))) {
+    for (const row of c.screenplay.split(/\r?\n/)) {
+      const n = Number(/\[stage\s+(\d+)\]/i.exec(row)?.[1]);
+      const text = /^\s*[^:]+:\s*(.*)$/.exec(row)?.[1]?.replace(/\[[^\]]*\]/g, '').trim() ?? '';
+      if (!Number.isFinite(n) || !text || stagesIn(mine).includes(n)) continue;
+      const original = author.find((a) => similarity(a, text) >= 0.6);
+      if (!original) continue;
+      // (Every copy of it in the author's conversation: alternatives repeat a line once per combination.)
+      for (const m of mine) {
+        const rows = m.screenplay.split(/\r?\n/);
+        const at = rows.map((r, i) => (r.includes(original) && !/^\s*player\s*:/i.test(r) ? i : -1)).filter((i) => i >= 0);
+        if (!at.length) continue;
+        const counts = stagesIn(mine);
+        const had = at.map((i) => /\[stage\s+(\d+)\]/i.exec(rows[i]!));
+        // A stage only these lines set stays theirs.
+        if (had.some((h) => h && counts.filter((x) => x === Number(h[1])).length <= at.length)) break;
+        for (const [k, i] of at.entries()) rows[i] = had[k] ? rows[i]!.replace(had[k]![0], `[stage ${n}]`) : `${rows[i]!.trimEnd()} [stage ${n}]`;
+        m.screenplay = rows.join('\n');
+        out.push(`“${original.slice(0, 40)}${original.length > 40 ? '…' : ''}” in ${m.title} moves the quest to stage ${n}`);
+        break;
       }
     }
   }
