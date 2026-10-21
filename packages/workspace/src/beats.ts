@@ -10,7 +10,7 @@
  * the author's wording.
  */
 import type { PlanCharacter, PlanEncounter, PlanEvent, PlanItem, PlanLocation, PlanStep, QuestPlan } from './questplan';
-import { writtenScreenplay, type WrittenBlock } from './written';
+import { writtenScreenplay, type WrittenBlock, type WrittenLine } from './written';
 
 /** What the player does that completes a beat. */
 export const BEAT_ACTIONS = ['talk', 'pickup', 'read', 'use', 'arrive', 'kill', 'clear', 'wait', 'immediately'] as const;
@@ -140,6 +140,8 @@ export interface Beat {
   /** 'complete' or 'fail': reaching it ends the quest that way. */
   ends: 'complete' | 'fail' | null;
   effects: BeatEffects;
+  /** Different effects when something holds ("200 gold, or 100 if he was let go"): tried first, in order. */
+  variants?: { if: BeatCondition[]; effects: BeatEffects }[];
 }
 
 /** How the quest starts. */
@@ -502,16 +504,28 @@ export function compileBeats(sheet: BeatSheet, blocks: WrittenBlock[] = []): Que
     const who = sheet.people.find((p) => p.name.toLowerCase() === s || p.key.toLowerCase() === s || p.name.split(/\s+/)[0]!.toLowerCase() === s);
     conversations.push({ title: `✎ ${who?.name ?? mine[0]!.speaker}`, screenplay: writtenScreenplay(mine) });
   }
-  // Lines the AI wrote for talk beats the author only describes.
-  for (const l of sheet.lines) {
+  // Lines the AI wrote for talk beats the author only describes: written like the author's, a player line and its
+  // answer, said another way first where the beat's effects differ.
+  const written = new Map<string, WrittenBlock[]>();
+  for (const [i, l] of sheet.lines.entries()) {
     const b = byId.get(l.beat);
     if (!b) continue;
     const who = person.get(b.target ?? '');
-    const gate = fromStages(b).length === 1 ? ` [if stage ${fromStages(b)[0]}]` : '';
-    const text = `PLAYER: ${l.player}${gate}\n${(who?.key ?? 'npc').toUpperCase()}: ${l.answer} ${[`[stage ${stageOf(b.id)}]`, ...effectTags(b.effects ?? {}, who)].join(' ')}`;
-    const conv = conversations.find((c) => c.title === (who?.name ?? 'NPC'));
+    const key = (who?.key ?? 'npc').toUpperCase();
+    const gate = fromStages(b).length === 1 ? [`[if stage ${fromStages(b)[0]}]`] : [];
+    const answer = (tags: string[]): WrittenLine => ({ n: 0, level: 0, speaker: key, player: false, text: l.answer, notes: [], tags });
+    const lines: WrittenLine[] = [{ n: 0, level: 0, speaker: 'PLAYER', player: true, text: l.player, notes: [], tags: gate }];
+    for (const v of b.variants ?? []) lines.push(answer([...conditionTags(v.if), `[stage ${stageOf(b.id)}]`, ...effectTags({ ...(b.effects ?? {}), ...v.effects }, who)]));
+    lines.push(answer([`[stage ${stageOf(b.id)}]`, ...effectTags(b.effects ?? {}, who), ...(b.variants?.length ? ['[otherwise]'] : [])]));
+    lines.forEach((x, n) => (x.n = n + 1));
+    const title = who?.name ?? 'NPC';
+    written.set(title, [...(written.get(title) ?? []), { id: 10000 + i, header: '', scene: false, speaker: key, lines, tags: [] }]);
+  }
+  for (const [title, list] of written) {
+    const text = writtenScreenplay(list);
+    const conv = conversations.find((c) => c.title === title);
     if (conv) conv.screenplay += `\n${text}`;
-    else conversations.push({ title: who?.name ?? 'NPC', screenplay: text });
+    else conversations.push({ title, screenplay: text });
   }
 
   const start = sheet.start;

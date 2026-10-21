@@ -140,7 +140,17 @@ const BeatShape = z.object({
 /** What happens along with the beats that say "then": only those beats, by number. */
 const thenSchema = (numbers: number[]) =>
   z.object({
-    beats: z.array(z.object({ n: z.number().int().describe(`The beat number {enum: ${JSON.stringify(numbers)}}`), ...EffectsShape })).describe(`One entry for each of beats ${numbers.join(', ')}`),
+    beats: z
+      .array(
+        z.object({
+          n: z.number().int().describe(`The beat number {enum: ${JSON.stringify(numbers)}}`),
+          ...EffectsShape,
+          instead: z
+            .array(z.object({ if: z.array(ConditionShape), gold: z.number().int().nullable() }))
+            .describe('When the gold is different under a condition ("200 gold, or only 100 if he was let go"): that condition and amount'),
+        }),
+      )
+      .describe(`One entry for each of beats ${numbers.join(', ')}`),
   });
 
 /** What the player is told, and what the journal says, for each beat. */
@@ -583,7 +593,10 @@ export class BeatReader {
       );
       for (const e of a.beats) {
         const b = sheet.beats[e.n - 1];
-        if (b && this.then.has(b.id)) b.effects = this.effects(sheet, e);
+        if (!b || !this.then.has(b.id)) continue;
+        b.effects = this.effects(sheet, e);
+        const instead = e.instead.filter((v) => v.if.length && v.gold !== null).map((v) => ({ if: this.conditions(sheet, v.if), effects: { gold: v.gold! } }));
+        if (instead.length) b.variants = instead;
       }
     } catch {
       // Left without; the review shows what the author wrote.

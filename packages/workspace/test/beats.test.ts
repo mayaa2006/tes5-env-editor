@@ -158,6 +158,13 @@ describe('beat sheets', () => {
     expect(plan.conversations.find((c) => c.title === 'Lucan Valerius')!.screenplay).toBe('PLAYER: Leave. [if stage 10]\nLUCAN: Fine. [stage 20] [leaves]');
     expect(plan.events).toEqual([]);
     expect(validatePlan(plan).filter((i) => i.severity === 'error')).toEqual([]);
+    // 200 gold, or only 100 if Lucan was let go: the answer is said that way first.
+    sheet.beats[1] = { ...sheet.beats[1]!, effects: { gold: 200 }, variants: [{ if: [{ kind: 'left', who: 'lucan' }], effects: { gold: 100 } }] };
+    const paid = parseScreenplay(compileBeats(sheet).conversations.find((c) => c.title === 'Hesta Coldwater')!.screenplay).topics.find((t) => t.text === "It's done.")!.responses;
+    expect(paid.map((r) => [r.tags.if ?? null, r.tags.gives, r.tags.stage])).toEqual([
+      ['left lucan', 'gold x100', '40'],
+      [null, 'gold x200', '40'],
+    ]);
     // A loop is said, not built.
     sheet.beats[0]!.after = ['report'];
     expect(beatOrder(sheet.beats)).toBeUndefined();
@@ -241,7 +248,7 @@ describe('beat sheets', () => {
               { n: 3, does: 'talk', target: 'Tilda Grey-Hand', count: null, hours: null, after: [2], quote: 'When the player brings the letter back', ends: 'complete', then: "she takes the letter and gives the player her late husband's axe" },
             ],
           });
-        if (user.includes('What else happens')) return reply({ beats: [{ n: 3, ...none, takes: [{ item: 'letter', count: 1 }], gives: [{ item: 'axe', count: 1 }] }] });
+        if (user.includes('What else happens')) return reply({ beats: [{ n: 3, ...none, takes: [{ item: 'letter', count: 1 }], gives: [{ item: 'axe', count: 1 }], instead: [] }] });
         if (user.includes('their journal entry'))
           return reply({
             beats: [
