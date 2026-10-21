@@ -223,6 +223,44 @@ describe('written dialogue', () => {
     expect(blocks.find((b) => b.id === 2)!.tags).toEqual(['[if stage 20]']);
   });
 
+  it("mends the next run's tags too: a scene's [at stage] on conversations, the words one line off, the stage the quest is already at", () => {
+    const doc = readFileSync(join(import.meta.dirname, '../../../apps/studio/test/models/questline-cartographer.md'), 'utf8');
+    const blocks = blocksFor(findDialogue(splitQuestline(doc)!.parts[0]!.text).blocks, 'HESTA');
+    const plan = {
+      stages: [0, 10, 20, 30, 100].map((index) => ({ index, completesQuest: index === 100, failsQuest: false })),
+      items: [{ key: 'tornMapPage1', name: 'Torn Map Page' }],
+      steps: [
+        { from: 0, to: 10, kind: 'script', targetKey: null, note: 'Player reads the wanted notice on the bar' },
+        { from: 10, to: 20, kind: 'talk', targetKey: null, note: 'Player talks to Hesta and agrees to take the job' },
+        { from: 20, to: 30, kind: 'pickup', targetKey: 'tornMapPage1', note: 'Player finds the first map page' },
+        { from: 30, to: 100, kind: 'talk', targetKey: null, note: 'Player returns the map pages to Hesta' },
+      ],
+    };
+    // Qwen3.5 4B's answer on the second run, word for word.
+    applyAnnotation(blocks, {
+      blocks: [{ block: 1, tags: '[at stage 10]' }, { block: 2, tags: '[at stage 10]' }, { block: 3, tags: '[at stage 20]' }, { block: 4, tags: '[at stage 30]' }],
+      lines: [
+        { line: 6, words: "I'll get your", tags: '[stage 10] [remember promised]' },
+        { line: 8, words: 'Ha. Fine.', tags: '[stage 10] [remember promised]' },
+        { line: 16, words: "I'll get them", tags: '[stage 10] [remember promised]' },
+        { line: 24, words: "Good. I'll", tags: '[remember promised]' },
+      ],
+    });
+    directionTags(blocks, plan);
+    const text = writtenScreenplay(blocks);
+    expect(parseScreenplay(text).errors).toEqual([]);
+    const row = (start: string) => text.split('\n').find((r) => r.trim().startsWith(start))!;
+    for (const start of ['HESTA: The case will be ruined', 'HESTA: Ha. Fine. 250', 'HESTA: Three pages. All three, mind.']) {
+      expect(row(start)).toMatch(/\[stage 20\]/);
+      expect(row(start)).not.toMatch(/stage 10\]|remember promised/);
+    }
+    expect(row("PLAYER: I'll get your maps back.")).not.toMatch(/\[stage|remember/);
+    expect(row("HESTA: Good. I'll hold you to it.")).toMatch(/\[remember promised\]/);
+    expect(row('PLAYER: What\'s the job?')).toMatch(/\[if stage 10\]/);
+    expect(row('PLAYER: Where\'s Embershard Mine again?')).toMatch(/\[if stage 20\]/);
+    expect(text).not.toMatch(/\[at /);
+  });
+
   it("reads the Cartographer's later directions with no AI: after dark, a day later, needing and taking gold, giving the survey, a promise from quest 1", () => {
     const parts = splitQuestline(readFileSync(join(import.meta.dirname, '../../../apps/studio/test/models/questline-cartographer.md'), 'utf8'))!.parts;
     // Each line named by its first words.

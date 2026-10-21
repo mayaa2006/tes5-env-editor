@@ -304,6 +304,13 @@ export function repairPlan(plan: QuestPlan): string[] {
     const kept = before.filter((c) => !(itemKeys.has(String(c.key)) && !speaks(c)));
     for (const c of before.filter((x) => !kept.includes(x))) changes.push(`left out the character “${String(c.name ?? c.key)}”, which is the item of the same name`);
     if (kept.length < before.length) p.characters = kept;
+    // A "place" that's one of the plan's items (a notice pinned to the bar): nothing to make, so it goes too.
+    const places = list(p.locations);
+    const realPlaces = places.filter((l) => !(itemKeys.has(String(l.key)) && !l.existing && !l.layoutLike && !l.doorFrom));
+    for (const l of places.filter((x) => !realPlaces.includes(x))) changes.push(`left out the place “${String(l.name ?? l.key)}”, which is the item of the same name`);
+    if (realPlaces.length < places.length) p.locations = realPlaces;
+    // A layout to copy and a door only make sense for a new interior; for one that exists they'd just be warned about.
+    for (const l of realPlaces) if (l.existing) (l.layoutLike = null), (l.doorFrom = null);
     for (const field of ['characters', 'locations', 'items', 'encounters'] as const) {
       const seen = new Set<string>();
       for (const e of list(p[field])) {
@@ -331,6 +338,13 @@ export function repairPlan(plan: QuestPlan): string[] {
   const fix = (o: Obj | null | undefined, field: string) => {
     const v = o?.[field];
     if (!o || typeof v !== 'string' || keys.has(v)) return;
+    // Several keys in one ("page1;page2;page3" for a marker on all three pages): the first that's in the plan.
+    const first = v.split(/\s*[;,]\s*/).find((k) => keys.has(k));
+    if (first && first !== v) {
+      changes.push(`"${v}" → "${first}"`);
+      o[field] = first;
+      return;
+    }
     const t = v.trim().toLowerCase();
     const key = lookup.get(t) ?? names.get(t);
     if (key) {

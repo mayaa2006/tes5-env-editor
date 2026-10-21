@@ -225,11 +225,13 @@ describe('plans that would play wrong', () => {
       ...['by the forge', 'in a chest', 'on a table near the back'].map((spot, n) => ({ key: `mapPage${n + 1}`, name: `Torn Map Page ${n + 1}`, kind: 'misc' as const, existing: null, basedOn: null, value: null, startsWith: 'location' as const, startsAtKey: 'mine', spot, copies: null, text: null, lockedWith: null })),
     ];
     plan.encounters = [{ key: 'bandits', what: 'LvlBanditMelee', count: 3, locationKey: 'mine', spot: null }];
+    // The notice listed as a place too; the marker on all three pages at once.
+    plan.locations.push({ key: 'notice', name: 'Wanted Notice', existing: null, description: 'Pinned to the bar', layoutLike: null, doorFrom: null });
     plan.startsWithGame = false;
     plan.startsWhen = { kind: 'read', targetKey: 'notice', quest: null, stage: null };
     plan.objectives = [
       { index: 10, text: 'Find the map pages', shownAtStage: 10, completedAtStage: 20, targetKey: 'mapPage1' },
-      { index: 11, text: 'Find the map pages', shownAtStage: 10, completedAtStage: 20, targetKey: 'mapPage2' },
+      { index: 11, text: 'Find the map pages', shownAtStage: 10, completedAtStage: 20, targetKey: 'mapPage2;mapPage3' },
       { index: 20, text: 'Return to Brynja', shownAtStage: 20, completedAtStage: 100, targetKey: 'brynja' },
     ];
     plan.steps = [
@@ -249,8 +251,11 @@ describe('plans that would play wrong', () => {
         'the step “The player reads the notice” is what starts the quest, so the quest goes straight on from stage 0 to 10',
         'the spawn “Bandits appear in Embershard Mine” now shows the plan\'s encounter “bandits” at stage 10 (it waits there hidden until then)',
         'the reward of 100 gold at stage 100 is left out: the line that reaches that stage already pays it',
+        'left out the place “Wanted Notice”, which is the item of the same name',
+        '"mapPage2;mapPage3" → "mapPage2"',
       ]),
     );
+    expect(plan.locations.map((l) => l.key)).toEqual(['tavern', 'mine']);
     expect(plan.items.map((i) => i.key)).toEqual(['notice', 'mapPage1']);
     expect(plan.items[1]).toMatchObject({ name: 'Torn Map Page', copies: 3, spot: 'by the forge; in a chest; on a table near the back' });
     expect(plan.steps.map((s) => `${s.from}→${s.to} ${s.kind} ${s.targetKey ?? ''} ${s.count ?? ''}`.trim())).toEqual(['0→10 script', '10→20 pickup mapPage1 3', '20→100 talk']);

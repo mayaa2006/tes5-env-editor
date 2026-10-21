@@ -236,29 +236,40 @@ function cleanTags(tags: string): string[] {
 const wordsOf = (t: string) => t.toLowerCase().replace(/[’]/g, "'").replace(/[^a-z0-9' ]+/g, ' ').split(/\s+/).filter(Boolean);
 
 /**
- * The line the AI meant: the number it gave, unless the words it quoted begin a line nearby instead (smaller models
- * count a numbered list off by one).
+ * The line the AI meant. Smaller models get the number or the quoted words one line off (either one): where they
+ * point at different lines, the one with the author's direction wins, then the one the character says (for tags that
+ * do something), then the words.
  */
-function lineFor<T extends { l: WrittenLine }>(all: T[], n: number, words: string | undefined): T | undefined {
+function lineFor<T extends { l: WrittenLine }>(all: T[], n: number, words: string | undefined, tags: string[]): T | undefined {
   const at = all.findIndex((x) => x.l.n === n);
   const w = wordsOf(words ?? '').slice(0, 5);
   if (!w.length) return all[at];
   const starts = (x: T | undefined) => !!x && (wordsOf(x.l.text).slice(0, w.length).join(' ') === w.join(' ') || wordsOf(x.l.text).join(' ').includes(w.join(' ')));
   if (at >= 0 && starts(all[at])) return all[at];
-  for (const d of [1, -1, 2, -2, 3, -3]) if (at >= 0 && starts(all[at + d])) return all[at + d];
-  return all.find(starts) ?? all[at];
+  let byWords: T | undefined;
+  for (const d of [1, -1, 2, -2, 3, -3]) if (at >= 0 && starts(all[at + d])) (byWords ??= all[at + d]);
+  byWords ??= all.find(starts);
+  const byNumber = all[at];
+  if (!byWords || !byNumber) return byWords ?? byNumber;
+  const directed = (x: T) => x.l.notes.length > 0;
+  if (directed(byNumber) !== directed(byWords)) return directed(byNumber) ? byNumber : byWords;
+  const doing = tags.some((t) => /^\[(stage|gives|takes|remember|attacks|leaves)\b/i.test(t));
+  if (doing && byNumber.l.player !== byWords.l.player) return byNumber.l.player ? byWords : byNumber;
+  return byWords;
 }
 
 /** Put the AI's tags on the blocks and lines they're for. */
 export function applyAnnotation(blocks: WrittenBlock[], a: DialogueAnnotation): void {
   for (const x of a.blocks ?? []) {
     const b = blocks.find((y) => y.id === x.block);
-    if (b) b.tags.push(...cleanTags(x.tags ?? '').filter((t) => !b.tags.includes(t)));
+    // A scene's "[at stage N]" on a conversation with the player means when it's offered: [if stage N].
+    const tags = cleanTags(x.tags ?? '').map((t) => (b && !b.scene ? t.replace(/^\[at\s+(?:stage\s+)?(\d+)\]$/i, '[if stage $1]') : t));
+    if (b) b.tags.push(...tags.filter((t) => !b.tags.includes(t)));
   }
   const all = blocks.flatMap((b) => b.lines.map((l) => ({ l, b })));
   for (const x of a.lines ?? []) {
     if (!cleanTags(x.tags ?? '').length) continue;
-    const hit = lineFor(all, x.line, x.words);
+    const hit = lineFor(all, x.line, x.words, cleanTags(x.tags ?? ''));
     if (!hit) continue;
     const { l, b } = hit;
     // "A | B": the line said two ways (paying 250 if persuaded, otherwise 150): a copy for each, the one with its own
@@ -353,9 +364,16 @@ export function directionTags(blocks: WrittenBlock[], plan: DirectionPlan, choic
       if (needs && !l.tags.some((t) => /^\[if\s+gold/i.test(t))) add(l, `[if gold ${needs[1]}]`, 'needs gold');
       const rem = REMEMBER.exec(n);
       if (rem && !has(l, 'remember')) add(l, `[remember ${misplaced.find((m) => m.slice(0, 4) === rem[1]!.slice(0, 4)) ?? (remembering.length === 1 && misplaced.length ? misplaced[0] : rem[1])}]`, 'remembers the choice');
-      if (!has(l, 'stage') && !/\bif\b/.test(n)) {
+      if (!/\bif\b/.test(n)) {
         const st = talkStep(n.split(/[;]/)[0]!);
-        if (st) add(l, `[stage ${st.to}]`, `“${st.note}”`);
+        const given = l.tags.find((t) => /^\[stage\s+\d+\]$/i.test(t));
+        const at = given ? Number(/(\d+)/.exec(given)![1]) : undefined;
+        // The AI's own stage stays unless it's the one the step starts from (setting the stage the quest is at does
+        // nothing) or no talk step reaches it.
+        if (st && given && at !== st.to && (at === st.from || !steps.some((x) => x.kind === 'talk' && x.to === at))) {
+          l.tags = l.tags.filter((t) => t !== given);
+          add(l, `[stage ${st.to}]`, `“${st.note}”, not ${given}`);
+        } else if (st && !given) add(l, `[stage ${st.to}]`, `“${st.note}”`);
       }
       if (l.player) continue;
       // One amount, said plainly (not "150, or 250 if persuaded": that's two ways of saying the line).
