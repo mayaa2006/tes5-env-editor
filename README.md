@@ -144,7 +144,7 @@ Paste a whole questline into **Quests → From text**, with a heading for each q
 
 What a written questline can use, beyond a single quest's plan:
 
-- **People and places outdoors:** a camp by the river, a road, standing stones. Characters, enemy groups and items stand on dry, fairly flat ground near what the text names ("by the Warrior Stone"), and the people at one place stay together. Arriving there means coming within about 25 metres; outdoors the game loads a cell long before the player reaches it.
+- **People and places outdoors:** a camp by the river, a road, standing stones. A place with no cell of its own is found by its name on the world map ("the Guardian Stones", "Valtheim Towers"). Characters, enemy groups and items stand on dry, fairly flat ground near what the text names ("by the Warrior Stone"), and the people at one place stay together. Arriving there means coming within about 25 metres; outdoors the game loads a cell long before the player reaches it.
 - **Notes, letters and notices with their words**, copied from your text (in the handwritten font for notes and letters). Reading one can start the quest.
 - **Several of one thing** ("three torn pages, one by the forge, one in a chest…"), and a step that moves on once the player **has all of them**, however they got them, checked again when the stage is reached.
 - **"Come back tomorrow":** a step that waits some in-game hours after a stage.
