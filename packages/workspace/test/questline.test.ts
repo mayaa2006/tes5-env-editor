@@ -318,6 +318,8 @@ describe('written dialogue', () => {
   });
 
   it('reads "if Varro left" and "if Varro is dead" as what happened to him, over choices the AI made up', () => {
+    // [if left varro] reads the choice the line where he [leaves] remembers.
+    expect(parseIf('left varro')).toEqual([{ kind: 'left', who: 'varro', not: false }]);
     const parts = splitQuestline(readFileSync(join(import.meta.dirname, '../../../apps/studio/test/models/questline-cartographer.md'), 'utf8'))!.parts;
     const q4 = findDialogue(parts[3]!.text).blocks;
     const plan = { stages: [0, 10, 20, 100].map((index) => ({ index, completesQuest: index === 100, failsQuest: false })), items: [{ key: 'survey', name: 'Coldwater Survey of the Rift' }], steps: [], characters: [{ key: 'varro', name: 'Varro Tullius' }, { key: 'hesta', name: 'Hesta Coldwater' }] };
@@ -330,8 +332,33 @@ describe('written dialogue', () => {
     applyAnnotation(hesta, { blocks: [], lines: [{ line: 2, tags: '[if chose left]' }, { line: 3, tags: '[if chose dead]' }] });
     directionTags(hesta, plan, ['deal']);
     const tagsOf = (start: string) => hesta.flatMap((b) => b.lines).find((l) => l.text.startsWith(start))!.tags;
-    expect(tagsOf('Gone back to Cyrodiil')).toEqual(['[if chose varroleft]']);
+    expect(tagsOf('Gone back to Cyrodiil')).toEqual(['[if left varro]']);
     expect(tagsOf('Dead, then.')).toEqual(['[if dead varro]']);
+    // How Varro ended up and whether the player took his money: one line of each, every combination, the first that
+    // applies said (and his fate can go unsaid).
+    hesta.flatMap((b) => b.lines).find((l) => l.text.startsWith('His ledger had'))!.tags.push('[if chose deal]');
+    const answers = parseScreenplay(writtenScreenplay(hesta)).topics[0]!.responses;
+    expect(answers.map((r) => [r.tags.if ?? '', r.lines.map((x) => x.split(' ')[0]).join(' ')])).toEqual([
+      ['left varro;chose deal', 'Gone His'],
+      ['left varro', 'Gone Here.'],
+      ['dead varro;chose deal', 'Dead, His'],
+      ['dead varro', 'Dead, Here.'],
+      ['chose deal', 'His'],
+      ['', 'Here.'],
+    ]);
+  });
+
+  it("puts a condition the AI gave a whole conversation on the alternative it's about", () => {
+    const parts = splitQuestline(readFileSync(join(import.meta.dirname, '../../../apps/studio/test/models/questline-cartographer.md'), 'utf8'))!.parts;
+    const varro = blocksFor(findDialogue(parts[3]!.text).blocks, 'Varro');
+    const plan = { stages: [0, 10, 20, 100].map((index) => ({ index, completesQuest: index === 100, failsQuest: false })), items: [], steps: [], characters: [{ key: 'varro', name: 'Varro Tullius' }] };
+    // Qwen3.5 4B's tags: "only if the player took his money" on the whole block.
+    applyAnnotation(varro, { blocks: [{ block: varro[0]!.id, tags: '[if chose deal]' }], lines: [] });
+    directionTags(varro, plan, ['deal']);
+    const text = writtenScreenplay(varro);
+    expect(text).toContain("VARRO: My partner! You've brought the pages, I hope? [if chose deal]");
+    expect(text).toContain("VARRO: Hesta's dog. I wondered when you'd turn up. [if not chose deal]");
+    expect(text).not.toMatch(/PLAYER: Why do you want her maps so badly\?.*\[if chose deal\]/);
   });
 
   it('adds up what the lines of one answer give, and [or] starts another answer', () => {

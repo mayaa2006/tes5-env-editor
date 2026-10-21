@@ -150,7 +150,7 @@ What a written questline can use, beyond a single quest's plan:
 - **"Come back tomorrow":** a step that waits some in-game hours after a stage.
 - **Locked containers:** the item inside a strongbox that only the plan's key opens.
 - **Ambushes:** an enemy group that stays hidden until a stage, then appears.
-- **In dialogue:** `[if night]`, `[if day]`, `[if time 20-4]`; `[if quest MyQuest done 20]` (another quest reached a stage); `[attacks]` (the speaker turns on the player); `[leaves]` (the speaker is gone for good); `[or]` (another answer to the same line). A choice remembered in one quest (`[remember promised]`) can be checked in a later one (`[if chose promised]`). `[if dead Varro]` / `[if alive Varro]`: whether a character has died. "(if Varro is dead)" and "(if Varro left)" in your text are read as that (a line where someone `[leaves]` remembers that they left).
+- **In dialogue:** `[if night]`, `[if day]`, `[if time 20-4]`; `[if quest MyQuest done 20]` (another quest reached a stage); `[attacks]` (the speaker turns on the player); `[leaves]` (the speaker is gone for good); `[or]` (another answer to the same line). A choice remembered in one quest (`[remember promised]`) can be checked in a later one (`[if chose promised]`). `[if dead Varro]` / `[if alive Varro]`: whether a character has died; `[if left varro]`: whether they left for good (a line where someone `[leaves]` remembers that they did). "(if Varro is dead)" and "(if Varro left)" in your text are read as these, and count as one set of alternatives.
 
 The quest map has the new kinds of connection too: **Collect items** (how many of which item) and **Time passes** (how many in-game hours).
 

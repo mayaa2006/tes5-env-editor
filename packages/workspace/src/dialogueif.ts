@@ -15,6 +15,7 @@
  *   [if time 20-4]         between those hours (it can run past midnight)
  *   [if chose spared]      a choice remembered with [remember spared], in this quest or an earlier one of yours
  *   [if dead Varro]        that character is dead ([if alive Varro]: they aren't)
+ *   [if left varro]        that character left for good: a line where they [leaves] remembers it (the choice "varroleft")
  *
  * Several [if …] tags on one line must all be true. Each becomes a normal
  * Creation Kit condition, so it shows (and can be edited) in the condition list.
@@ -34,7 +35,8 @@ export type IfClause =
   | { kind: 'questStage'; quest: string; stage: number; not: boolean }
   | { kind: 'time'; from: number; to: number }
   | { kind: 'choice'; name: string; not: boolean }
-  | { kind: 'dead'; who: string; not: boolean };
+  | { kind: 'dead'; who: string; not: boolean }
+  | { kind: 'left'; who: string; not: boolean };
 
 /** Run on the player (in dialogue, "Target" is the player). */
 const TARGET = 1;
@@ -79,7 +81,8 @@ export function parseIf(value: string | undefined): IfClause[] {
     }
     else if ((m = /^(not\s+)?(?:chose|remembered|remembers)\s+([A-Za-z][\w-]*)$/i.exec(part))) out.push({ kind: 'choice', name: m[2]!, not: !!m[1] });
     else if ((m = /^(not\s+)?(dead|alive|killed)\s+(.+)$/i.exec(part))) out.push({ kind: 'dead', who: m[3]!.trim(), not: !!m[1] !== (m[2]!.toLowerCase() === 'alive') });
-    else throw new Error(`[if ${part}] isn't understood. Try: stage 10, done 20, has Ring, gold 100, speech 50, level 10, female, race Nord, quest MyQuest done, quest MyQuest done 20, night, time 20-4, chose spared, dead Varro`);
+    else if ((m = /^(not\s+)?(?:left|gone)\s+(.+)$/i.exec(part))) out.push({ kind: 'left', who: m[2]!.trim(), not: !!m[1] });
+    else throw new Error(`[if ${part}] isn't understood. Try: stage 10, done 20, has Ring, gold 100, speech 50, level 10, female, race Nord, quest MyQuest done, quest MyQuest done 20, night, time 20-4, chose spared, dead Varro, left Varro`);
   }
   return out;
 }
@@ -126,6 +129,11 @@ export function choiceGlobalFor(ws: Workspace, quest: FormKey, name: string): Fo
     .items.filter((g) => !g.deleted && g.inActive && g.editorId?.toLowerCase().endsWith(suffix) && g.editorId.length > suffix.length);
   if (others.length === 1) return others[0]!.formKey;
   return choiceGlobal(ws, quest, name);
+}
+
+/** The choice a line with [leaves] remembers about its speaker ("varro" → "varroleft"). */
+export function leftChoice(who: string): string {
+  return `${who.toLowerCase().replace(/[^a-z0-9]/g, '')}left`;
 }
 
 function choiceWord(name: string): string {
@@ -206,6 +214,9 @@ export function clauseConditions(ws: Workspace, quest: FormKey, clauses: IfClaus
         out.push(cond('GetDeadCount', { param1: npc, op: c.not ? '==' : '>=', value: c.not ? 0 : 1 }));
         break;
       }
+      case 'left':
+        out.push(cond('GetGlobalValue', { param1: choiceGlobalFor(ws, quest, leftChoice(c.who)), op: '==', value: c.not ? 0 : 1 }));
+        break;
       case 'questDone': {
         const q = ws.byEditorId(c.quest);
         if (!q || ws.summary(q)?.sig !== 'QUST') throw new Error(`[if quest ${c.quest} done]: no quest with that Editor ID`);
