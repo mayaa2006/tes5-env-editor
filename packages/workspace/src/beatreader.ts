@@ -295,6 +295,7 @@ export class BeatReader {
     const blocks = findDialogue(text).blocks;
     step('finding who and what the quest involves');
     const sheet = await this.entities(text, opts);
+    sheet.text = text;
     const parts = passages(text);
     for (const [i, p] of parts.entries()) {
       step(`reading part ${i + 1} of ${parts.length}${p.kind === 'conversation' ? ` (a conversation with ${p.block.speaker})` : ''}`);

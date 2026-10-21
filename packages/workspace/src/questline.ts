@@ -225,11 +225,13 @@ export async function readQuestline(
   const sheets: BeatSheet[] = [];
   for (const [i, part] of line.parts.entries()) {
     opts.progress?.(i, 'starting');
+    // "Quest 1: The Ledger" is called The Ledger.
+    const title = QUEST_HEADING.exec(part.title.replace(/^#+\s*/, ''))?.[1]?.trim() || part.title;
     const taken = new Set(quests.map((q) => q.plan.editorId.toLowerCase()));
-    let editorId = editorIdFromTitle(part.title);
-    for (let n = 2; taken.has(editorId.toLowerCase()); n++) editorId = `${editorIdFromTitle(part.title)}${n}`;
+    let editorId = editorIdFromTitle(title);
+    for (let n = 2; taken.has(editorId.toLowerCase()); n++) editorId = `${editorIdFromTitle(title)}${n}`;
     const { sheet, questions, blocks } = await new BeatReader(planner(i)).read(part.text, {
-      title: part.title,
+      title,
       editorId,
       shared: line.shared,
       earlier: sheets,

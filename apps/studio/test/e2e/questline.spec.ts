@@ -104,6 +104,8 @@ for (const size of [
     await expect(dlg.getByTestId('ollama-model')).toHaveValue('qwen3:14b');
     await dlg.getByTestId('ai-done').click();
     await expect(dlg.getByTestId('plan-quest')).toHaveText(/Plan the questline \(2 quests\)/);
+    // Planned in one go (reading beat by beat has its own test).
+    await dlg.getByTestId('plan-how').locator('select').selectOption('whole');
     await dlg.getByTestId('plan-quest').click();
 
     const review = dlg.getByTestId('questline-review');
@@ -165,6 +167,8 @@ test('Stop calls off a questline that is still being planned, and keeps what was
   await dlg.getByTestId('local-kind-ollama').click();
   await expect(dlg.getByTestId('ollama-model')).toHaveValue('qwen3:14b');
   await dlg.getByTestId('ai-done').click();
+  // Planned in one go (reading beat by beat has its own test).
+  await dlg.getByTestId('plan-how').locator('select').selectOption('whole');
   await dlg.getByTestId('plan-quest').click();
   // Which quest and which step it's on, with Stop.
   await expect(page.getByTestId('busy')).toContainText('Quest 1 of 2, Quest 1: The Ledger: planning the stages, characters and places');

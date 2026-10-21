@@ -184,6 +184,8 @@ export interface BeatSheet {
   title: string;
   editorId: string;
   summary: string;
+  /** The author's text it was read from: its written conversations are the blocks the dialogue entries number. */
+  text?: string;
   start: BeatStart;
   people: BeatPerson[];
   places: BeatPlace[];

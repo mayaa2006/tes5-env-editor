@@ -37,6 +37,13 @@ import {
   planQuestline,
   readQuestline,
   beatLookup,
+  BeatReader,
+  compileBeats,
+  checkBeats,
+  findDialogue,
+  editorIdFromTitle,
+  normalizePlan,
+  type BeatSheet,
   questlineLinks,
   questlineIssues,
   buildQuestline,
@@ -1246,6 +1253,36 @@ export class EngineHost {
     const plan = await this.stoppable((signal) => new QuestPlanner({ ai: a, signal }).plan(source, mode, planCatalog(this.requireWs(), { text: source, ...catalogLimits(a) })));
     settleCharacters(this.requireWs(), plan, source, a.kind !== 'claude');
     return { plan, ...this.reviewQuestPlan(plan) };
+  }
+
+  /**
+   * Read one quest document beat by beat (small questions any AI can answer) and compile the reading into a plan. The
+   * reading and what still doesn't fit together come back with the plan, for the review's outline.
+   */
+  async readQuest(source: string, ai: AiProvider | string) {
+    const a = await this.resolveAi(ai);
+    const ws = this.requireWs();
+    const title = /^\s*(?:#+\s*|quest:\s*)(.+)$/im.exec(source)?.[1]?.trim() || 'New quest';
+    const { sheet, questions, blocks } = await this.stoppable((signal) =>
+      new BeatReader(new QuestPlanner({ ai: a, signal })).read(source, {
+        title,
+        editorId: editorIdFromTitle(title),
+        lookup: beatLookup(ws),
+        onStep: (what) => this.emitHost({ type: 'planProgress', message: `${what[0]!.toUpperCase()}${what.slice(1)}…` }),
+      }),
+    );
+    const plan = normalizePlan(compileBeats(sheet, blocks));
+    settleCharacters(ws, plan, source, a.kind !== 'claude');
+    return { plan, sheet, questions, ...this.reviewQuestPlan(plan) };
+  }
+
+  /** A changed reading compiled again into a plan (the outline in the review), with what still doesn't fit together. */
+  recompileBeats(sheet: BeatSheet, source: string) {
+    const ws = this.requireWs();
+    const blocks = findDialogue(sheet.text ?? source).blocks;
+    const plan = normalizePlan(compileBeats(sheet, blocks));
+    settleCharacters(ws, plan, source, true);
+    return { plan, sheet, questions: checkBeats(sheet, { blocks }), ...this.reviewQuestPlan(plan) };
   }
 
   /** Claude changes a plan as described. */

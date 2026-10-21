@@ -6,12 +6,14 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import type { FormKey } from '@tes5/esp';
-import { splitQuestline, type PlanIssue, type PlanResolution, type PlannerMode, type QuestBuildReport, type QuestPlan, type QuestlineBuildReport, type QuestlineLink, type QuestlinePlan } from '@tes5/workspace';
+import { splitQuestline, type BeatQuestion, type BeatSheet, type PlanIssue, type PlanResolution, type PlannerMode, type QuestBuildReport, type QuestPlan, type QuestlineBuildReport, type QuestlineLink, type QuestlinePlan } from '@tes5/workspace';
 import { clearDraft, Field, Help, Icon, Modal, Select, TextInput, useDraft } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 import { AiPicker, useAi } from '../../components/AiPicker';
+import { BeatOutline } from './BeatOutline';
 
-type Review = { plan: QuestPlan; issues: PlanIssue[]; resolution: PlanResolution[] };
+/** A plan to check; when it was read beat by beat, the reading it was made from and what still doesn't fit together. */
+type Review = { plan: QuestPlan; issues: PlanIssue[]; resolution: PlanResolution[]; sheet?: BeatSheet; questions?: BeatQuestion[] };
 type LineReview = { line: QuestlinePlan; reviews: { issues: PlanIssue[]; resolution: PlanResolution[] }[]; links: QuestlineLink[]; questlineIssues: PlanIssue[] };
 
 /** While planning: what the engine says it's doing goes in the busy message, and Stop calls the request off. */
@@ -24,7 +26,7 @@ async function planWithProgress<T>(fn: () => Promise<T | undefined>): Promise<T 
   }
 }
 const stopPlanning = () => void useStore.getState().client?.call('stopPlanning');
-type PlanSection = 'overview' | 'cast' | 'story' | 'events' | 'dialogue';
+type PlanSection = 'outline' | 'overview' | 'cast' | 'story' | 'events' | 'dialogue';
 
 const MODES: { id: PlannerMode; title: string; text: string; placeholder: string }[] = [
   {
@@ -137,16 +139,23 @@ function Write({ mode, setMode, source, setSource, onPlanned, onPlannedLine, onC
   const m = MODES.find((x) => x.id === mode)!;
   // Several "Quest 1: …" headings: a questline, planned quest by quest and built together.
   const questline = useMemo(() => (mode === 'document' ? splitQuestline(source) : null), [mode, source]);
+  // How a document is read: beat by beat (small questions; what free AIs do best) or in one go (one big request).
+  const [howChosen, setHow] = useDraft<'beats' | 'whole' | ''>('questFromText:how', '');
+  const how = howChosen || (ai.kind === 'claude' ? 'whole' : 'beats');
 
   const plan = async () => {
     if (questline) {
       const r = await planWithProgress(() =>
-        engine((c) => c.call('planQuestline', source, ai), { busy: `${name} is reading the questline… each quest takes ${ai.kind === 'claude' ? 'a minute or two' : 'a while on a free model'}`, refreshSession: false, stop: stopPlanning }),
+        engine((c) => c.call(how === 'beats' ? 'readQuestline' : 'planQuestline', source, ai), { busy: `${name} is reading the questline… each quest takes ${ai.kind === 'claude' ? 'a minute or two' : 'a while on a free model'}`, refreshSession: false, stop: stopPlanning }),
       );
       if (r) onPlannedLine(r);
       return;
     }
-    const r = await engine((c) => c.call('planQuest', source, mode, ai), { busy: `${name} is planning the quest… this can take ${ai.kind === 'claude' ? 'a minute or two' : 'several minutes on a free model'}`, refreshSession: false, stop: stopPlanning });
+    // A document is read beat by beat (small questions any AI answers well); a bare conversation is planned around.
+    const r =
+      mode === 'document' && how === 'beats'
+        ? await planWithProgress(() => engine((c) => c.call('readQuest', source, ai), { busy: `${name} is reading the quest… this can take ${ai.kind === 'claude' ? 'a minute or two' : 'several minutes on a free model'}`, refreshSession: false, stop: stopPlanning }))
+        : await engine((c) => c.call('planQuest', source, mode, ai), { busy: `${name} is planning the quest… this can take ${ai.kind === 'claude' ? 'a minute or two' : 'several minutes on a free model'}`, refreshSession: false, stop: stopPlanning });
     if (r) onPlanned(r);
   };
   const example = async () => {
@@ -190,6 +199,20 @@ function Write({ mode, setMode, source, setSource, onPlanned, onPlannedLine, onC
             A questline? Give each quest its own heading (“Quest 1: …”, “Quest 2: …”) and they're planned together. Conversations written as NAME: line, with the player's choices indented under what they answer, are kept word for word.
           </p>
         ))}
+      {mode === 'document' && (
+        <Field label="Read it" title="Beat by beat: the AI answers many small questions (who's in it, what the player does next, which line does it) and the editor puts the quest together, so you see an outline of what was read and can fix it. In one go: one big request for the whole plan, which works well with Claude.">
+          <span data-testid="plan-how">
+            <Select
+              value={how}
+              options={[
+                { value: 'beats', label: 'Beat by beat (best for free AIs)' },
+                { value: 'whole', label: 'In one go' },
+              ]}
+              onChange={(v) => setHow(v)}
+            />
+          </span>
+        </Field>
+      )}
       <div className="card" style={{ padding: 10 }}>
         <AiPicker />
         <p className="dim small" style={{ margin: '6px 0 0' }}>
@@ -233,7 +256,21 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing, inQu
   const check = async (next: QuestPlan) => {
     setDraft(next);
     const r = await engine((c) => c.call('reviewQuestPlan', next), { refreshSession: false });
-    if (r) setReview({ plan: next, ...r });
+    if (r) setReview({ ...review, plan: next, ...r });
+  };
+  // The outline (what was read beat by beat): a change makes the plan again from it; each change can be undone.
+  const [sheets, setSheets] = useState<BeatSheet[]>([]);
+  const outline = async (next: BeatSheet, back = false) => {
+    const r = await engine((c) => c.call('recompileBeats', next, source), { refreshSession: false });
+    if (!r) return;
+    if (!back && review.sheet) setSheets((h) => [...h.slice(-49), review.sheet!]);
+    setReview(r);
+  };
+  const undoOutline = async () => {
+    const prev = sheets[sheets.length - 1];
+    if (!prev) return;
+    setSheets((h) => h.slice(0, -1));
+    await outline(prev, true);
   };
   const edit = async (fn: (p: QuestPlan) => void) => {
     const next = structuredClone(draft);
@@ -274,10 +311,12 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing, inQu
   };
 
   const errors = issues.filter((i) => i.severity === 'error').length + resolution.filter((r) => r.error).length;
-  const [section, setSection] = useState<PlanSection>('overview');
+  const [section, setSection] = useState<PlanSection>(review.sheet ? 'outline' : 'overview');
   const quest = draft.stages.length > 0;
   const n = (k: number, one: string, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
+  const open = (review.questions ?? []).filter((q) => !q.unsaid).length;
   const sections: { id: PlanSection; label: string; hint: string; count?: number; summary: string }[] = [
+    ...(review.sheet ? [{ id: 'outline' as const, label: 'What was read', hint: 'What the player does, beat by beat, as read from your text; change it here and the plan is made again', count: open || undefined, summary: n(review.sheet.beats.length, 'beat') }] : []),
     { id: 'overview', label: 'Overview', hint: `Name, problems to fix, and what ${aiLabel} decided on its own`, count: errors || undefined, summary: '' },
     { id: 'cast', label: 'Cast & places', hint: 'Characters (with roles and fighting), places, items and enemy groups', count: draft.characters.length + draft.locations.length + draft.items.length + (draft.encounters?.length ?? 0), summary: [n(draft.characters.length, 'character'), n(draft.locations.length, 'place'), n(draft.items.length, 'item'), draft.encounters?.length ? n(draft.encounters.length, 'enemy group') : ''].filter(Boolean).join(', ') },
     ...(quest
@@ -336,6 +375,7 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing, inQu
         ))}
       </div>
 
+      {section === 'outline' && review.sheet && <BeatOutline sheet={review.sheet} questions={review.questions ?? []} onChange={(next) => void outline(next)} onUndo={() => void undoOutline()} canUndo={sheets.length > 0} />}
       {section === 'overview' && (
         <>
       {(issues.length > 0 || resolution.some((r) => r.error)) && (
@@ -601,7 +641,7 @@ function ReviewQuestline({ review, setReview, onBack, onBuilt }: { review: LineR
   const total = errors.reduce((a, b) => a + b, 0);
   // A quest's plan changed: its review is in hand; links and problems across the questline are worked out again.
   const setQuest = async (i: number, r: Review) => {
-    const next: QuestlinePlan = { ...line, quests: line.quests.map((q, n) => (n === i ? { ...q, plan: r.plan } : q)) };
+    const next: QuestlinePlan = { ...line, quests: line.quests.map((q, n) => (n === i ? { ...q, plan: r.plan, sheet: r.sheet ?? q.sheet, questions: r.questions ?? q.questions } : q)) };
     const all = await engine((c) => c.call('reviewQuestline', next), { refreshSession: false });
     setReview({ line: next, reviews: all?.reviews ?? reviews.map((x, n) => (n === i ? { issues: r.issues, resolution: r.resolution } : x)), links: all?.links ?? links, questlineIssues: all?.questlineIssues ?? questlineIssues });
   };
@@ -700,7 +740,7 @@ function ReviewQuestline({ review, setReview, onBack, onBuilt }: { review: LineR
         <ReviewPlan
           key={tab}
           inQuestline
-          review={{ plan: line.quests[tab]!.plan, ...reviews[tab]! }}
+          review={{ plan: line.quests[tab]!.plan, sheet: line.quests[tab]!.sheet, questions: line.quests[tab]!.questions, ...reviews[tab]! }}
           setReview={(r) => void setQuest(tab, r)}
           source={line.quests[tab]!.source}
           onBack={onBack}
