@@ -20,7 +20,7 @@ import type { FormKey } from '@tes5/esp';
 import { GESTURES } from './gestures';
 import { z } from 'zod';
 import type { JournalContext, JournalDraft } from './journal';
-import { PLAN_EVENT_KINDS, QuestPlanSchema, doubledRewards, keepAskedChanges, normalizePlan, repairPlan, stagesSaid, validatePlan, type PlanIssue, type QuestPlan } from './questplan';
+import { PLAN_EVENT_KINDS, QuestPlanSchema, doubledRewards, keepAskedChanges, reportStages, talkThenDeed, normalizePlan, repairPlan, stagesSaid, validatePlan, type PlanIssue, type QuestPlan } from './questplan';
 import { lintScreenplay } from './dialoguelint';
 import { aiName, chatSend, type AiProvider } from './aiproviders';
 import { WorldService } from './world';
@@ -387,11 +387,12 @@ export class QuestPlanner {
     // Stages a talk step says a conversation reaches, that no line reaches yet: ask which lines do it.
     const unsaid = plan.steps.filter((st) => st.kind === 'talk' && !stagesSaid(plan).has(st.to));
     if (unsaid.length) await this.addWrittenDialogue(plan, blocks, context, unsaid);
+    // Stages the plan ran together (talking, then doing; doing, then reporting back) and gold paid twice, now the lines are in.
+    const mended = [...doubledRewards(plan), ...reportStages(plan), ...talkThenDeed(plan)];
+    if (mended.length) plan.assumptions = [...(plan.assumptions ?? []), ...mended.map((x) => x[0]!.toUpperCase() + x.slice(1))];
     const blocking = blockingIssues(validatePlan(plan));
     if (blocking.length) this.onStep?.(`fixing what would leave the quest stuck (${blocking[0]!.message}${blocking.length > 1 ? `, and ${blocking.length - 1} more` : ''})`);
     plan = await this.fixLogic(params, plan, true);
-    const paid = doubledRewards(plan);
-    if (paid.length) plan.assumptions = [...(plan.assumptions ?? []), ...paid.map((x) => x[0]!.toUpperCase() + x.slice(1))];
     if (this.free) {
       this.onStep?.('filling gaps in the dialogue and journal');
       const brief = planBrief(plan, source);
@@ -432,6 +433,7 @@ export class QuestPlanner {
       // What the directions say outright, where the AI said nothing.
       const earlier = [...context.matchAll(/choices it remembers: ([^;]+);/g)].flatMap((m) => m[1]!.split(/,\s*/)).filter((c) => c && c !== 'none');
       notes.push(...directionTags(blocks, plan, earlier).map((t) => `From your direction: ${t}`));
+      notes.push(...followDirections(plan, blocks).map((t) => `From your direction: ${t}`));
       made.push({ title, screenplay: writtenScreenplay(structuredClone(blocks)) });
     }
     if (stuck.length && !made.length) return;
@@ -806,6 +808,36 @@ function checkAnnotation(plan: QuestPlan, a: DialogueAnnotation, who: string): s
     });
   for (const b of a.blocks ?? []) b.tags = fix(b.tags ?? '', `${who}'s block ${b.block}`);
   for (const l of a.lines ?? []) l.tags = fix(l.tags ?? '', `${who}'s line ${l.line}`);
+  return out;
+}
+
+/**
+ * "(Rulnik starts following)" / "(he stops following)" on a line that moves the quest on: the character follows the
+ * player from (or until) that line's stage. Returns what changed.
+ */
+function followDirections(plan: QuestPlan, blocks: WrittenBlock[]): string[] {
+  const out: string[] = [];
+  for (const l of blocks.flatMap((b) => b.lines)) {
+    const stage = Number(/^\[stage\s+(\d+)\]$/i.exec(l.tags.find((t) => /^\[stage\s+\d+\]$/i.test(t)) ?? '')?.[1]);
+    if (!Number.isFinite(stage)) continue;
+    for (const n of l.notes) {
+      const m = /\b([A-Z][\w'’-]*|he|she|they)\s+(starts?|begins?|stops?)\s+following\b/i.exec(n);
+      if (!m) continue;
+      const who = /^(he|she|they)$/i.test(m[1]!) ? characterFor(plan, l.speaker) : characterFor(plan, m[1]!);
+      if (!who) continue;
+      const start = /^(starts?|begins?)$/i.test(m[2]!);
+      const follow = who.routine.find((r) => r.activity === 'follow');
+      if (start) {
+        if (follow?.fromStage === stage) continue;
+        if (follow) follow.fromStage = stage;
+        else who.routine.push({ activity: 'follow', where: null, hours: null, fromStage: stage, untilStage: null, line: null });
+        out.push(`${who.name} follows the player from stage ${stage}`);
+      } else if (follow && follow.untilStage !== stage) {
+        follow.untilStage = stage;
+        out.push(`${who.name} stops following the player at stage ${stage}`);
+      }
+    }
+  }
   return out;
 }
 

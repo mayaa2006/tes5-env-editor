@@ -274,7 +274,8 @@ export function applyAnnotation(blocks: WrittenBlock[], a: DialogueAnnotation): 
     const { l, b } = hit;
     // "A | B": the line said two ways (paying 250 if persuaded, otherwise 150): a copy for each, the one with its own
     // condition first and the other said otherwise. Only where the author's direction says there are two ways.
-    const variants = (x.tags ?? '').split('|').map(cleanTags).filter((v) => v.length);
+    // "[at stage N]" starts a scene: it belongs on a block, never a line.
+    const variants = (x.tags ?? '').split('|').map((v) => cleanTags(v).filter((t) => !/^\[at\s/i.test(t))).filter((v) => v.length);
     const common = variants[0]?.filter((t) => variants.every((v) => v.includes(t))) ?? [];
     const own = variants.map((v) => v.filter((t) => !common.includes(t)));
     const twoWays = variants.length > 1 && !l.player && l.notes.some((n) => /\b(or|otherwise|if|unless)\b/i.test(n)) && new Set(own.map((o) => o.join(' '))).size === own.length && own.some((o) => o.some(isIf));
@@ -340,11 +341,12 @@ export function directionTags(blocks: WrittenBlock[], plan: DirectionPlan, choic
   const lines = blocks.flatMap((b) => b.lines);
   // A choice the AI remembered on a line the author gave no such direction: it belongs on the line that says it.
   const remembering = lines.filter((l) => l.notes.some((n) => REMEMBER.test(n.toLowerCase())));
+  const chosen = new Set(lines.flatMap((l) => l.tags).map((t) => /^\[if\s+(?:not\s+)?chose\s+([^\]\s]+)\]/i.exec(t)?.[1]?.toLowerCase()).filter((x): x is string => !!x));
   const misplaced: string[] = [];
-  if (remembering.length)
-    for (const l of lines) {
+  // (With no such direction at all, one is kept only where a line here checks it.)
+  for (const l of lines) {
       if (remembering.includes(l)) continue;
-      const wrong = l.tags.filter((t) => /^\[remember\s/i.test(t));
+      const wrong = l.tags.filter((t) => /^\[remember\s/i.test(t) && (remembering.length > 0 || !chosen.has(/^\[remember\s+([^\]\s]+)/i.exec(t)![1]!.toLowerCase())));
       if (!wrong.length) continue;
       l.tags = l.tags.filter((t) => !wrong.includes(t));
       misplaced.push(...wrong.map((t) => /^\[remember\s+([^\]\s]+)/i.exec(t)![1]!));
@@ -365,7 +367,13 @@ export function directionTags(blocks: WrittenBlock[], plan: DirectionPlan, choic
       const rem = REMEMBER.exec(n);
       if (rem && !has(l, 'remember')) add(l, `[remember ${misplaced.find((m) => m.slice(0, 4) === rem[1]!.slice(0, 4)) ?? (remembering.length === 1 && misplaced.length ? misplaced[0] : rem[1])}]`, 'remembers the choice');
       if (!/\bif\b/.test(n)) {
-        const st = talkStep(n.split(/[;]/)[0]!);
+        // Each part of the direction in turn ("Rulnik starts following; the player agrees to take him").
+        // (Not "objective: …": that's what the player is told next, not what the line does.)
+        const st = n
+          .split(/;/)
+          .filter((part) => !/^\s*(new\s+)?objectives?\b/.test(part))
+          .map((part) => talkStep(part))
+          .find(Boolean);
         const given = l.tags.find((t) => /^\[stage\s+\d+\]$/i.test(t));
         const at = given ? Number(/(\d+)/.exec(given)![1]) : undefined;
         // The AI's own stage stays unless it's the one the step starts from (setting the stage the quest is at does

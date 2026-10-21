@@ -677,7 +677,7 @@ export function repairPlan(plan: QuestPlan): string[] {
     }
     if (kept.length !== events.length || kept.some((x, i) => x !== events[i])) p.events = kept;
   }
-  changes.push(...doubledRewards(plan));
+  changes.push(...doubledRewards(plan), ...reportStages(plan), ...talkThenDeed(plan));
   const stages = list(p.stages).filter((s) => typeof s.index === 'number');
   if (stages.length && !stages.some((s) => s.startsQuest === true)) {
     const first = stages.reduce((a, b) => ((b.index as number) < (a.index as number) ? b : a));
@@ -685,6 +685,85 @@ export function repairPlan(plan: QuestPlan): string[] {
     changes.push(`stage ${first.index} starts the quest`);
   }
   return changes;
+}
+
+/**
+ * "Kill the bandits, then tell Hesta" planned as one stage: the quest completes when the bandits die, and the line
+ * where the player reports (which also reaches that stage) is never said. The deed gets a stage of its own between,
+ * and what's said after it (the report, "after the bandits are dead") is offered from there. Returns what changed.
+ */
+export function reportStages(plan: QuestPlan): string[] {
+  const out: string[] = [];
+  if (!Array.isArray(plan.stages) || !Array.isArray(plan.steps) || !Array.isArray(plan.conversations)) return out;
+  for (const end of plan.stages.filter((x) => x && x.completesQuest && !x.failsQuest)) {
+    const done = end.index;
+    const deeds = plan.steps.filter((x) => x && x.to === done && typeof x.from === 'number' && !['talk', 'script', 'wait'].includes(x.kind));
+    const says = plan.conversations.some((c) => typeof c?.screenplay === 'string' && new RegExp(`\\[stage\\s+${done}\\]`, 'i').test(c.screenplay));
+    if (deeds.length !== 1 || !says) continue;
+    const deed = deeds[0]!;
+    const from = deed.from as number;
+    const taken = new Set(plan.stages.map((x) => x.index));
+    let mid = from + Math.max(1, Math.floor((done - from) / 2));
+    while (taken.has(mid) && mid < done) mid++;
+    if (mid >= done) continue;
+    plan.stages.push({ index: mid, journal: '', startsQuest: false, completesQuest: false, failsQuest: false });
+    plan.stages.sort((a, b) => a.index - b.index);
+    deed.to = mid;
+    for (const o of plan.objectives ?? []) if (o.completedAtStage === done && o.targetKey === deed.targetKey) o.completedAtStage = mid;
+    // What the player says to report (it reaches the end), and what's said "after", is offered from the new stage.
+    for (const c of plan.conversations) {
+      if (typeof c?.screenplay !== 'string') continue;
+      const rows = c.screenplay.split(/\r?\n/);
+      const gate = (row: number, at: number) => {
+        const r = rows[row - 1];
+        if (r === undefined) return;
+        const re = new RegExp(`\\[if\\s+(?:stage\\s*)?(?:==?\\s*)?${at}\\]`, 'i');
+        if (re.test(r)) rows[row - 1] = r.replace(re, `[if stage ${mid}]`);
+        else if (at === from && !/\[if\s+(?:stage\s*)?(?:[<>=!]=?\s*)?\d+\]/i.test(r)) rows[row - 1] = `${r.trimEnd()} [if stage ${mid}]`;
+      };
+      const reaches = (pl: ScriptPlayerLine): boolean => pl.responses.some((x) => x.tags.stage === String(done) || x.choices.some(reaches)) || pl.tags.stage === String(done);
+      const parsed = parseScreenplay(c.screenplay);
+      for (const t of parsed.topics) {
+        if (reaches(t)) gate(t.line, from);
+        else gate(t.line, done);
+      }
+      for (const b of parsed.blocks) if (b.kind !== 'scene') for (const l of b.lines) gate(l.line, done);
+      c.screenplay = rows.join('\n');
+    }
+    out.push(`“${deed.note || deed.kind}” now reaches a stage of its own (${mid}), and the conversation that reaches stage ${done} is offered from there, so the player reports back after it`);
+  }
+  return out;
+}
+
+/**
+ * "Meet Rulnik, then take him to the stones" planned as one stage: the line where he agrees ("Lead the way") sets the
+ * stage arriving at the stones is meant to set, so talking skips the walk. The line gets a stage of its own just before
+ * (the walk starts there), and whoever follows from the old stage follows from the new one. Returns what changed.
+ */
+export function talkThenDeed(plan: QuestPlan): string[] {
+  const out: string[] = [];
+  if (!Array.isArray(plan.stages) || !Array.isArray(plan.steps) || !Array.isArray(plan.conversations)) return out;
+  const DEEDS = new Set(['pickup', 'activate', 'death', 'arrive', 'read', 'equip', 'drop', 'clear']);
+  for (const deed of plan.steps.filter((x) => x && DEEDS.has(x.kind) && typeof x.from === 'number')) {
+    const to = deed.to;
+    const from = deed.from as number;
+    const target = plan.stages.find((x) => x.index === to);
+    if (!target || target.completesQuest || target.failsQuest || !stagesSaid(plan).has(to) || plan.steps.some((x) => x.kind === 'talk' && x.to === to)) continue;
+    const taken = new Set(plan.stages.map((x) => x.index));
+    let mid = from + Math.max(1, Math.floor((to - from) / 2));
+    while (taken.has(mid) && mid < to) mid++;
+    if (mid >= to) continue;
+    plan.stages.push({ index: mid, journal: '', startsQuest: false, completesQuest: false, failsQuest: false });
+    plan.stages.sort((a, b) => a.index - b.index);
+    const re = new RegExp(`\\[stage\\s+${to}\\]`, 'gi');
+    for (const c of plan.conversations) if (typeof c?.screenplay === 'string') c.screenplay = c.screenplay.replace(re, `[stage ${mid}]`);
+    deed.from = mid;
+    plan.steps.push({ from, to: mid, kind: 'talk', targetKey: null, count: null, hours: null, note: `The conversation before “${deed.note || deed.kind}”` });
+    for (const c of plan.characters ?? []) for (const r of c.routine ?? []) if (r.activity === 'follow' && r.fromStage === to) r.fromStage = mid;
+    for (const o of plan.objectives ?? []) if (o.shownAtStage === to && o.targetKey === deed.targetKey) o.shownAtStage = mid;
+    out.push(`the line that set stage ${to} now sets a stage of its own (${mid}), so “${deed.note || deed.kind}” still has to happen after it`);
+  }
+  return out;
 }
 
 /**

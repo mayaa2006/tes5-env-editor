@@ -261,6 +261,24 @@ describe('written dialogue', () => {
     expect(text).not.toMatch(/\[at /);
   });
 
+  it('has a character follow from the line where the author says they start following', async () => {
+    const plan = exampleQuestPlan();
+    plan.characters[1] = { ...plan.characters[1]!, key: 'rulnik', name: 'Rulnik', routine: [] };
+    plan.steps = [
+      { from: 0, to: 10, kind: 'talk', targetKey: null, count: null, hours: null, note: 'The player agrees to take Rulnik' },
+      { from: 10, to: 100, kind: 'arrive', targetKey: 'tavern', count: null, hours: null, note: 'They reach the tavern' },
+    ];
+    plan.stages = plan.stages.filter((x) => x.index !== 20);
+    plan.objectives = [];
+    plan.conversations = [];
+    const planner = new QuestPlanner({ send: async () => reply(JSON.stringify({ blocks: [], lines: [] })) });
+    const blocks = findDialogue('PLAYER: Hesta sent me.\n  RULNIK: Lead the way. (Rulnik starts following; the player agrees to take Rulnik)').blocks;
+    await planner.addWrittenDialogue(plan, blocks);
+    expect(plan.conversations[0]!.screenplay).toContain('RULNIK: Lead the way. [stage 10]');
+    expect(plan.characters[1]!.routine).toEqual([{ activity: 'follow', where: null, hours: null, fromStage: 10, untilStage: null, line: null }]);
+    expect(plan.assumptions).toContain('From your direction: Rulnik follows the player from stage 10');
+  });
+
   it("reads the Cartographer's later directions with no AI: after dark, a day later, needing and taking gold, giving the survey, a promise from quest 1", () => {
     const parts = splitQuestline(readFileSync(join(import.meta.dirname, '../../../apps/studio/test/models/questline-cartographer.md'), 'utf8'))!.parts;
     // Each line named by its first words.

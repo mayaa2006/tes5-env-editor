@@ -281,6 +281,39 @@ describe('plans that would play wrong', () => {
     expect(plan.events.map((e) => e.kind)).toEqual(['show']);
   });
 
+  it('gives "agree to go, then get there" a stage between, so talking does not skip the walk', () => {
+    // As Qwen3.5 4B planned it: Rulnik's "Lead the way" sets stage 20, which arriving at the stones is meant to set.
+    const plan = exampleQuestPlan();
+    plan.locations.push({ key: 'valley', name: 'Demo Valley', existing: 'DemoValley1_0', description: 'Outside', layoutLike: null, doorFrom: null });
+    plan.steps[1] = { from: 10, to: 20, kind: 'arrive', targetKey: 'valley', count: null, hours: null, note: 'Escort Eirik to the valley' };
+    plan.conversations[1]!.screenplay = "PLAYER: Brynja sent me. [if stage 10]\nEIRIK: Lead the way. [stage 20]";
+    plan.characters[1]!.routine = [{ activity: 'follow', where: null, hours: null, fromStage: 20, untilStage: 100, line: null }];
+    expect(validatePlan(plan).map((i) => i.message)).toContain('A line in “Eirik” sets stage 20, which “Escort Eirik to the valley” is meant to reach, so the player can skip it by talking. Take out that [stage 20], or add a talk step if saying it should count');
+    expect(repairPlan(plan)).toContain('the line that set stage 20 now sets a stage of its own (15), so “Escort Eirik to the valley” still has to happen after it');
+    expect(plan.conversations[1]!.screenplay).toBe('PLAYER: Brynja sent me. [if stage 10]\nEIRIK: Lead the way. [stage 15]');
+    expect(plan.steps.map((x) => `${x.from}→${x.to} ${x.kind}`)).toEqual(['0→10 talk', '15→20 arrive', '20→100 talk', '10→15 talk']);
+    expect(plan.characters[1]!.routine[0]!.fromStage).toBe(15);
+    expect(validatePlan(plan).filter((i) => i.severity === 'error' || /skip it by talking/.test(i.message))).toEqual([]);
+  });
+
+  it('gives "kill them, then report back" a stage between, so the report is said', () => {
+    // As Qwen3.5 4B planned "The Apprentice's Road": clearing the bandits (20 → 30) completes the quest, and so does
+    // the line where the player tells Hesta, offered at 20.
+    const plan = exampleQuestPlan();
+    plan.encounters = [{ key: 'bandits', what: 'bandit', count: 4, locationKey: 'tavern', spot: null }];
+    plan.steps[2] = { from: 20, to: 100, kind: 'clear', targetKey: 'bandits', count: null, hours: null, note: 'All bandits are dead' };
+    plan.objectives[1] = { index: 20, text: 'Kill the bandits', shownAtStage: 20, completedAtStage: 100, targetKey: 'bandits' };
+    plan.conversations[0]!.screenplay = plan.conversations[0]!.screenplay.replace('[takes ring x1] ', '') + '\nGREETING:\nBRYNJA: They won\'t trouble us now. [if stage 100]';
+    const changes = repairPlan(plan);
+    expect(changes).toContain('“All bandits are dead” now reaches a stage of its own (60), and the conversation that reaches stage 100 is offered from there, so the player reports back after it');
+    expect(plan.stages.map((x) => x.index)).toEqual([0, 10, 20, 60, 100]);
+    expect(plan.steps[2]).toMatchObject({ from: 20, to: 60, kind: 'clear' });
+    expect(plan.objectives[1]!.completedAtStage).toBe(60);
+    expect(plan.conversations[0]!.screenplay).toContain('PLAYER: I found your ring. [if stage 60]');
+    expect(plan.conversations[0]!.screenplay).toContain("BRYNJA: They won't trouble us now. [if stage 60]");
+    expect(validatePlan(plan).filter((i) => i.severity === 'error')).toEqual([]);
+  });
+
   it('leaves alone items of one name in different places, an ambush away from the encounter, and gold no line pays', () => {
     const plan = exampleQuestPlan();
     plan.items.push({ ...plan.items[0]!, key: 'ring2', startsAtKey: 'cellar' });
