@@ -300,4 +300,64 @@ describe('beat sheets', () => {
     expect(validatePlan(plan).filter((i) => i.severity === 'error')).toEqual([]);
     expect(plan.conversations[0]!.screenplay).toBe("PLAYER: Why the lantern? [if stage 0]\nTILDA: For my son. Will you look for him? [stage 10]\nPLAYER: I found Arn. [if stage 20]\nTILDA: Then he is gone. Take this. [stage 30] [gives tildaHusbandAxe x1] [gives arnRing x1] [takes arnLetter x1]");
   });
+
+  it('read written conversations by the lines that move the quest on, each one talking to its speaker', async () => {
+    const doc = readFileSync(join(import.meta.dirname, '../../../apps/studio/test/models/beats/screenplay.md'), 'utf8');
+    const reply = (o: unknown): PlannerReply => ({ content: [{ type: 'text', text: JSON.stringify(o) }], stop_reason: 'end_turn' });
+    const planner = new QuestPlanner({
+      send: async (p) => {
+        const user = String(p.messages.at(-1)!.content);
+        if (user.includes('List the people'))
+          return reply({
+            summary: 'Fetch a cask for Hulda.',
+            start: { how: 'talking', what: null },
+            people: [
+              { name: 'Hulda', description: 'Runs the Bannered Mare', sex: 'female', race: null, where: 'The Bannered Mare', spot: 'behind the bar', canDie: 'not said', hostile: false, quote: '' },
+              { name: 'Sabjorn', description: 'Owns the meadery', sex: 'male', race: null, where: 'Honningbrew Meadery', spot: null, canDie: 'not said', hostile: false, quote: '' },
+            ],
+            places: [
+              { name: 'The Bannered Mare', description: '', partOf: null, quote: '' },
+              { name: 'Honningbrew Meadery', description: '', partOf: null, quote: '' },
+            ],
+            items: [{ name: 'Cask of Honningbrew Mead', kind: 'misc', where: 'Honningbrew Meadery', carriedBy: null, spot: 'by the stairs', count: 1, text: null, lockedWith: null, quote: '' }],
+            enemies: [{ what: 'skeever', count: 5, where: 'Honningbrew Meadery', appearLater: false, quote: '' }],
+          });
+        if (user.includes('<passage>\nQUEST:')) return reply({ beats: [] });
+        if (user.includes('<passage>\nSCENE 3')) return reply({ beats: [{ n: 4, does: 'clear', target: 'skeever', count: null, hours: null, after: [2], quote: 'When the skeevers are dead:', ends: 'no', then: null }] });
+        if (user.includes('Block 1 —')) return reply({ when: null, moves: [{ line: 3, words: 'Would you? Sabjorn', beat: null, ends: 'no' }] });
+        // The agreement and the persuasion's success, both answers to the first line: both come after the job.
+        if (user.includes('Block 2 —'))
+          return reply({
+            when: 1,
+            moves: [
+              { line: 4, words: 'You will? Then', beat: null, ends: 'no' },
+              { line: 6, words: 'Fine, fine. Here.', beat: null, ends: 'no' },
+            ],
+          });
+        if (user.includes('Block 3 —')) return reply({ when: 4, moves: [{ line: 2, words: "Shor's bones. Take", beat: null, ends: 'no' }] });
+        if (user.includes('Block 4 —')) return reply({ when: 5, moves: [{ line: 2, words: 'Finally! Here, for', beat: null, ends: 'complete' }] });
+        if (user.includes('For each line with a direction')) return reply({ lines: [] });
+        if (user.includes('leads nowhere')) return reply({ next: [6], ends: 'no' });
+        if (user.includes('their journal entry')) return reply({ beats: [] });
+        throw new Error(`unexpected: ${user.slice(-200)}`);
+      },
+    });
+    const { sheet, questions } = await new BeatReader(planner).read(doc, { title: 'A Drink for the Mare', editorId: 'ADrinkForTheMare' });
+    expect(sheet.beats.map((b) => `${b.id} ${b.does} ${b.target} after ${b.after.join(',')}${b.ends ? ` ${b.ends}` : ''}`)).toEqual([
+      'b1 talk hulda after ',
+      'b2 talk sabjorn after b1',
+      'b3 talk sabjorn after b1',
+      'b4 clear skeever after b2',
+      'b5 talk sabjorn after b4',
+      // Persuaded, the player goes straight back to Hulda (asked: that beat led nowhere).
+      'b6 talk hulda after b5,b3 complete',
+    ]);
+    expect(sheet.dialogue.map((d) => [d.block, d.when, d.lines.map((l) => `${l.line}:${l.beat}`).join(' ')])).toEqual([
+      [1, null, '3:b1'],
+      [2, 'b1', '4:b2 6:b3'],
+      [3, 'b4', '2:b5'],
+      [4, 'b5', '2:b6'],
+    ]);
+    expect(questions).toEqual([]);
+  });
 });

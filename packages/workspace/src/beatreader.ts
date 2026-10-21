@@ -186,11 +186,21 @@ const PassageSchema = z.object({
   beats: z.array(BeatShape).describe('New beats this passage adds (none if it adds none)'),
 });
 
-const ConversationSchema = z.object({
-  beats: z.array(BeatShape).describe('New beats this conversation adds, numbered after the ones listed'),
-  when: z.number().int().nullable().describe('The number of the beat after which this conversation is offered; null when it is offered whenever the quest runs'),
-  lines: z.array(z.object({ line: z.number().int(), words: z.string().describe('Its first three words'), beat: z.number().int().describe('The beat it completes') })).describe('The lines whose saying completes a beat (often the answer the author marks "takes the job", "the quest is done"…)'),
-});
+/** A written conversation: when it's offered, and which of its lines move the quest on (each one is talking to its speaker). */
+const conversationSchema = (beats: number[], lines: number[]) =>
+  z.object({
+    when: z.number().int().nullable().describe(`The beat after which the player can have this conversation; null when they can have it from the start of the quest {enum: ${JSON.stringify(beats)}}`),
+    moves: z
+      .array(
+        z.object({
+          line: z.number().int().describe(`{enum: ${JSON.stringify(lines)}}`),
+          words: z.string().describe('Its first three words'),
+          beat: z.number().int().nullable().describe(`A beat already listed that this line does (the author described it before writing it out); null when it is a new one {enum: ${JSON.stringify(beats)}}`),
+          ends: z.enum(['complete', 'fail', 'no']).describe('Whether saying it finishes the quest (complete) or fails it'),
+        }),
+      )
+      .describe('The lines whose saying moves the quest on: someone gives the player a job, agrees to something, hands something over, or the quest ends. Usually one or two; most lines are only talk, and a failed persuasion moves nothing'),
+  });
 
 const ConditionShape = z.object({
   kind: z.enum(['chose', 'not chose', 'done', 'dead', 'alive', 'left', 'gold', 'night', 'day']).describe('chose: the player made a choice remembered earlier; done: a beat has happened; dead/alive/left: what became of someone; gold: the player has that much'),
@@ -202,7 +212,7 @@ const LinesSchema = z.object({
     z.object({
       line: z.number().int(),
       words: z.string(),
-      if: z.array(ConditionShape).describe('When it is said, from the author\'s direction ("only if…", "if Varro left")'),
+      if: z.array(ConditionShape).describe('Only what the author says must hold outside this conversation ("only if…", "if Varro left", "if the player promised earlier"). Not which line it answers, and not a persuasion\'s success or failure: the conversation\'s order already says those'),
       ...EffectsShape,
       instead: z
         .array(z.object({ if: z.array(ConditionShape), gold: z.number().int().nullable() }))
@@ -494,20 +504,42 @@ export class BeatReader {
   private async conversation(sheet: BeatSheet, block: WrittenBlock): Promise<void> {
     const numbered = structuredClone(block);
     numbered.lines.forEach((l, i) => (l.n = i + 1));
+    const beats = sheet.beats.map((_, i) => i + 1);
+    const said = numbered.lines.filter((l) => !l.player).map((l) => l.n);
     const a = await this.ai.ask(
       READ_RULES,
-      `${this.context(sheet)}\n\nA conversation the author wrote out (numbered lines; the author's directions after "—"):\n${describeBlocks([numbered])}\n\nWhich beats does this conversation complete (new ones numbered after the beats so far, or ones already listed)? Which lines complete them? After which beat is it offered?`,
-      ConversationSchema,
+      `${this.context(sheet)}\n\nA conversation the author wrote out (numbered lines; the author's directions after "—"):\n${describeBlocks([numbered])}\n\nAfter which beat can the player have this conversation, and which of its lines move the quest on?`,
+      conversationSchema(beats, said),
     );
-    const ids = this.addBeats(sheet, a.beats);
+    const when = a.when ? (sheet.beats[a.when - 1]?.id ?? null) : null;
+    // Each line that moves the quest on is talking to whoever says it. It comes after the nearest line above it in the
+    // conversation that also moved the quest on (the author's indenting), or after the beat the conversation follows.
+    const moved = new Map<number, string>();
     const lines: BeatDialogueLine[] = [];
-    for (const l of a.lines) {
-      const n = lineFor(numbered, l.line, l.words);
-      const beat = ids.get(l.beat);
-      if (n && beat && !lines.some((x) => x.line === n)) lines.push({ line: n, beat });
+    for (const m of [...a.moves].sort((x, y) => x.line - y.line)) {
+      const n = lineFor(numbered, m.line, m.words);
+      const l = n ? numbered.lines[n - 1] : undefined;
+      if (!n || !l || l.player || moved.has(n)) continue;
+      let id = m.beat ? sheet.beats[m.beat - 1]?.id : undefined;
+      if (!id) {
+        let above: string | undefined;
+        for (let k = n - 1, level = l.level; k >= 1 && !above; k--) {
+          const x = numbered.lines[k - 1]!;
+          if (x.level < level) {
+            level = x.level;
+            above = moved.get(k);
+          }
+        }
+        const who = byName(sheet.people, l.speaker);
+        id = `b${sheet.beats.length + 1}`;
+        sheet.beats.push({ id, does: 'talk', target: who?.key ?? l.speaker, after: above ? [above] : when ? [when] : [], quote: l.text, journal: null, objective: null, ends: m.ends === 'no' ? null : m.ends, effects: {} });
+      } else if (m.ends !== 'no') sheet.beats.find((b) => b.id === id)!.ends = m.ends;
+      moved.set(n, id);
+      lines.push({ line: n, beat: id });
     }
-    sheet.dialogue.push({ block: block.id, when: a.when ? (ids.get(a.when) ?? null) : null, lines });
+    sheet.dialogue.push({ block: block.id, when, lines });
   }
+
 
   // ---------------------------------------------------------------- 3. the directions on written lines
 
