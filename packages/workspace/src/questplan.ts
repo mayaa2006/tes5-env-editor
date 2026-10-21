@@ -512,17 +512,21 @@ export function repairPlan(plan: QuestPlan): string[] {
   }
   for (const r of list(p.rewards)) if (typeof r.itemKey === 'string' && !itemKeys.has(r.itemKey)) (changes.push(`a reward of “${r.itemKey}”, which isn't an item in the plan, gives only its gold`), (r.itemKey = null));
   // A failure has to set a stage that fails the quest (one that completes it would hand out the reward instead).
+  // A stage the quest goes through on its way (a step or a line reaches it, or a step starts from it) is never turned
+  // into a failing one: the failure gets a stage of its own.
+  const onTheWay = (n: unknown) =>
+    list(p.steps).some((x) => x.to === n || x.from === n) || list(p.conversations).some((c) => typeof c.screenplay === 'string' && new RegExp(`\\[stage\\s+${String(n)}\\]`, 'i').test(c.screenplay)) || list(p.stages).some((x) => x.index === n && x.startsQuest === true);
   for (const f of list(p.failures)) {
     const st = list(p.stages).find((x) => x.index === f.failStage);
     if (st && st.failsQuest === true) continue;
-    if (st && st.completesQuest !== true) {
+    if (st && st.completesQuest !== true && !onTheWay(st.index)) {
       st.failsQuest = true;
       continue;
     }
     const index = Math.max(0, ...stageSet) + 100 - ((Math.max(0, ...stageSet) + 100) % 100);
     stageSet.add(index);
     (p.stages as Obj[]).push({ index, journal: f.kind === 'timeLimit' ? 'I took too long, and it was too late to finish what I was asked to do.' : 'Someone I needed is dead, and I can no longer finish what I was asked to do.', startsQuest: false, completesQuest: false, failsQuest: true });
-    changes.push(`“${(f.note as string) || 'a failure'}” sets the new stage ${index}, which fails the quest${st ? ` (stage ${f.failStage} completes it)` : ''}`);
+    changes.push(`“${(f.note as string) || 'a failure'}” sets the new stage ${index}, which fails the quest${st ? ` (stage ${f.failStage} ${st.completesQuest === true ? 'completes it' : 'is one the quest goes through'})` : ''}`);
     f.failStage = index;
   }
   // An item a character holds that the player must hand on ([takes …] / [if has …] elsewhere), with no line where
@@ -677,7 +681,7 @@ export function repairPlan(plan: QuestPlan): string[] {
     }
     if (kept.length !== events.length || kept.some((x, i) => x !== events[i])) p.events = kept;
   }
-  changes.push(...doubledRewards(plan), ...reportStages(plan), ...talkThenDeed(plan));
+  changes.push(...doubledRewards(plan), ...reportStages(plan), ...backwardStages(plan), ...talkThenDeed(plan));
   const stages = list(p.stages).filter((s) => typeof s.index === 'number');
   if (stages.length && !stages.some((s) => s.startsQuest === true)) {
     const first = stages.reduce((a, b) => ((b.index as number) < (a.index as number) ? b : a));
@@ -714,25 +718,57 @@ export function reportStages(plan: QuestPlan): string[] {
     for (const c of plan.conversations) {
       if (typeof c?.screenplay !== 'string') continue;
       const rows = c.screenplay.split(/\r?\n/);
-      const gate = (row: number, at: number) => {
+      const gate = (row: number, at: number, top: boolean) => {
         const r = rows[row - 1];
         if (r === undefined) return;
         const re = new RegExp(`\\[if\\s+(?:stage\\s*)?(?:==?\\s*)?${at}\\]`, 'i');
         if (re.test(r)) rows[row - 1] = r.replace(re, `[if stage ${mid}]`);
-        else if (at === from && !/\[if\s+(?:stage\s*)?(?:[<>=!]=?\s*)?\d+\]/i.test(r)) rows[row - 1] = `${r.trimEnd()} [if stage ${mid}]`;
+        else if (top && at === from && !/\[if\s+(?:stage\s*)?(?:[<>=!]=?\s*)?\d+\]/i.test(r)) rows[row - 1] = `${r.trimEnd()} [if stage ${mid}]`;
       };
       const reaches = (pl: ScriptPlayerLine): boolean => pl.responses.some((x) => x.tags.stage === String(done) || x.choices.some(reaches)) || pl.tags.stage === String(done);
       const parsed = parseScreenplay(c.screenplay);
-      for (const t of parsed.topics) {
-        if (reaches(t)) gate(t.line, from);
-        else gate(t.line, done);
-      }
-      for (const b of parsed.blocks) if (b.kind !== 'scene') for (const l of b.lines) gate(l.line, done);
+      // The player's choices under it carry the same condition (the screenplay repeats it on each).
+      const all = (pl: ScriptPlayerLine): ScriptPlayerLine[] => [pl, ...pl.responses.flatMap((x) => x.choices.flatMap(all))];
+      for (const t of parsed.topics) for (const pl of all(t)) gate(pl.line, reaches(t) ? from : done, pl === t);
+      for (const b of parsed.blocks) if (b.kind !== 'scene') for (const l of b.lines) gate(l.line, done, false);
       c.screenplay = rows.join('\n');
     }
     out.push(`“${deed.note || deed.kind}” now reaches a stage of its own (${mid}), and the conversation that reaches stage ${done} is offered from there, so the player reports back after it`);
   }
   return out;
+}
+
+/**
+ * A line that sets a stage the quest is already past, where it's offered ("[if stage 30]" then "[stage 20]"): setting
+ * it would do nothing (or worse), so the tag goes. Returns what changed.
+ */
+export function backwardStages(plan: QuestPlan): string[] {
+  const out: string[] = [];
+  const exact = (v: string | undefined) => {
+    const m = /^\s*(?:stage\s*)?(?:==?\s*)?(\d+)\s*$/i.exec(v ?? '');
+    return m ? Number(m[1]) : undefined;
+  };
+  for (const c of Array.isArray(plan.conversations) ? plan.conversations : []) {
+    if (typeof c?.screenplay !== 'string') continue;
+    const rows = c.screenplay.split(/\r?\n/);
+    const visit = (pl: ScriptPlayerLine, gate: number | undefined) => {
+      const g = exact(pl.tags.if) ?? gate;
+      for (const r of pl.responses) {
+        const rg = exact(r.tags.if) ?? g;
+        for (const [line, v] of [[r.line, r.tags.stage], [pl.line, pl.tags.stage]] as const) {
+          const n = Number(v);
+          if (v && rg !== undefined && Number.isFinite(n) && n < rg && rows[line - 1] !== undefined) {
+            rows[line - 1] = rows[line - 1]!.replace(new RegExp(`\\s*\\[stage\\s+${n}\\]`, 'i'), '');
+            out.push(`took [stage ${n}] off a line in “${c.title}” offered at stage ${rg} (the quest is past it by then)`);
+          }
+        }
+        for (const ch of r.choices) visit(ch, rg);
+      }
+    };
+    for (const t of parseScreenplay(c.screenplay).topics) visit(t, undefined);
+    c.screenplay = rows.join('\n');
+  }
+  return [...new Set(out)];
 }
 
 /**

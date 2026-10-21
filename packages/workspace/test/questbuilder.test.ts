@@ -296,6 +296,18 @@ describe('plans that would play wrong', () => {
     expect(validatePlan(plan).filter((i) => i.severity === 'error' || /skip it by talking/.test(i.message))).toEqual([]);
   });
 
+  it("gives a failure its own stage when the AI named one the quest goes through, and drops a line's stage the quest is past", () => {
+    // As Qwen3.5 4B planned it: "the quest fails if Rulnik dies", failing at stage 20 (arriving at the stones).
+    const plan = exampleQuestPlan();
+    plan.failures = [{ kind: 'death', targetKey: 'eirik', days: null, fromStage: null, failStage: 20, note: 'Rulnik is dead' }];
+    plan.conversations[1]!.screenplay = 'PLAYER: Are you hurt? [if stage 100]\nEIRIK: Hesta needs to know. [stage 20]';
+    const changes = repairPlan(plan);
+    expect(changes).toEqual(expect.arrayContaining(['“Rulnik is dead” sets the new stage 200, which fails the quest (stage 20 is one the quest goes through)', 'took [stage 20] off a line in “Eirik” offered at stage 100 (the quest is past it by then)']));
+    expect(plan.stages.find((x) => x.index === 20)!.failsQuest).toBe(false);
+    expect(plan.failures[0]!.failStage).toBe(200);
+    expect(plan.conversations[1]!.screenplay).toBe('PLAYER: Are you hurt? [if stage 100]\nEIRIK: Hesta needs to know.');
+  });
+
   it('gives "kill them, then report back" a stage between, so the report is said', () => {
     // As Qwen3.5 4B planned "The Apprentice's Road": clearing the bandits (20 → 30) completes the quest, and so does
     // the line where the player tells Hesta, offered at 20.

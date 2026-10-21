@@ -20,7 +20,7 @@ import type { FormKey } from '@tes5/esp';
 import { GESTURES } from './gestures';
 import { z } from 'zod';
 import type { JournalContext, JournalDraft } from './journal';
-import { PLAN_EVENT_KINDS, QuestPlanSchema, doubledRewards, keepAskedChanges, reportStages, talkThenDeed, normalizePlan, repairPlan, stagesSaid, validatePlan, type PlanIssue, type QuestPlan } from './questplan';
+import { PLAN_EVENT_KINDS, QuestPlanSchema, backwardStages, doubledRewards, keepAskedChanges, reportStages, talkThenDeed, normalizePlan, repairPlan, stagesSaid, validatePlan, type PlanIssue, type QuestPlan } from './questplan';
 import { lintScreenplay } from './dialoguelint';
 import { aiName, chatSend, type AiProvider } from './aiproviders';
 import { WorldService } from './world';
@@ -388,7 +388,7 @@ export class QuestPlanner {
     const unsaid = plan.steps.filter((st) => st.kind === 'talk' && !stagesSaid(plan).has(st.to));
     if (unsaid.length) await this.addWrittenDialogue(plan, blocks, context, unsaid);
     // Stages the plan ran together (talking, then doing; doing, then reporting back) and gold paid twice, now the lines are in.
-    const mended = [...doubledRewards(plan), ...reportStages(plan), ...talkThenDeed(plan)];
+    const mended = [...doubledRewards(plan), ...reportStages(plan), ...backwardStages(plan), ...talkThenDeed(plan)];
     if (mended.length) plan.assumptions = [...(plan.assumptions ?? []), ...mended.map((x) => x[0]!.toUpperCase() + x.slice(1))];
     const blocking = blockingIssues(validatePlan(plan));
     if (blocking.length) this.onStep?.(`fixing what would leave the quest stuck (${blocking[0]!.message}${blocking.length > 1 ? `, and ${blocking.length - 1} more` : ''})`);
