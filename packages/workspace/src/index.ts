@@ -13,6 +13,7 @@ export * from './triggers';
 export * from './questgraph';
 export * from './dialogue';
 export * from './written';
+export * from './beats';
 export * from './testlaunch';
 export * from './environment';
 export * from './release';
