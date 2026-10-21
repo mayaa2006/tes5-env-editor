@@ -10,7 +10,7 @@ import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { NodeFileSystem, NodeProcessRunner } from '@tes5/workspace/node';
-import { BeatReader, QuestPlanner, WorldService, compileBeats, splitQuestline, validatePlan, type AiProvider, type BeatLookup, type BeatSheet } from '@tes5/workspace';
+import { BeatReader, QuestPlanner, beatLookup, compileBeats, splitQuestline, validatePlan, type AiProvider, type BeatLookup, type BeatSheet } from '@tes5/workspace';
 import { EngineHost } from '../../src/engine/host';
 import { EXPECTED } from './beats/expected';
 import { scoreBeats, type BeatScore } from './beats/score';
@@ -61,21 +61,7 @@ if (DATA) {
   const h = new EngineHost(new NodeFileSystem(), new NodeProcessRunner());
   await h.open({ kind: 'folder', path: DATA, loadOrder: ESMS.map((name) => ({ name, active: true })), outputDir: join(process.env.TMPDIR ?? tmpdir(), `beat-trial-${process.pid}`) });
   await h.loadPlugins(ESMS);
-  const ws = h.ws!;
-  const world = new WorldService(ws);
-  const exact = (sigs: string[], name: string) => {
-    const l = name.toLowerCase().replace(/^the\s+/, '');
-    return ws.search({ sigs, query: name.replace(/^the\s+/i, ''), limit: 300 }).items.find((i) => !i.deleted && (i.name ?? '').toLowerCase().replace(/^the\s+/, '') === l)?.editorId ?? null;
-  };
-  const interiors = world.cells({ interiorOnly: true });
-  lookup = {
-    person: (n) => exact(['NPC_'], n),
-    place: (n) => {
-      const l = n.toLowerCase().replace(/^the\s+/, '');
-      return interiors.find((c) => (c.name ?? '').toLowerCase().replace(/^the\s+/, '') === l)?.editorId ?? world.mapMarker(n)?.name ?? null;
-    },
-    item: (n) => exact(['WEAP', 'ARMO', 'MISC', 'BOOK', 'KEYM', 'ALCH', 'INGR'], n),
-  };
+  lookup = beatLookup(h.ws!);
 }
 
 const ai: AiProvider = { kind: 'openai', url, model };

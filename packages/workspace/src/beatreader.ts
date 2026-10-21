@@ -30,7 +30,9 @@ import {
   type BeatSheet,
   type BeatStart,
 } from './beats';
+import type { Workspace } from './engine';
 import type { QuestPlanner } from './planner';
+import { WorldService } from './world';
 import { describeBlocks, findDialogue, type WrittenBlock } from './written';
 
 /** What's already in the game, by exact name (the host looks it up in the load order). */
@@ -39,6 +41,22 @@ export interface BeatLookup {
   /** An interior with that name, or a place on the world map. */
   place(name: string): string | null;
   item(name: string): string | null;
+}
+
+/** Names looked up in a load order: characters and items by their exact in-game name, places as interiors or map markers. */
+export function beatLookup(ws: Workspace): BeatLookup {
+  const world = new WorldService(ws);
+  const plain = (n: string) => n.trim().toLowerCase().replace(/^the\s+/, '');
+  const exact = (sigs: string[], name: string) => ws.search({ sigs, query: name.replace(/^the\s+/i, ''), limit: 300 }).items.find((i) => !i.deleted && plain(i.name ?? '') === plain(name))?.editorId ?? null;
+  let interiors: ReturnType<WorldService['cells']> | undefined;
+  return {
+    person: (n) => exact(['NPC_'], n),
+    place: (n) => {
+      interiors ??= world.cells({ interiorOnly: true });
+      return interiors.find((c) => plain(c.name ?? '') === plain(n))?.editorId ?? world.mapMarker(n)?.name ?? null;
+    },
+    item: (n) => exact(['WEAP', 'ARMO', 'MISC', 'BOOK', 'KEYM', 'ALCH', 'INGR'], n),
+  };
 }
 
 export interface BeatReadOptions {
@@ -134,7 +152,7 @@ const BeatShape = z.object({
     .describe('The numbers of the beats that must happen just before this one: usually the beat before it. Two ways of going on each come after the same beat, and the beat where they meet again lists both. Empty only for the first thing the player does'),
   quote: z.string(),
   ends: z.enum(['complete', 'fail', 'no']).describe('Whether reaching it finishes the quest (complete) or fails it'),
-  then: z.string().nullable().describe("Anything else that happens when it's done (the player is paid or given something, someone leaves, attacks, follows or appears), in the author's words; null if nothing"),
+  then: z.string().nullable().describe("Anything else that happens when it's done (the player is paid or given something, someone hands something over, leaves, attacks, follows or appears), in the author's words; null if nothing"),
 });
 
 /** What happens along with the beats that say "then": only those beats, by number. */
@@ -527,12 +545,16 @@ export class BeatReader {
     for (const [about, qs] of byBeat) {
       const i = sheet.beats.findIndex((b) => b.id === about);
       if (i >= 0) {
-        // One beat: the AI gives it again, corrected.
+        // Closed questions first: which reading fits, what comes next.
+        let open = qs;
+        for (const q of qs.filter((x) => x.choose || x.next)) if (await this.closed(sheet, sheet.beats[i]!, q, text)) open = open.filter((x) => x !== q);
+        if (!open.length) continue;
+        // Otherwise the AI gives the beat again, corrected.
         const b = sheet.beats[i]!;
         try {
           const a = await this.ai.ask(
             READ_RULES,
-            `${this.context(sheet)}\n\nThe quest:\n<quest>\n${text.trim()}\n</quest>\n\nBeat ${i + 1} (“${b.quote}”) doesn't fit yet:\n${qs.map((q) => `- ${q.message}`).join('\n')}\n\nGive beat ${i + 1} again, corrected. If its action isn't what the quote describes, choose the one it does.`,
+            `${this.context(sheet)}\n\nThe quest:\n<quest>\n${text.trim()}\n</quest>\n\nBeat ${i + 1} (“${b.quote}”) doesn't fit yet:\n${open.map((q) => `- ${q.message}`).join('\n')}\n\nGive beat ${i + 1} again, corrected. If its action isn't what the quote describes, choose the one it does.`,
             BeatShape,
           );
           sheet.beats[i] = this.toBeat(sheet, a, b.id, new Map(sheet.beats.map((x, n) => [n + 1, x.id] as const)));
@@ -579,6 +601,48 @@ export class BeatReader {
         }
       }
     }
+  }
+
+  /** A question with a closed answer about one beat: which of the readings fits, or what comes after it. */
+  private async closed(sheet: BeatSheet, b: Beat, q: BeatQuestion, text: string): Promise<boolean> {
+    const n = this.number(sheet, b.id);
+    try {
+      if (q.choose) {
+        const labels = q.choose.map((c) => c.label);
+        const a = await this.ai.ask(
+          READ_RULES,
+          `The quest:\n<quest>\n${text.trim()}\n</quest>\n\nBeats, in order:\n${this.outline(sheet, b.id)}\n\n${q.message}`,
+          z.object({ answer: z.string().describe(`What the player does in beat ${n} {enum: ${JSON.stringify(labels)}}`) }),
+          200,
+        );
+        const c = q.choose.find((x) => x.label.toLowerCase() === a.answer.trim().toLowerCase());
+        if (!c) return false;
+        b.does = c.does;
+        b.target = c.target;
+        return true;
+      }
+      if (q.next) {
+        const others = sheet.beats.map((_, x) => x + 1).filter((x) => x !== n);
+        const a = await this.ai.ask(
+          READ_RULES,
+          `The quest:\n<quest>\n${text.trim()}\n</quest>\n\nBeats, in order:\n${this.outline(sheet, b.id)}\n\n${q.message}`,
+          z.object({
+            next: z.array(z.number().int().describe(`{enum: ${JSON.stringify(others)}}`)).describe(`The beats that come right after beat ${n}; empty if it ends the quest`),
+            ends: z.enum(['complete', 'fail', 'no']).describe(`Whether beat ${n} itself finishes the quest (complete) or fails it`),
+          }),
+          200,
+        );
+        if (a.ends !== 'no') b.ends = a.ends;
+        for (const x of a.next) {
+          const later = sheet.beats[x - 1];
+          if (later && later !== b && !later.after.includes(b.id)) later.after.push(b.id);
+        }
+        return a.ends !== 'no' || a.next.some((x) => sheet.beats[x - 1] && x !== n);
+      }
+    } catch {
+      // Asked again as a whole beat.
+    }
+    return false;
   }
 
   // ---------------------------------------------------------------- 5. what else happens, and the journal

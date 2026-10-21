@@ -10,6 +10,8 @@ import { WorkspaceError, type Workspace } from './engine';
 import { normalizePlan, validatePlan, type PlanCharacter, type PlanIssue, type QuestPlan } from './questplan';
 import type { QuestBuildReport, QuestBuilder } from './questbuilder';
 import type { QuestPlanner } from './planner';
+import { compileBeats, type BeatQuestion, type BeatSheet } from './beats';
+import { BeatReader, type BeatLookup } from './beatreader';
 
 export interface QuestlinePart {
   title: string;
@@ -25,7 +27,14 @@ export interface Questline {
 
 export interface QuestlinePlan {
   title: string;
-  quests: { title: string; source: string; plan: QuestPlan }[];
+  quests: {
+    title: string;
+    source: string;
+    plan: QuestPlan;
+    /** When read beat by beat: what the AI read, and what still doesn't fit together. */
+    sheet?: BeatSheet;
+    questions?: BeatQuestion[];
+  }[];
 }
 
 const QUEST_HEADING = /^(?:quest|part|chapter|act|mission|episode|stage)\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|[ivxlc]+)\b\s*[:.)–—-]?\s*(.*)$/i;
@@ -195,6 +204,47 @@ export async function planQuestline(
   }
   return { title: line.title, quests };
 }
+/** An Editor ID from a quest's title: its words run together ("Lines on a Map" → LinesOnAMap). */
+export function editorIdFromTitle(title: string): string {
+  const words = title.replace(/['’]/g, '').split(/[^A-Za-z0-9]+/).filter(Boolean);
+  const id = words.map((w) => w[0]!.toUpperCase() + w.slice(1)).join('');
+  return /^[A-Za-z]/.test(id) ? id : `Quest${id}`;
+}
+
+/**
+ * Read every quest of a questline beat by beat (beatreader.ts): the AI answers small questions about each quest, in
+ * order, knowing who and what the earlier ones have; each reading is compiled into a plan for the usual review and
+ * build. What didn't fit together stays with the quest as questions for the author.
+ */
+export async function readQuestline(
+  planner: (quest: number) => QuestPlanner,
+  line: Questline,
+  opts: { lookup?: BeatLookup; settle?: (plan: QuestPlan, source: string) => void; progress?: (i: number, what: string) => void } = {},
+): Promise<QuestlinePlan> {
+  const quests: QuestlinePlan['quests'] = [];
+  const sheets: BeatSheet[] = [];
+  for (const [i, part] of line.parts.entries()) {
+    opts.progress?.(i, 'starting');
+    const taken = new Set(quests.map((q) => q.plan.editorId.toLowerCase()));
+    let editorId = editorIdFromTitle(part.title);
+    for (let n = 2; taken.has(editorId.toLowerCase()); n++) editorId = `${editorIdFromTitle(part.title)}${n}`;
+    const { sheet, questions, blocks } = await new BeatReader(planner(i)).read(part.text, {
+      title: part.title,
+      editorId,
+      shared: line.shared,
+      earlier: sheets,
+      lookup: opts.lookup,
+      onStep: (what) => opts.progress?.(i, what),
+    });
+    sheets.push(sheet);
+    const plan = normalizePlan(compileBeats(sheet, blocks));
+    opts.settle?.(plan, questlineSource(line, i));
+    settleQuestlinePlan(plan, quests.map((q) => q.plan));
+    quests.push({ title: part.title, source: questlineSource(line, i), plan, sheet, questions });
+  }
+  return { title: line.title, quests };
+}
+
 const firstName = (n: string) => n.trim().toLowerCase().split(/\s+/)[0]!;
 
 /** The earlier plan's entry that a later plan's entry is (same key, or the same name). */

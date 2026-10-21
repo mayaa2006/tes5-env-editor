@@ -202,6 +202,10 @@ export interface BeatQuestion {
   unsaid?: true;
   /** A person's, item's or group's field that names something missing: answered by picking one of that kind. */
   pick?: { field: 'place' | 'carriedBy' | 'lockedWith'; kind: BeatEntityKind };
+  /** A beat whose action doesn't fit its target: answered by choosing one of these readings. */
+  choose?: { does: BeatAction; target: string; label: string }[];
+  /** A beat nothing comes after that doesn't end the quest: answered by saying what comes next. */
+  next?: true;
 }
 
 // ------------------------------------------------------------------ checks
@@ -258,7 +262,13 @@ export function checkBeats(sheet: BeatSheet, opts: { earlierChoices?: string[]; 
       // Something of another kind: say which, and what can be done to it.
       const other = b.target ? kinds.get(b.target) : undefined;
       const fits = other ? BEAT_ACTIONS.filter((a) => ACTION_TARGET[a] === other || (ACTION_TARGET[a] === 'person|item' && (other === 'person' || other === 'item'))) : [];
-      ask(b.id, `“${b.quote}”: the player does “${b.does}” to a ${want}, but “${b.target ?? 'nothing'}” isn't one${other ? ` (it's ${other === 'group' ? 'an enemy group' : `a ${other}`}, which the player can ${fits.join(' or ')})` : ''}. Which ${want} (one of: ${keysOf(sheet, want).join(', ') || 'none yet'})${other ? `, or is the action “${fits.join('” or “')}”` : ''}?`);
+      // The readings that would fit: this action on something of the right kind, or another action on this target.
+      const choose = [...keysOf(sheet, want).map((k) => ({ does: b.does, target: k })), ...fits.map((a) => ({ does: a, target: b.target! }))].map((c) => ({ ...c, label: `${c.does} ${nameOf(sheet, c.target)}` }));
+      q.push({
+        about: b.id,
+        message: `“${b.quote}”: the player does “${b.does}” to ${an(want)}, but “${b.target ?? 'nothing'}” isn't one${other ? ` (it's ${other === 'group' ? 'an enemy group' : an(other)}, which the player can ${fits.join(' or ')})` : ''}. Which ${want} (one of: ${keysOf(sheet, want).join(', ') || 'none yet'})${other ? `, or is the action “${fits.join('” or “')}”` : ''}?`,
+        ...(choose.length ? { choose } : {}),
+      });
     }
     if (b.does === 'wait' && !((b.hours ?? 0) > 0)) ask(b.id, `“${b.quote}”: how many in-game hours does the player wait?`);
     for (const a of b.after) if (!beatIds.has(a)) ask(b.id, `“${b.quote}” comes after “${a}”, which isn't a beat.`);
@@ -271,6 +281,9 @@ export function checkBeats(sheet: BeatSheet, opts: { earlierChoices?: string[]; 
   const order = beatOrder(sheet.beats);
   if (!order) ask('beats', 'The beats loop: some beat comes, through others, after itself.');
   if (!sheet.beats.some((b) => b.ends === 'complete')) ask('beats', 'No beat completes the quest: which one finishes it?');
+  // Every beat leads somewhere: to another beat, or to the quest's end.
+  const followed = new Set(sheet.beats.flatMap((b) => b.after));
+  if (sheet.beats.length > 1) for (const b of sheet.beats) if (!b.ends && !followed.has(b.id)) q.push({ about: b.id, message: `“${b.quote}” leads nowhere: no beat comes after it, and it doesn't end the quest. What comes next?`, next: true });
   // Every beat can happen: nothing it waits for ends the quest first.
   const ending = new Set(sheet.beats.filter((b) => b.ends).map((b) => b.id));
   for (const b of sheet.beats) if (b.after.length && b.after.every((a) => ending.has(a))) ask(b.id, `“${b.quote}” only comes after the quest has already ended.`);
@@ -322,6 +335,12 @@ export function checkBeats(sheet: BeatSheet, opts: { earlierChoices?: string[]; 
     if (!said) ask(b.id, `“${b.quote}” happens in a conversation: which line does it (or what's said, if the author didn't write it)?`, true);
   }
   return q;
+}
+
+const an = (word: string) => `${/^[aeiou]/i.test(word) ? 'an' : 'a'} ${word}`;
+
+function nameOf(sheet: BeatSheet, key: string): string {
+  return [...sheet.people, ...sheet.places, ...sheet.items].find((x) => x.key === key)?.name ?? sheet.groups.find((g) => g.key === key)?.what ?? key;
 }
 
 function keysOf(sheet: BeatSheet, kind: BeatEntityKind): string[] {

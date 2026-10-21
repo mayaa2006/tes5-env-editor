@@ -119,8 +119,10 @@ describe('beat sheets', () => {
     sheet.dialogue[3]!.lines[0]!.variants![0]!.if = [{ kind: 'choice', name: 'haggled' }];
     sheet.dialogue[0]!.lines = sheet.dialogue[0]!.lines.filter((l) => l.beat !== 'job');
     expect(checkBeats(sheet, { blocks: quest1() }).map((q) => q.message)).toEqual([
-      '“The player has to find all three pages.”: the player does “pickup” to a item, but “pagez” isn\'t one. Which item (one of: notice, pages)?',
+      '“The player has to find all three pages.”: the player does “pickup” to an item, but “pagez” isn\'t one. Which item (one of: notice, pages)?',
       '“Once they have all three, the objective changes to returning to Hesta.” comes after “nothing”, which isn\'t a beat.',
+      // (and so the pages lead nowhere)
+      '“The player has to find all three pages.” leads nowhere: no beat comes after it, and it doesn\'t end the quest. What comes next?',
       'Line 3 of conversation 4 is said only if the player chose “haggled”, but nothing remembers that choice. Which one is it (promised), or which line or beat should remember it?',
       '“When the player takes the job” happens in a conversation: which line does it (or what\'s said, if the author didn\'t write it)?',
     ]);
@@ -244,10 +246,17 @@ describe('beat sheets', () => {
           return reply({
             beats: [
               { n: 1, does: 'talk', target: 'Tilda', count: null, hours: null, after: [], quote: 'she tells them about Arn and begs them to find out what happened to him', ends: 'no', then: null },
-              { n: 2, does: 'pickup', target: 'letter', count: null, hours: null, after: [1], quote: 'on him a letter he never sent', ends: 'no', then: null },
-              { n: 3, does: 'talk', target: 'Tilda Grey-Hand', count: null, hours: null, after: [2], quote: 'When the player brings the letter back', ends: 'complete', then: "she takes the letter and gives the player her late husband's axe" },
+              // Misread: killing a letter, and the return to Tilda after nothing.
+              { n: 2, does: 'kill', target: 'letter', count: null, hours: null, after: [1], quote: 'on him a letter he never sent', ends: 'no', then: null },
+              { n: 3, does: 'talk', target: 'Tilda Grey-Hand', count: null, hours: null, after: [], quote: 'When the player brings the letter back', ends: 'complete', then: "she takes the letter and gives the player her late husband's axe" },
             ],
           });
+        // The checks' closed questions: which reading fits, and what comes after the letter.
+        if (user.includes('isn\'t one')) {
+          expect(String(p.messages.at(-1)!.content)).toContain('“kill” to a person, but “arnLetter” isn\'t one (it\'s an item, which the player can pickup or read or use)');
+          return reply({ answer: "pickup Arn's Letter" });
+        }
+        if (user.includes('leads nowhere')) return reply({ next: [3], ends: 'no' });
         if (user.includes('What else happens')) return reply({ beats: [{ n: 3, ...none, takes: [{ item: 'letter', count: 1 }], gives: [{ item: 'axe', count: 1 }], instead: [] }] });
         if (user.includes('their journal entry'))
           return reply({
