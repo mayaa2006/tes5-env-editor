@@ -74,7 +74,8 @@ if (replay) {
     if (i < 0 || !key) return live(input, init);
     used.add(i);
     console.log(JSON.stringify({ replayed: key }));
-    return new Response(recorded[i]!.answer, { status: 200, headers: { 'content-type': recorded[i]!.answer.startsWith('data:') ? 'text/event-stream' : 'application/json' } });
+    const streamed = /^(data:|:)/m.test(recorded[i]!.answer);
+    return new Response(recorded[i]!.answer, { status: 200, headers: { 'content-type': streamed ? 'text/event-stream' : 'application/json' } });
   }) as typeof fetch;
 }
 const outputDir = join(process.env.TMPDIR ?? tmpdir(), `questline-trial-out-${process.pid}`);
