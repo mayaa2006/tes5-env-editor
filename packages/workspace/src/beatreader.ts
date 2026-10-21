@@ -51,7 +51,7 @@ export interface BeatReadOptions {
   onStep?: (what: string) => void;
 }
 
-const ITEM_KINDS = ['misc', 'book', 'key', 'gold', 'clothing', 'armor', 'weapon', 'potion', 'other'] as const;
+const ITEM_KINDS = ['misc', 'book', 'key', 'clothing', 'armor', 'weapon', 'potion', 'other'] as const;
 
 const READ_RULES = `You read a Skyrim quest an author has written, to help turn it into a working quest. Answer only from what the text says, in the JSON format given. Quote the author's sentence each answer comes from, word for word. Where the text doesn't say, use null or an empty list; don't invent.`;
 
@@ -94,7 +94,7 @@ const EntitiesSchema = z.object({
       lockedWith: z.string().nullable().describe('If it is in something locked: the name of the key that opens it'),
       quote: z.string(),
     }),
-  ),
+  ).describe('Things the player finds, carries, reads or uses. Not gold or other rewards the player is paid: those come with what happens'),
   enemies: z.array(
     z.object({
       what: z.string().describe('e.g. "bandit", "skeever", "draugr"'),
