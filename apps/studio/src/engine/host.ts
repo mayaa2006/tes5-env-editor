@@ -35,6 +35,8 @@ import {
   planCatalog,
   splitQuestline,
   planQuestline,
+  readQuestline,
+  beatLookup,
   questlineLinks,
   questlineIssues,
   buildQuestline,
@@ -1302,6 +1304,32 @@ export class EngineHost {
         catalog: (text) => planCatalog(ws, { text, ...(free ? { limit: 60, short: 25 } : catalogLimits(a)) }),
         settle: (p, text) => void settleCharacters(ws, p, text, free),
         progress: (i) => say(i, 'starting'),
+      });
+      return { line: plan, ...this.reviewQuestline(plan) };
+    });
+  }
+
+  /**
+   * Read a questline beat by beat: the AI answers small questions about each quest (who and what, what the player
+   * does, which written line does it), and the editor compiles the answers into plans. What still doesn't fit together
+   * comes back as questions with each quest. Progress comes as planProgress events; stopPlanning ends it.
+   */
+  async readQuestline(source: string, ai: AiProvider | string) {
+    const line = splitQuestline(source);
+    if (!line) throw new Error('This reads as one quest: give each quest its own heading (“Quest 1: …”, “Quest 2: …”) to read them as a questline.');
+    const a = await this.resolveAi(ai);
+    const ws = this.requireWs();
+    const t0 = Date.now();
+    const n = line.parts.length;
+    const say = (i: number, what: string) => {
+      const mins = i ? Math.round((Date.now() - t0) / 60000 / i) : 0;
+      this.emitHost({ type: 'planProgress', message: `Quest ${i + 1} of ${n}, ${line.parts[i]!.title}: ${what}…${mins ? ` (about ${mins} min a quest so far)` : ''}` });
+    };
+    return this.stoppable(async (signal) => {
+      const plan = await readQuestline((i) => new QuestPlanner({ ai: a, signal, onStep: (what) => say(i, what) }), line, {
+        lookup: beatLookup(ws),
+        settle: (p, text) => void settleCharacters(ws, p, text, a.kind !== 'claude'),
+        progress: say,
       });
       return { line: plan, ...this.reviewQuestline(plan) };
     });
