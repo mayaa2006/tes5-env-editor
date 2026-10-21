@@ -143,7 +143,7 @@ const EffectsShape = {
 
 const BeatShape = z.object({
   n: z.number().int().describe("This beat's number"),
-  does: z.enum(BEAT_ACTIONS).describe('What the player does: talk (to someone), pickup, read, use, arrive (at a place), kill (someone), clear (every enemy in a group dead), wait (some in-game hours), immediately (right after the beats before)'),
+  does: z.enum(BEAT_ACTIONS).describe('What the player does: talk (to someone, including bringing them something back), pickup, read, use, arrive (at a place), kill (someone), clear (every enemy in a group dead), wait (some in-game hours), immediately (right after the beats before)'),
   target: z.string().nullable().describe('The name of the person, item, place or enemies it is done to (from the lists); null for wait and immediately'),
   count: z.number().int().nullable().describe('pickup: how many'),
   hours: z.number().nullable().describe('wait: how many in-game hours'),
@@ -295,9 +295,14 @@ export class BeatReader {
       await this.directions(sheet, b, opts);
     }
     let questions = checkBeats(sheet, { blocks, earlierChoices: earlierChoices(opts) });
-    if (questions.length) {
-      step(`checking ${questions.length} thing(s) that don't fit together yet`);
-      await this.reask(sheet, questions, text, blocks, opts);
+    // Two rounds: an answer can bring up the next question (which beat ends the quest, then what leads nowhere).
+    const asked = new Set<string>();
+    for (let round = 0; round < 2; round++) {
+      const fresh = questions.filter((q) => !q.unsaid && !asked.has(q.message));
+      if (!fresh.length) break;
+      step(`checking ${fresh.length} thing(s) that don't fit together yet`);
+      for (const q of fresh) asked.add(q.message);
+      await this.reask(sheet, fresh, text, blocks, opts);
       questions = checkBeats(sheet, { blocks, earlierChoices: earlierChoices(opts) });
     }
     if (this.then.size) {
@@ -472,7 +477,7 @@ export class BeatReader {
   private async prose(sheet: BeatSheet, text: string): Promise<void> {
     const a = await this.ai.ask(
       READ_RULES,
-      `${this.context(sheet)}\n\nThe next part of the quest:\n<passage>\n${text}\n</passage>\n\nWhat does the player do in this part that moves the quest on? Give each as a new beat (numbered after the beats so far), or none if it adds none (a description, or something already listed).`,
+      `${this.context(sheet)}\n\nThe next part of the quest:\n<passage>\n${text}\n</passage>\n\nWhat does the player do in this part that moves the quest on? Give each as a new beat (numbered after the beats so far), or none if it adds none (a description, or something already listed). Only the player's own actions are beats: what others do in answer (someone reads, pays, gives the player something, leaves) goes in “then” of the player's beat. The last thing the player does completes the quest.`,
       PassageSchema,
     );
     this.addBeats(sheet, a.beats);
@@ -584,6 +589,22 @@ export class BeatReader {
           } catch {
             // Left as it was.
           }
+        }
+        continue;
+      }
+      const ending = qs.find((q) => q.ending);
+      if (ending) {
+        try {
+          const a = await this.ai.ask(
+            READ_RULES,
+            `The quest:\n<quest>\n${text.trim()}\n</quest>\n\nBeats, in order:\n${this.outline(sheet)}\n\n${ending.message}`,
+            z.object({ beat: z.number().int().describe(`The beat that completes the quest {enum: ${JSON.stringify(sheet.beats.map((_, x) => x + 1))}}`) }),
+            100,
+          );
+          const b = sheet.beats[a.beat - 1];
+          if (b) b.ends = 'complete';
+        } catch {
+          // Left as it was; the review shows the question.
         }
         continue;
       }

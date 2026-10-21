@@ -206,6 +206,8 @@ export interface BeatQuestion {
   choose?: { does: BeatAction; target: string; label: string }[];
   /** A beat nothing comes after that doesn't end the quest: answered by saying what comes next. */
   next?: true;
+  /** No beat ends the quest: answered by saying which one does. */
+  ending?: true;
 }
 
 // ------------------------------------------------------------------ checks
@@ -280,10 +282,11 @@ export function checkBeats(sheet: BeatSheet, opts: { earlierChoices?: string[]; 
   }
   const order = beatOrder(sheet.beats);
   if (!order) ask('beats', 'The beats loop: some beat comes, through others, after itself.');
-  if (!sheet.beats.some((b) => b.ends === 'complete')) ask('beats', 'No beat completes the quest: which one finishes it?');
+  if (sheet.beats.length && !sheet.beats.some((b) => b.ends === 'complete')) q.push({ about: 'beats', message: 'No beat completes the quest: which one finishes it?', ending: true });
   // Every beat leads somewhere: to another beat, or to the quest's end.
   const followed = new Set(sheet.beats.flatMap((b) => b.after));
-  if (sheet.beats.length > 1) for (const b of sheet.beats) if (!b.ends && !followed.has(b.id)) q.push({ about: b.id, message: `“${b.quote}” leads nowhere: no beat comes after it, and it doesn't end the quest. What comes next?`, next: true });
+  // (Asked once some beat ends the quest; before that, which one does is the question.)
+  if (sheet.beats.length > 1 && sheet.beats.some((b) => b.ends === 'complete')) for (const b of sheet.beats) if (!b.ends && !followed.has(b.id)) q.push({ about: b.id, message: `“${b.quote}” leads nowhere: no beat comes after it, and it doesn't end the quest. What comes next?`, next: true });
   // Every beat can happen: nothing it waits for ends the quest first.
   const ending = new Set(sheet.beats.filter((b) => b.ends).map((b) => b.id));
   for (const b of sheet.beats) if (b.after.length && b.after.every((a) => ending.has(a))) ask(b.id, `“${b.quote}” only comes after the quest has already ended.`);
