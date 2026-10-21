@@ -116,7 +116,7 @@ const EntitiesSchema = z.object({
       lockedWith: z.string().nullable().describe('If it is in something locked: the name of the key that opens it'),
       quote: z.string(),
     }),
-  ).describe('Things the player finds, carries, reads or uses. Not gold or other rewards the player is paid: those come with what happens'),
+  ).describe('Things the player finds, carries, reads, uses or is given (a reward item too). Not gold: gold the player is paid comes with what happens'),
   enemies: z.array(
     z.object({
       what: z.string().describe('e.g. "bandit", "skeever", "draugr"'),
@@ -244,7 +244,7 @@ const norm = (t: string) =>
 function byName<T extends { name: string; key: string }>(list: T[], name: string | null | undefined): T | undefined {
   if (!name) return undefined;
   const n = norm(name);
-  return list.find((x) => norm(x.name) === n || x.key.toLowerCase() === name.toLowerCase()) ?? list.find((x) => norm(x.name).split(' ')[0] === n.split(' ')[0] && n.length > 2) ?? list.find((x) => norm(x.name).includes(n) || n.includes(norm(x.name)));
+  return list.find((x) => norm(x.name) === n || x.key.toLowerCase() === name.toLowerCase()) ?? list.find((x) => norm(x.name).split(' ')[0] === n.split(' ')[0] && n.length > 2 && (!n.includes(' ') || !norm(x.name).includes(' '))) ?? list.find((x) => norm(x.name).includes(n) || n.includes(norm(x.name)));
 }
 
 /** A quest's text in passages, in order: runs of prose, and each written conversation on its own. */
@@ -281,6 +281,7 @@ export class BeatReader {
   async read(text: string, opts: BeatReadOptions): Promise<{ sheet: BeatSheet; questions: BeatQuestion[]; blocks: WrittenBlock[] }> {
     const step = opts.onStep ?? (() => undefined);
     this.then.clear();
+    this.unread.clear();
     const blocks = findDialogue(text).blocks;
     step('finding who and what the quest involves');
     const sheet = await this.entities(text, opts);
@@ -294,6 +295,14 @@ export class BeatReader {
       step(`reading the directions in the conversation with ${b.speaker}`);
       await this.directions(sheet, b, opts);
     }
+    // What else happens, read before the checks so they see it (and items handed over that weren't listed).
+    const happenings = async () => {
+      if (!this.unread.size) return;
+      step('reading what else happens along the way');
+      await this.consequences(sheet);
+      await this.newItems(sheet, text);
+    };
+    await happenings();
     let questions = checkBeats(sheet, { blocks, earlierChoices: earlierChoices(opts) });
     // Two rounds: an answer can bring up the next question (which beat ends the quest, then what leads nowhere).
     const asked = new Set<string>();
@@ -303,11 +312,8 @@ export class BeatReader {
       step(`checking ${fresh.length} thing(s) that don't fit together yet`);
       for (const q of fresh) asked.add(q.message);
       await this.reask(sheet, fresh, text, blocks, opts);
+      await happenings();
       questions = checkBeats(sheet, { blocks, earlierChoices: earlierChoices(opts) });
-    }
-    if (this.then.size) {
-      step('reading what else happens along the way');
-      await this.consequences(sheet);
     }
     step('writing the objectives and journal');
     await this.words(sheet, text);
@@ -457,6 +463,8 @@ export class BeatReader {
 
   /** What else happens along with each beat, in the author's words; read into effects once the beats are in. */
   private readonly then = new Map<string, string>();
+  /** Beats whose "then" isn't read into effects yet. */
+  private readonly unread = new Set<string>();
 
   /** The AI's beats (numbered after the ones so far) into the sheet; returns every beat's id by number. */
   private addBeats(sheet: BeatSheet, beats: z.infer<typeof BeatShape>[]): Map<number, string> {
@@ -469,7 +477,7 @@ export class BeatReader {
     for (const [i, b] of beats.entries()) {
       const id = `b${first + i}`;
       sheet.beats.push(this.toBeat(sheet, b, id, ids));
-      if (b.then?.trim()) this.then.set(id, b.then.trim());
+      if (b.then?.trim()) (this.then.set(id, b.then.trim()), this.unread.add(id));
     }
     return ids;
   }
@@ -563,8 +571,8 @@ export class BeatReader {
             BeatShape,
           );
           sheet.beats[i] = this.toBeat(sheet, a, b.id, new Map(sheet.beats.map((x, n) => [n + 1, x.id] as const)));
-          if (a.then?.trim()) this.then.set(b.id, a.then.trim());
-          else this.then.delete(b.id);
+          if (a.then?.trim() && a.then.trim() !== this.then.get(b.id)) (this.then.set(b.id, a.then.trim()), this.unread.add(b.id));
+          else if (!a.then?.trim()) this.then.delete(b.id);
         } catch {
           // Left as it was; the review shows the question.
         }
@@ -669,7 +677,9 @@ export class BeatReader {
   // ---------------------------------------------------------------- 5. what else happens, and the journal
 
   private async consequences(sheet: BeatSheet): Promise<void> {
-    const list = sheet.beats.map((b, i) => [b, i + 1] as const).filter(([b]) => this.then.has(b.id));
+    const list = sheet.beats.map((b, i) => [b, i + 1] as const).filter(([b]) => this.unread.has(b.id) && this.then.has(b.id));
+    this.unread.clear();
+    if (!list.length) return;
     try {
       const a = await this.ai.ask(
         READ_RULES,
@@ -678,13 +688,34 @@ export class BeatReader {
       );
       for (const e of a.beats) {
         const b = sheet.beats[e.n - 1];
-        if (!b || !this.then.has(b.id)) continue;
+        if (!b || !list.some(([x]) => x === b)) continue;
         b.effects = this.effects(sheet, e);
         const instead = e.instead.filter((v) => v.if.length && v.gold !== null).map((v) => ({ if: this.conditions(sheet, v.if), effects: { gold: v.gold! } }));
         if (instead.length) b.variants = instead;
       }
     } catch {
       // Left without; the review shows what the author wrote.
+    }
+  }
+
+  /** Items handed over that aren't in the list yet (a reward the first reading left out): added, with their kind asked. */
+  private async newItems(sheet: BeatSheet, text: string): Promise<void> {
+    const known = new Set(sheet.items.map((i) => i.key));
+    const effects = [...sheet.beats.flatMap((b) => [b.effects, ...(b.variants ?? []).map((v) => v.effects)]), ...sheet.dialogue.flatMap((d) => d.lines.flatMap((l) => [l.effects, ...(l.variants ?? []).map((v) => v.effects)]))];
+    const names = [...new Set(effects.flatMap((e) => [...(e?.gives ?? []), ...(e?.takes ?? [])].map((g) => g.item)).filter((x) => !known.has(x)))];
+    const taken = new Set([...sheet.people, ...sheet.places, ...sheet.items, ...sheet.groups].map((x) => x.key));
+    for (const name of names) {
+      let kind: BeatItem['kind'] = 'misc';
+      try {
+        const a = await this.ai.ask(READ_RULES, `The quest:\n<quest>\n${text.trim()}\n</quest>\n\nWhat kind of thing is “${name}”?`, z.object({ kind: z.enum(ITEM_KINDS) }), 60);
+        kind = a.kind;
+      } catch {
+        // A misc item, then.
+      }
+      const key = keyFor(name, taken);
+      taken.add(key);
+      sheet.items.push({ key, name, kind, existing: null, place: null, carriedBy: null, spot: null, count: 1, text: null, lockedWith: null, quote: '' });
+      for (const e of effects) for (const g of [...(e?.gives ?? []), ...(e?.takes ?? [])]) if (g.item === name) g.item = key;
     }
   }
 

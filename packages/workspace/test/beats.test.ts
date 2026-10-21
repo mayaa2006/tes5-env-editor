@@ -257,7 +257,8 @@ describe('beat sheets', () => {
           return reply({ answer: "pickup Arn's Letter" });
         }
         if (user.includes('leads nowhere')) return reply({ next: [3], ends: 'no' });
-        if (user.includes('What else happens')) return reply({ beats: [{ n: 3, ...none, takes: [{ item: 'letter', count: 1 }], gives: [{ item: 'axe', count: 1 }], instead: [] }] });
+        if (user.includes('What else happens')) return reply({ beats: [{ n: 3, ...none, takes: [{ item: 'letter', count: 1 }], gives: [{ item: 'axe', count: 1 }, { item: "Arn's Ring", count: 1 }], instead: [] }] });
+        if (user.includes('What kind of thing is “Arn\'s Ring”')) return reply({ kind: 'clothing' });
         if (user.includes('their journal entry'))
           return reply({
             beats: [
@@ -284,16 +285,19 @@ describe('beat sheets', () => {
     expect(sheet.items.map((i) => [i.key, i.place, i.carriedBy])).toEqual([
       ['arnLetter', 'bleakFallsBarrow', null],
       ['tildaHusbandAxe', null, 'tilda'],
+      // Handed over but not in the first list: added, its kind asked.
+      ['arnRing', null, null],
     ]);
+    expect(sheet.items[2]!.kind).toBe('clothing');
     expect(sheet.beats.map((b) => `${b.id} ${b.does} ${b.target} after ${b.after.join(',')}`)).toEqual(['b1 talk tilda after ', 'b2 pickup arnLetter after b1', 'b3 talk tilda after b2']);
     // What else happens is the author's words, read into effects in a question of its own.
-    expect(sheet.beats[2]!.effects).toEqual({ takes: [{ item: 'arnLetter', count: 1 }], gives: [{ item: 'tildaHusbandAxe', count: 1 }] });
+    expect(sheet.beats[2]!.effects).toEqual({ takes: [{ item: 'arnLetter', count: 1 }], gives: [{ item: 'tildaHusbandAxe', count: 1 }, { item: 'arnRing', count: 1 }] });
     expect(sheet.beats.map((b) => b.objective)).toEqual(['Talk to Tilda', 'Find out what happened to Arn', 'Bring the letter to Tilda']);
     // Nothing written out: the AI wrote one exchange for each talk beat.
     expect(sheet.lines.map((l) => l.beat)).toEqual(['b1', 'b3']);
     expect(steps).toContain('reading part 1 of 1');
     const plan = compileBeats(sheet);
     expect(validatePlan(plan).filter((i) => i.severity === 'error')).toEqual([]);
-    expect(plan.conversations[0]!.screenplay).toBe("PLAYER: Why the lantern? [if stage 0]\nTILDA: For my son. Will you look for him? [stage 10]\nPLAYER: I found Arn. [if stage 20]\nTILDA: Then he is gone. Take this. [stage 30] [gives tildaHusbandAxe x1] [takes arnLetter x1]");
+    expect(plan.conversations[0]!.screenplay).toBe("PLAYER: Why the lantern? [if stage 0]\nTILDA: For my son. Will you look for him? [stage 10]\nPLAYER: I found Arn. [if stage 20]\nTILDA: Then he is gone. Take this. [stage 30] [gives tildaHusbandAxe x1] [gives arnRing x1] [takes arnLetter x1]");
   });
 });
