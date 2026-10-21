@@ -70,6 +70,20 @@ export function splitQuestline(text: string): Questline | null {
   return { title: title || quests[0]!.title, shared, parts };
 }
 
+/**
+ * Whether a cell is part of a place by that name: its Editor ID or name says so (RiverwoodSleepingGiantInn is in
+ * Riverwood), or its location has that name.
+ */
+export function partOf(ws: Workspace, cell: FormKey, place: string): boolean {
+  const want = place.toLowerCase().replace(/^the\s+/, '').replace(/[^a-z0-9]/g, '');
+  if (want.length < 3) return false;
+  const flat = (t: string | undefined) => (t ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const s = ws.summary(cell);
+  if (flat(s?.editorId).includes(want) || flat(s?.name).includes(want)) return true;
+  const loc = (ws.view(cell)?.data as { location?: FormKey } | undefined)?.location;
+  return !!loc && flat(ws.summary(loc)?.name) === want;
+}
+
 /** One quest of a questline as the planner reads it: what they all share, then this quest. */
 export function questlineSource(line: Questline, i: number): string {
   const part = line.parts[i]!;
@@ -354,7 +368,9 @@ export async function buildQuestline(ws: Workspace, builder: QuestBuilder, line:
         const now = c.locationKey;
         const nowCell = cellOf(now);
         asExisting(c, npc);
-        if (now && !(wasCell && nowCell === wasCell)) {
+        // "Riverwood" for someone at the Sleeping Giant Inn is where they already are: the place their cell is part of.
+        const nowName = plan.locations.find((l) => l.key === now)?.name ?? '';
+        if (now && !(wasCell && (nowCell === wasCell || partOf(ws, wasCell, nowName)))) {
           const where = plan.locations.find((l) => l.key === now)?.name ?? now;
           c.routine = [{ activity: 'sandbox', where: now, hours: null, fromStage: start, untilStage: null, line: null }, ...c.routine];
           plan.events.push({ atStage: start, kind: 'moveTo', targetKey: c.key, toKey: now, what: null, count: null, note: `${c.name} goes to ${where}` });

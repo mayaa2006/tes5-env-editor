@@ -27,6 +27,7 @@ import {
   generateTriggerScript,
   parseIf,
   parseScreenplay,
+  partOf,
   questlineContext,
   questlineIssues,
   questlineLinks,
@@ -469,6 +470,15 @@ describe('questline mechanics', () => {
     expect(collect.match(/If Game\.GetPlayer\(\)\.GetItemCount\(Page\) >= 3 && !Fired0/g)).toHaveLength(2);
     const wait = generateTriggerScript('T', 'ReferenceAlias', [{ id: 'c', event: { kind: 'wait', hours: 24 }, conditions: [], actions: [{ kind: 'setStage', quest: q, stage: 40 }], once: true }], () => 'Q').source;
     expect(wait).toContain('Event OnUpdateGameTime()');
+  });
+
+  it('knows a cell is part of the place it is named after, so nobody is moved where they already are', async () => {
+    const { ws } = await setup();
+    const tavern = ws.byEditorId('DemoTavern')!;
+    expect(partOf(ws, tavern, 'Demo')).toBe(true);
+    expect(partOf(ws, tavern, 'The Demo Tavern')).toBe(true);
+    expect(partOf(ws, tavern, 'Demo Valley')).toBe(false);
+    expect(partOf(ws, tavern, 'De')).toBe(false);
   });
 
   it("names the player's reference by its ID, 0x14, which Skyrim.esm itself doesn't hold", async () => {

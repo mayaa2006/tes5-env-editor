@@ -653,6 +653,26 @@ export function repairPlan(plan: QuestPlan): string[] {
       Object.assign(s, { kind: 'script', targetKey: null, count: null });
     }
   }
+  // "Gerda and Varro attack the player" written as enemies spawning: the plan's own characters turn on the player.
+  // "The player returns to Hesta" written as moving the player there: they walk; nobody is moved.
+  if (Array.isArray(p.events)) {
+    const events: Obj[] = [];
+    for (const e of list(p.events)) {
+      const note = String(e.note ?? '');
+      const attackers = e.kind === 'spawn' && /\battack|turn on|fight/i.test(note) ? list(p.characters).filter((c) => [c.name, String(c.name ?? '').split(/\s+/)[0]].some((n) => typeof n === 'string' && n.length > 2 && new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(note))) : [];
+      if (attackers.length) {
+        for (const c of attackers) events.push({ atStage: e.atStage, kind: 'hostile', targetKey: c.key, toKey: null, what: null, count: null, note: `${String(c.name)} attacks the player` });
+        changes.push(`“${note}” makes ${attackers.map((c) => String(c.name)).join(' and ')} attack, instead of spawning enemies`);
+        continue;
+      }
+      if (e.kind === 'movePlayer' && /\bplayer\s+(returns?|goes|go|moves?|travels?|walks?|heads?)\b/i.test(note) && !/\b(fade|wakes?|teleport|carried|dragged|knocked)/i.test(note)) {
+        changes.push(`left out “${note}”: the player walks there themselves`);
+        continue;
+      }
+      events.push(e);
+    }
+    if (events.length !== list(p.events).length || events.some((x, i) => x !== list(p.events)[i])) p.events = events;
+  }
   // Enemies spawned in the place where the plan already has them waiting (an encounter of the same kind there): the
   // encounter is what the player meets, and a spawn would put a second group next to the player. An ambush somewhere
   // else (on the road) is kept.

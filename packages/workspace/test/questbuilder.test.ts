@@ -344,6 +344,19 @@ describe('plans that would play wrong', () => {
     expect(validatePlan(plan).map((i) => i.message).filter((m) => /stage 10|pick up/.test(m))).toEqual([]);
   });
 
+  it('has the plan\'s characters attack instead of spawning enemies, and lets the player walk back', () => {
+    // As Qwen3.5 4B planned "Settling Accounts".
+    const plan = exampleQuestPlan();
+    plan.characters.push({ ...plan.characters[1]!, key: 'gerda', name: 'Gerda Stone-Arm' });
+    plan.events = [
+      { atStage: 20, kind: 'spawn', targetKey: null, toKey: null, what: 'LvlSilverHandMelee1H', count: 1, note: 'Gerda and Eirik attack the player' },
+      { atStage: 100, kind: 'movePlayer', targetKey: null, toKey: 'tavern', what: null, count: null, note: 'The player moves to Brynja' },
+      { atStage: 20, kind: 'spawn', targetKey: null, toKey: null, what: 'wolf', count: 2, note: 'Wolves attack on the road' },
+    ];
+    expect(repairPlan(plan)).toEqual(expect.arrayContaining(['“Gerda and Eirik attack the player” makes Eirik and Gerda Stone-Arm attack, instead of spawning enemies', 'left out “The player moves to Brynja”: the player walks there themselves']));
+    expect(plan.events.map((e) => `${e.kind} ${e.targetKey ?? e.what}`)).toEqual(['hostile eirik', 'hostile gerda', 'spawn wolf']);
+  });
+
   it('puts an item locked away with a key in a strongbox where its holder stays', () => {
     // As Qwen3.5 4B planned "Business After Dark": the ledger locked with Varro's key, but carried by Varro.
     const plan = exampleQuestPlan();
