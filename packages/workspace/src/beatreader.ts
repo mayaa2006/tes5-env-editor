@@ -496,7 +496,7 @@ export class BeatReader {
   private async prose(sheet: BeatSheet, text: string): Promise<void> {
     const a = await this.ai.ask(
       READ_RULES,
-      `${this.context(sheet)}\n\nThe next part of the quest:\n<passage>\n${text}\n</passage>\n\nWhat does the player do in this part that moves the quest on? Give each as a new beat (numbered after the beats so far), or none if it adds none (a description, or something already listed). Only the player's own actions are beats: what others do in answer (someone reads, pays, gives the player something, leaves) goes in “then” of the player's beat. The last thing the player does completes the quest.`,
+      `${this.context(sheet)}\n\nThe next part of the quest:\n<passage>\n${text}\n</passage>\n\nWhat does the player do in this part that moves the quest on? Give each as a new beat (numbered after the beats so far), or none if it adds none (a description, or something already listed). A beat is something the player does: talking to someone (being asked for help, taking a job, talking someone down, bringing something back), picking up or reading something, going somewhere, killing. What others do in answer (someone pays, hands something over, leaves) goes in “then” of that beat. Where the player can do one thing or another (“kill them, or talk him down”), give each way as its own beat, both after the same beat. The last thing the player does completes the quest.`,
       PassageSchema,
     );
     this.addBeats(sheet, a.beats);
@@ -562,7 +562,7 @@ export class BeatReader {
       if (conds.length) entry.if = conds;
       const e = this.effects(sheet, l);
       if (Object.keys(e).length) entry.effects = { ...(entry.effects ?? {}), ...e };
-      const instead = l.instead.filter((v) => v.if.length).map((v) => ({ if: this.conditions(sheet, v.if), effects: v.gold ? { gold: v.gold } : {} }));
+      const instead = l.instead.map((v) => ({ if: this.conditions(sheet, v.if), effects: v.gold ? { gold: v.gold } : {} })).filter((v) => v.if.length);
       if (instead.length) entry.variants = instead;
     }
   }
@@ -723,7 +723,10 @@ export class BeatReader {
         const b = sheet.beats[e.n - 1];
         if (!b || !list.some(([x]) => x === b)) continue;
         b.effects = this.effects(sheet, e);
-        const instead = e.instead.filter((v) => v.if.length && v.gold !== null).map((v) => ({ if: this.conditions(sheet, v.if), effects: { gold: v.gold! } }));
+        const instead = e.instead
+          .filter((v) => v.gold !== null)
+          .map((v) => ({ if: this.conditions(sheet, v.if), effects: { gold: v.gold! } }))
+          .filter((v) => v.if.length);
         if (instead.length) b.variants = instead;
       }
     } catch {
