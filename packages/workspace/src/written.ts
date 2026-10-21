@@ -145,7 +145,11 @@ export function findDialogue(text: string): { blocks: WrittenBlock[]; prose: str
       notes: r.line.notes,
       tags: [],
     }));
-    blocks.push({ id: blocks.length + 1, header: sceneHead ? [lastProse, sceneHead[1]].filter(Boolean).join(' ') : lastProse, scene: !!sceneHead, speaker: run.find((r) => r.line.speaker.toLowerCase() === main)?.line.speaker ?? main, lines, tags: [] });
+    // "SCENE 2 — The meadery" over lines the player takes part in is a heading for a conversation, not a scene
+    // between characters.
+    const scene = !!sceneHead && !players.length;
+    const header = sceneHead ? (scene ? [lastProse, sceneHead[1]].filter(Boolean).join(' ') : rows[i]!.trim()) : lastProse;
+    blocks.push({ id: blocks.length + 1, header, scene, speaker: run.find((r) => r.line.speaker.toLowerCase() === main)?.line.speaker ?? main, lines, tags: [] });
     prose.push(outline(blocks[blocks.length - 1]!));
     i = j;
   }
