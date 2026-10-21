@@ -20,6 +20,7 @@ Each version here is published as a Windows installer and portable exe on the [r
 - **Stop** on the "planning…" message calls off a quest or questline being planned (and revising a plan), and the message says which quest and step it's on.
 - A speaker in your dialogue whom the plan left out ("LUCAN:") is added as the character from your load order whose name starts that way.
 - **Fixed:** lines of one answer that each gave something (`[gives gold x100]` then `[gives ring x1]`) gave only the last.
+- **Fixed:** the script checker said `Event OnInit()` doesn't exist in a script extending ReferenceAlias (or any script whose parents come from your own Source folder): OnInit, OnBeginState and OnEndState belong to every script.
 
 ## 0.36.0
 
