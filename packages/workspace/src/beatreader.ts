@@ -704,7 +704,14 @@ export class BeatReader {
         return true;
       }
       if (q.next) {
-        const others = sheet.beats.map((_, x) => x + 1).filter((x) => x !== n);
+        // Only beats that don't already come before it (anything else would loop).
+        const before = new Set<string>([b.id]);
+        for (let grew = true; grew; ) {
+          grew = false;
+          for (const x of sheet.beats) if (before.has(x.id)) for (const a of x.after) if (!before.has(a)) (before.add(a), (grew = true));
+        }
+        const others = sheet.beats.map((x, i) => [x, i + 1] as const).filter(([x]) => !before.has(x.id)).map(([, i]) => i);
+        if (!others.length) return false;
         const a = await this.ai.ask(
           READ_RULES,
           `The quest:\n<quest>\n${text.trim()}\n</quest>\n\nBeats, in order:\n${this.outline(sheet, b.id)}\n\n${q.message}`,
@@ -715,11 +722,11 @@ export class BeatReader {
           200,
         );
         if (a.ends !== 'no') b.ends = a.ends;
-        for (const x of a.next) {
+        for (const x of a.next.filter((y) => others.includes(y))) {
           const later = sheet.beats[x - 1];
           if (later && later !== b && !later.after.includes(b.id)) later.after.push(b.id);
         }
-        return a.ends !== 'no' || a.next.some((x) => sheet.beats[x - 1] && x !== n);
+        return a.ends !== 'no' || a.next.some((x) => others.includes(x));
       }
     } catch {
       // Asked again as a whole beat.
