@@ -52,11 +52,18 @@ function answer(user: string): unknown {
           items: [{ name: "Brynja's Ledger", kind: 'book', where: 'The Demo Tavern', carriedBy: null, spot: 'on a table', count: 1, text: null, lockedWith: null, quote: 'The player finds the ledger on a table' }],
           enemies: [],
         };
+  if (user.includes('Which paragraphs tell what happens'))
+    return {
+      paragraphs: [
+        { n: 1, is: 'what happens' },
+        { n: 2, is: 'what happens' },
+      ],
+    };
   if (user.includes('<passage>\nWhen the player comes back')) return { beats: [{ n: 2, does: 'pickup', target: "Brynja's Ledger", count: 1, hours: null, after: [1], quote: 'The player finds the ledger on a table', ends: 'no', then: null }] };
   if (user.includes('<passage>')) return { beats: [] };
-  if (user.includes('Can you read?')) return user.includes('For each line with a direction') ? { lines: [] } : { when: null, moves: [{ line: 3, words: 'Then find my', beat: null, ends: 'no' }] };
-  if (user.includes("Here's your ledger.")) return user.includes('For each line with a direction') ? { lines: [{ line: 2, words: 'My ledger! Thank', if: [], ...none, takes: [{ item: "Brynja's Ledger", count: 1 }], instead: [] }] } : { when: 2, moves: [{ line: 2, words: 'My ledger! Thank', beat: null, ends: 'complete' }] };
-  if (user.includes('Brynja says you saw')) return user.includes('For each line with a direction') ? { lines: [] } : { when: null, moves: [{ line: 2, words: 'Maybe I did.', beat: null, ends: 'complete' }] };
+  if (user.includes('Can you read?')) return user.includes('For each line with a direction') ? { lines: [] } : { when: null, lines: [{ line: 3, does: 'a new step' }] };
+  if (user.includes("Here's your ledger.")) return user.includes('For each line with a direction') ? { lines: [{ line: 2, words: 'My ledger! Thank', if: [], ...none, takes: [{ item: "Brynja's Ledger", count: 1 }], instead: [] }] } : { when: 2, lines: [{ line: 2, does: 'a new step' }] };
+  if (user.includes('Brynja says you saw')) return user.includes('For each line with a direction') ? { lines: [] } : { when: null, lines: [{ line: 2, does: 'a new step' }] };
   if (user.includes('their journal entry'))
     return two
       ? { beats: [{ n: 1, objective: 'Ask Sigrun who took the ledger', journal: 'Sigrun wants coin before she says more.' }] }
@@ -115,7 +122,7 @@ for (const size of [
     await expect(review).toBeVisible();
     expect(errors).toEqual([]);
     // Small questions, each about one thing.
-    expect(asked.some((q) => q.includes('which of its lines move the quest on'))).toBe(true);
+    expect(asked.some((q) => q.includes('does saying it only talk'))).toBe(true);
     await expect(review.getByTestId('questline-quests')).toContainText('Starts when The Ledger ends');
     await expect(review.getByTestId('questline-links')).toContainText('Sigrun — made in quest 1, used in 2');
 

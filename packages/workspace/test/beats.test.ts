@@ -242,6 +242,14 @@ describe('beat sheets', () => {
             enemies: [],
           });
         }
+        if (user.includes('Which paragraphs tell what happens'))
+          return reply({
+            paragraphs: [
+              { n: 1, is: 'what happens' },
+              { n: 2, is: 'what happens' },
+              { n: 3, is: 'what happens' },
+            ],
+          });
         if (user.includes('<passage>'))
           return reply({
             beats: [
@@ -258,7 +266,7 @@ describe('beat sheets', () => {
           expect(String(p.messages.at(-1)!.content)).toContain('“kill” to a person, but “arnLetter” isn\'t one (it\'s an item, which the player can pickup or read or use)');
           return reply({ answer: "pickup Arn's Letter" });
         }
-        if (user.includes('leads nowhere')) return reply({ next: [3], ends: 'no' });
+        if (user.includes('leads nowhere')) return reply({ next: 3, ends: 'no' });
         if (user.includes('Is that one moment')) return reply({ same: true });
         if (user.includes('What else happens')) return reply({ beats: [{ n: 4, ...none, takes: [{ item: 'letter', count: 1 }], gives: [{ item: 'axe', count: 1 }, { item: "Arn's Ring", count: 1 }], instead: [] }] });
         if (user.includes('What kind of thing is “Arn\'s Ring”')) return reply({ kind: 'clothing' });
@@ -325,29 +333,39 @@ describe('beat sheets', () => {
             items: [{ name: 'Cask of Honningbrew Mead', kind: 'misc', where: 'Honningbrew Meadery', carriedBy: null, spot: 'by the stairs', count: 1, text: null, lockedWith: null, quote: '' }],
             enemies: [{ what: 'skeever', count: 5, where: 'Honningbrew Meadery', appearLater: false, quote: '' }],
           });
-        if (user.includes('<passage>\nQUEST:')) return reply({ beats: [] });
-        if (user.includes('<passage>\nSCENE 3')) return reply({ beats: [{ n: 4, does: 'clear', target: 'skeever', count: null, hours: null, after: [2], quote: 'When the skeevers are dead:', ends: 'no', then: null }] });
-        if (user.includes('Block 1 —')) return reply({ when: null, moves: [{ line: 3, words: 'Would you? Sabjorn', beat: null, ends: 'no' }] });
-        // The agreement and the persuasion's success, both answers to the first line: both come after the job.
-        if (user.includes('Block 2 —'))
+        // The prose: a heading, then what happens.
+        if (user.includes('Which paragraphs tell what happens'))
           return reply({
-            when: 1,
-            moves: [
-              // Pointed at the job (Hulda's): not this speaker's, so a beat of its own.
-              { line: 4, words: 'You will? Then', beat: 1, ends: 'no' },
-              { line: 6, words: 'Fine, fine. Here.', beat: null, ends: 'no' },
+            paragraphs: [
+              { n: 1, is: 'a heading' },
+              { n: 2, is: 'what happens' },
+              { n: 3, is: 'what happens' },
             ],
           });
-        if (user.includes('Block 3 —')) return reply({ when: 4, moves: [{ line: 2, words: "Shor's bones. Take", beat: null, ends: 'no' }] });
-        if (user.includes('Block 4 —')) return reply({ when: 5, moves: [{ line: 2, words: 'Finally! Here, for', beat: null, ends: 'complete' }] });
         // Small-model slips: the branch it answers read as a choice, and "takes the job" as an item handed over.
         if (user.includes('For each line with a direction') && user.includes('Block 1 —'))
           return reply({ lines: [{ line: 3, words: 'Would you? Sabjorn', if: [{ kind: 'chose', value: 'I can fetch it for you.' }], gold: null, gives: [{ item: 'the job', count: 1 }], takes: [], remembers: null, attacks: [], leaves: [], follows: [], stopsFollowing: [], appears: [], moves: [], instead: [] }] });
         if (user.includes('For each line with a direction')) return reply({ lines: [] });
+        if (user.includes('<passage>\nSCENE 3')) return reply({ beats: [{ n: 4, does: 'clear', target: 'skeever', count: null, hours: null, after: [2], quote: 'When the skeevers are dead:', ends: 'no', then: null }] });
+        if (user.includes('<passage>')) throw new Error('the heading was read for beats');
+        // Each line that could move the quest on (the ones with directions), one answer each.
+        if (user.includes('Block 1 —')) return reply({ when: null, lines: [{ line: 3, does: 'a new step' }] });
+        // The agreement and the persuasion's success, both answers to the first line: both come after the job.
+        if (user.includes('Block 2 —'))
+          return reply({
+            when: 1,
+            lines: [
+              { line: 4, does: 'a new step' },
+              { line: 6, does: 'a new step' },
+              { line: 7, does: 'only talk' },
+            ],
+          });
+        if (user.includes('Block 3 —')) return reply({ when: 4, lines: [{ line: 2, does: 'a new step' }] });
+        if (user.includes('Block 4 —')) return reply({ when: 5, lines: [{ line: 2, does: 'a new step' }] });
         if (user.includes('What kind of thing is “the job”')) return reply({ kind: 'not a thing' });
         // Which beat ends the quest is its own question, asked once everything is read.
         if (user.includes('No beat completes the quest')) return reply({ beat: 6 });
-        if (user.includes('leads nowhere')) return reply({ next: [6], ends: 'no' });
+        if (user.includes('leads nowhere')) return reply({ next: 6, ends: 'no' });
         if (user.includes('their journal entry')) return reply({ beats: [] });
         throw new Error(`unexpected: ${user.slice(-200)}`);
       },
