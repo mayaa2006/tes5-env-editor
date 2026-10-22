@@ -406,7 +406,11 @@ HESTA: My maps were stolen.
       send: async (p) => {
         const user = String(p.messages.at(-1)!.content);
         if (user.includes('List the people'))
-          return reply({ summary: '', start: { how: 'talking', what: null }, people: [{ name: 'Hesta Coldwater', description: '', sex: 'unknown', race: null, where: null, spot: null, canDie: 'maybe', hostile: false, quote: '' }], places: [], items: [{ name: 'Torn Map Page', kind: 'misc', where: null, carriedBy: 'Hesta Coldwater', spot: null, count: 3, text: null, lockedWith: null, quote: '' }], enemies: [] });
+          return reply({ summary: '', start: { how: 'talking', what: null }, people: [{ name: 'Hesta Coldwater', description: '', sex: 'unknown', race: null, where: null, spot: null, canDie: 'maybe', hostile: false, quote: '' }], places: [], items: [
+              { name: 'Torn Map Page', kind: 'misc', where: null, carriedBy: 'Hesta Coldwater', spot: null, count: 3, text: null, lockedWith: null, quote: '' },
+              { name: '250 septims', kind: 'misc', where: null, carriedBy: 'Hesta Coldwater', spot: null, count: 250, text: null, lockedWith: null, quote: '' },
+            ], enemies: [] });
+        if (user.includes('Is “250 septims” gold or money')) return reply({ is: 'gold or money' });
         if (user.includes('<passage>'))
           return reply({
             beats: [
@@ -437,5 +441,7 @@ HESTA: My maps were stolen.
     // Lines 3 and 5 both do the job: line 5 by its label, line 3 (a beat 7 there isn't) by the first unsaid talk with Hesta.
     expect(sheet.beats.map((b) => b.id)).toEqual(['b1', 'b2', 'b3']);
     expect(sheet.dialogue[0]!.lines.map((l) => `${l.line}:${l.beat}`)).toEqual(['3:b1', '5:b1']);
+    // Hundreds of septims is money, not 250 items.
+    expect(sheet.items.map((i) => i.key)).toEqual(['tornMapPage']);
   });
 });

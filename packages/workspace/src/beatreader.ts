@@ -296,6 +296,7 @@ export class BeatReader {
     this.then.clear();
     this.unread.clear();
     this.notThings.clear();
+    this.gold.clear();
     const blocks = findDialogue(text).blocks;
     step('finding who and what the quest involves');
     const sheet = await this.entities(text, opts);
@@ -387,6 +388,11 @@ export class BeatReader {
     // The same item named twice (singular and plural, or numbered) is one item.
     const items: BeatItem[] = [];
     for (const i of a.items) {
+      // Hundreds of something is usually money: asked, and gold isn't an item (it's paid with what happens).
+      if (i.count > 20 && (await this.isGold(text, i.name))) {
+        this.gold.set(i.name, i.count);
+        continue;
+      }
       const same = byName(items, i.name.replace(/\s*(#\s*)?\d+$/, ''));
       if (same && same.place === placeKey(i.where)) {
         same.count += Math.max(1, i.count);
@@ -400,8 +406,9 @@ export class BeatReader {
     }
     for (const i of items) if (i.lockedWith) i.lockedWith = byName(items, i.lockedWith)?.key ?? i.lockedWith;
     const groups: BeatGroup[] = a.enemies.map((g) => ({ key: keyFor(g.what, taken), what: g.what, count: Math.max(1, g.count), place: placeKey(g.where) ?? g.where, spot: null, hidden: g.appearLater, quote: g.quote }));
-    const all = [...people, ...places, ...items, ...groups.map((g) => ({ ...g, name: g.what }))];
-    const startTarget = a.start.what ? byName(all, a.start.what)?.key : undefined;
+    // What starts it, among the things that fit: an item read, picked up or used (or a person used), a place arrived at.
+    const fitting: { key: string; name: string }[] = a.start.how === 'arriving' ? places : a.start.how === 'using' ? [...items, ...people] : items;
+    const startTarget = a.start.what ? byName(fitting, a.start.what)?.key : undefined;
     const start: BeatStart =
       a.start.how === 'previous quest' || (earlier.length && a.start.how === 'talking')
         ? earlier.length
@@ -490,6 +497,8 @@ export class BeatReader {
 
   /** What else happens along with each beat, in the author's words; read into effects once the beats are in. */
   private readonly then = new Map<string, string>();
+  /** Names the AI said are money ("200 gold"), with how much: handed over as gold, not as an item. */
+  private readonly gold = new Map<string, number>();
   /** Names the AI said aren't things the player can carry ("the job"): not asked about again. */
   private readonly notThings = new Set<string>();
   /** Beats whose "then" isn't read into effects yet. */
@@ -837,6 +846,16 @@ export class BeatReader {
     }
   }
 
+  /** Whether something the item list has hundreds of is money. */
+  private async isGold(text: string, name: string): Promise<boolean> {
+    try {
+      const a = await this.ai.ask(READ_RULES, `The quest:\n<quest>\n${text.trim()}\n</quest>\n\nIs “${name}” gold or money paid to or by the player, or things the player finds or carries?`, z.object({ is: z.enum(['gold or money', 'things']) }), 40);
+      return a.is === 'gold or money';
+    } catch {
+      return false;
+    }
+  }
+
   /**
    * A choice a line is said under that nothing in this quest or an earlier one remembers is a misreading of the
    * conversation's own branching (answering a player line): it's dropped.
@@ -864,14 +883,32 @@ export class BeatReader {
         if (e?.takes) e.takes = e.takes.filter((g) => g.item !== name);
       }
     };
+    // Money handed over as if it were an item: gold, as much as the item list said (or the count given).
+    const pay = (name: string, amount: number | undefined) => {
+      for (const e of effects) {
+        if (!e) continue;
+        for (const g of e.gives ?? []) if (g.item === name) e.gold = (e.gold ?? 0) + (amount ?? g.count);
+        for (const g of e.takes ?? []) if (g.item === name) e.gold = (e.gold ?? 0) - (amount ?? g.count);
+      }
+      drop(name);
+    };
     for (const name of names) {
       if (this.notThings.has(name)) {
         drop(name);
         continue;
       }
+      if (this.gold.has(name)) {
+        pay(name, this.gold.get(name));
+        continue;
+      }
       let kind: BeatItem['kind'] = 'misc';
       try {
-        const a = await this.ai.ask(READ_RULES, `The quest:\n<quest>\n${text.trim()}\n</quest>\n\nWhat kind of thing is “${name}”, handed to or taken from the player?`, z.object({ kind: z.enum([...ITEM_KINDS, 'not a thing']).describe('"not a thing" when it is not something the player can carry (a job, a promise, a favour)') }), 60);
+        const a = await this.ai.ask(READ_RULES, `The quest:\n<quest>\n${text.trim()}\n</quest>\n\nWhat kind of thing is “${name}”, handed to or taken from the player?`, z.object({ kind: z.enum([...ITEM_KINDS, 'gold or money', 'not a thing']).describe('"not a thing" when it is not something the player can carry (a job, a promise, a favour)') }), 60);
+        if (a.kind === 'gold or money') {
+          this.gold.set(name, Number(/\d+/.exec(name)?.[0]) || 0);
+          pay(name, this.gold.get(name) || undefined);
+          continue;
+        }
         if (a.kind === 'not a thing') {
           // Handed over in words only: no item.
           this.notThings.add(name);

@@ -325,7 +325,11 @@ export function checkBeats(sheet: BeatSheet, opts: { earlierChoices?: string[]; 
     if (g.hidden && !sheet.beats.some((b) => (b.effects?.appears ?? []).includes(g.key))) ask(g.key, `The ${g.what} are hidden until something shows them, but no beat does: which beat makes them appear?`);
   }
   const start = sheet.start;
-  if (start.kind !== 'game' && start.kind !== 'afterQuest' && !kinds.has(start.target)) ask('start', `The quest starts when the player does something to “${start.target}”, which isn't in the sheet.`);
+  if (start.kind !== 'game' && start.kind !== 'afterQuest') {
+    if (!kinds.has(start.target)) ask('start', `The quest starts when the player does something to “${start.target}”, which isn't in the sheet.`);
+    else if (!(start.kind === 'arrive' ? is(start.target, 'place') : start.kind === 'use' ? is(start.target, 'item') || is(start.target, 'person') : is(start.target, 'item')))
+      ask('start', `The quest starts when the player does “${start.kind}” to “${start.target}”, which is ${an(kinds.get(start.target)!)}: ${start.kind === 'arrive' ? 'a place' : 'an item'} is needed.`);
+  }
 
   // Dialogue: every talk beat is said somewhere; links point at real beats and lines; conditions at real things.
   const remembered = new Set(
