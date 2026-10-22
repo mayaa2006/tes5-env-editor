@@ -329,10 +329,11 @@ export class BeatReader {
     // Two rounds: an answer can bring up the next question (which beat ends the quest, then what leads nowhere).
     const asked = new Set<string>();
     for (let round = 0; round < 2; round++) {
-      const fresh = questions.filter((q) => !q.unsaid && !asked.has(q.message));
+      // (The same words about another beat are another question: two beats picking up the same item.)
+      const fresh = questions.filter((q) => !q.unsaid && !asked.has(`${q.about}: ${q.message}`));
       if (!fresh.length) break;
       step(`checking ${fresh.length} thing(s) that don't fit together yet`);
-      for (const q of fresh) asked.add(q.message);
+      for (const q of fresh) asked.add(`${q.about}: ${q.message}`);
       await this.reask(sheet, fresh, text, blocks, opts);
       await happenings();
       questions = checkBeats(sheet, { blocks, earlierChoices: earlierChoices(opts) });
