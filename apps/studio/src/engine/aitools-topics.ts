@@ -21,7 +21,7 @@ export const TOOL_TOPICS: Record<string, { about: string; words: RegExp; tools: 
   plans: {
     about: 'planning a whole quest from a description, or reworking one through a plan',
     words: /\b(plan\w*|ideas?|story|questline|rework|rewrite the quest|from (my|this) (text|writing|idea|description))\b/i,
-    tools: ['plan_quest', 'revise_plan', 'show_plan', 'edit_plan', 'build_plan', 'quest_as_plan', 'update_quest_from_plan'],
+    tools: ['plan_quest', 'revise_plan', 'show_plan', 'edit_plan', 'build_plan', 'build_questline', 'quest_as_plan', 'update_quest_from_plan'],
   },
   characters: {
     about: 'new characters, changing characters, routines',
@@ -67,11 +67,15 @@ export const TOOL_TOPICS: Record<string, { about: string; words: RegExp; tools: 
 
 /** "Make a quest: …", "write me a new quest where…", "a quest about…": a whole new quest, not a change to one. */
 const NEW_QUEST =
-  /\b(make|create|write|build|design|generate|come up with|give me|i want|i need|i'd like)\s+(me\s+)?(a|an|another|one|some|two|three|\d+)\s+(\S+\s+){0,3}?quests?\b(?!\s+(stages?|objectives?|journal|alias\w*|scripts?|items?|markers?|dialogue|lines?|map)\b)|\bnew quests?\b(?!\s+(stages?|objectives?))|^\s*quests?\s*:|\bquest (idea|where|about|in which)\b/i;
+  /\b(make|create|write|build|design|generate|come up with|give me|i want|i need|i'd like)\s+(me\s+)?(a|an|another|one|some|two|three|\d+)\s+(\S+\s+){0,3}?(quests?|questlines?)\b(?!\s+(stages?|objectives?|journal|alias\w*|scripts?|items?|markers?|dialogue|lines?|map)\b)|\bnew (quests?|questlines?)\b(?!\s+(stages?|objectives?))|^\s*(quests?|questlines?)\s*:|\bquest (idea|where|about|in which)\b/i;
 
+/** Whether a message asks for a new quest, or is a questline written out (a heading for each quest). */
 export function asksForNewQuest(text: string): boolean {
-  return NEW_QUEST.test(text);
+  return NEW_QUEST.test(text) || (/\b(quest|questline|build|make|plan)\b/i.test(text) && QUESTLINE_HEADINGS.test(text));
 }
+
+/** Two or more "Quest 1: …" style headings: a questline pasted in. */
+const QUESTLINE_HEADINGS = /^\s*(?:#{1,4}\s*)?(?:quest|part|chapter)\s+(?:\d+|one|two|[ivx]+)\b[^\n]*\n[\s\S]*^\s*(?:#{1,4}\s*)?(?:quest|part|chapter)\s+(?:\d+|two|three|[ivx]+)\b/im;
 
 /** The tools to show a free AI for this message, and the rest by topic. */
 export function offerTools(all: AgentTool[], session: AgentSession, text: string, context?: string): ToolOffer {

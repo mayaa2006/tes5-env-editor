@@ -20,11 +20,12 @@ import type { FormKey } from '@tes5/esp';
 import { GESTURES } from './gestures';
 import { z } from 'zod';
 import type { JournalContext, JournalDraft } from './journal';
-import { PLAN_EVENT_KINDS, QuestPlanSchema, keepAskedChanges, normalizePlan, repairPlan, stagesSaid, validatePlan, type PlanIssue, type QuestPlan } from './questplan';
+import { PLAN_EVENT_KINDS, QuestPlanSchema, keepAskedChanges, mendStages, normalizePlan, repairPlan, stagesSaid, validatePlan, type PlanIssue, type QuestPlan } from './questplan';
 import { lintScreenplay } from './dialoguelint';
 import { aiName, chatSend, type AiProvider } from './aiproviders';
 import { WorldService } from './world';
 import { pickPlanExample } from './demo/example-plan';
+import { applyAnnotation, blocksFor, describeBlocks, directionTags, findDialogue, readableIf, similarity, writtenScreenplay, type DialogueAnnotation, type WrittenBlock } from './written';
 
 export const PLANNER_MODEL = 'claude-opus-5-5';
 
@@ -46,6 +47,7 @@ How to plan:
 - Prefer characters, places and items that already exist in the load order (listed below) when the author names them or clearly means them; set "existing" to their Editor ID. Otherwise set "existing" to null and a new one is created.
 - Keys are short lowercase identifiers ("brynja", "cellar", "ring") used to refer to entries inside the plan. Every key is unique across characters, locations and items.
 - A new place (existing null) is a new interior. Set layoutLike to the Editor ID of an interior from the list below that fits it (an inn for an inn, a house for a home, a cave or ruin for a hideout): its rooms, furniture, lights and clutter are copied, so it's ready to use. Set doorFrom to where the player walks in from (a location key, an existing interior, or one of the outdoor places listed, e.g. a farm's exterior for a new farmhouse), and a linked door is added there.
+- Outdoors: when the text puts someone or something outside (a camp, a road, by a river, standing stones, a ruin's entrance), add a location with existing set to one of the outdoor places listed below (an outdoor cell's Editor ID) and say where in it with spot ("by the campfire", "by the Warrior Stone"). Characters, enemy groups and items can all be outdoors, and an arrive step on that location means the player comes near them.
 - New characters need a location to stand in (a location key); characters that already exist stay where they are (locationKey null).
 - Characters can be changed as well as used. When the author says a character (new or existing) wears something, carries something, belongs to a group, has a class or level, can or can't die, or looks a certain way, put it in outfit, inventory, factions, className, level, essential and look. For existing characters, only fill in what the text asks to change and leave the rest null or empty. "Save it as an outfit" means outfit.saveAs gets an Editor ID.
 - Describe every new character's look (build, height, hair, hair colour, facial hair, eyes, scars) from the text, choosing what fits their role when the text says nothing; for a new character that is "like" someone existing, set basedOn.
@@ -59,11 +61,13 @@ How to plan:
 - Journal entries are written in the past tense from the player's point of view, like Skyrim's ("Brynja asked me to find her stolen ring."). Write one for every stage the player should notice; the final stage gets a closing entry.
 - Objectives are short instructions ("Find Brynja's ring", "Return the ring to Brynja"). Show each at the stage where it starts and complete it at the stage where it's done. Point the marker (targetKey) at the character, item or location involved.
 - Steps say what moves the quest from one stage to the next: talk (a line in a conversation, see below), pickup/read/equip/drop/activate (an item key), death/activate (a character key), arrive (a location key), or script (immediately after the "from" stage).
-- Items the player must pick up, read or activate must start in a location (startsWith "location"), so the game can tell when it happens. Items handed over in dialogue use the [gives …] and [takes …] tags instead.
+- Items the player must pick up, read or activate must start in a location (startsWith "location"), so the game can tell when it happens. Items handed over in dialogue use the [gives …] and [takes …] tags instead. An item a character carries that the player can take from them (pickpocket, loot) starts with that character and a pickup step still works.
+- A book, note, letter or notice gets what it says in "text", copied word for word from the author. Several of one thing ("three torn pages") is one item with copies 3 and one spot per copy separated by ";", and a pickup step with count 3. Something inside a locked container (a strongbox) names the key that opens it in lockedWith.
+- "Come back tomorrow" or "a day later" is a wait step (hours 24) from the stage where it's said.
 - Rewards are gold, items and/or training in a skill (skill and how many levels, e.g. someone teaching the player Archery) given at a stage (usually the final one).
 - Endings: when the player's choices lead to different outcomes, give each outcome its own stage with completesQuest true, its own closing journal entry and its own rewards; the conversation line that decides it sets that stage.
 - Failure: when the quest can be lost, add a stage with failsQuest true and a journal entry saying what went wrong, and add a failure: "death" if it fails when a character dies (targetKey), "timeLimit" if it must be done within some in-game days (days, fromStage where the clock starts). At most one time limit.
-- Events are what happens in the world when a stage is reached, outside dialogue: enemies appear (spawn, with an enemy type like "bandit" or "draugr" and how many), a character turns on the player or calms down (hostile / friendly), a door or chest unlocks or locks, something appears or vanishes (show / hide; shown things start hidden), someone moves somewhere (moveTo), someone dies (kill), the screen fades to black and back (fade, e.g. for time passing or being knocked out; moves at the same stage happen in the dark), a sound plays, the weather changes, a message shows, another quest starts (startQuest, for questlines), or the player is moved (movePlayer). Add one wherever the text says something happens ("bandits ambush you", "the door unlocks", "he draws his sword"). Pair a hostile character or spawned enemies with a death step when killing them moves the quest on.
+- Events are what happens in the world when a stage is reached, outside dialogue: enemies appear (spawn, with an enemy type like "bandit" or "draugr" and how many), a character turns on the player or calms down (hostile / friendly), a door or chest unlocks or locks, something appears or vanishes (show / hide; shown things start hidden), someone moves somewhere (moveTo), someone dies (kill), the screen fades to black and back (fade, e.g. for time passing or being knocked out; moves at the same stage happen in the dark), a sound plays, the weather changes, a message shows, another quest starts (startQuest, for questlines), or the player is moved (movePlayer). Add one wherever the text says something happens ("bandits ambush you", "the door unlocks", "he draws his sword"). Pair a hostile character or spawned enemies with a death step when killing them moves the quest on. For an ambush the quest waits on, add an encounter and a show event on its key at the stage the enemies appear (they stay hidden until then), and a clear step for killing them all.
 - Set startsWithGame true when the quest begins by talking to someone (their opening dialogue only appears while the quest runs).
 - When the quest begins some other way, set startsWithGame false and say what starts it in startsWhen: the player entering a place ("arrive", a location key), reading a note or book ("read", an item key; the item must start in a location), picking something up ("pickup"), using something ("activate"), or another quest reaching a stage ("afterQuest", that quest's Editor ID, and the stage or null for its end). Use afterQuest for questlines: part two starts when part one ends. A quest that begins with talking to someone keeps startsWithGame true and startsWhen null.
 
@@ -79,9 +83,9 @@ PLAYER: I found your ring. [if stage 20]
 BRYNJA: My ring! Here, take this. [takes ring x1] [gives gold x100] [stage 100] [goodbye]
 
 Speaker names are character keys in capitals (BRYNJA for the key "brynja"); the player is PLAYER.
-Tags at the end of a line: [stage N] sets stage N once the line is said; [if stage N] only offers the line at stage N; [goodbye] ends the conversation; [emotion happy|sad|angry|fear|surprise|disgust|puzzled] sets the delivery; [gives KEY xN] / [takes KEY xN] move an item between the speaker and the player (KEY is an item key, or gold); [gesture NAME] makes the speaker play an animation as they say the line; [skill NAME xN] trains the player's skill by N levels (e.g. [skill Archery x1] when someone teaches the player).
+Tags at the end of a line: [stage N] sets stage N once the line is said; [if stage N] only offers the line at stage N; [goodbye] ends the conversation; [emotion happy|sad|angry|fear|surprise|disgust|puzzled] sets the delivery; [gives KEY xN] / [takes KEY xN] move an item between the speaker and the player (KEY is an item key, or gold); [gesture NAME] makes the speaker play an animation as they say the line; [skill NAME xN] trains the player's skill by N levels (e.g. [skill Archery x1] when someone teaches the player); [attacks] makes the speaker attack the player when the line ends; [leaves] makes the speaker leave for good (a bribed guard walking away).
 Gestures: ${GESTURES.map((g) => `${g.id} (${g.label.toLowerCase()})`).join(', ')}. Use them where a stage direction or the action calls for one (a wave in greeting, pointing the way, laughing, applause); don't put one on every line. For a character reacting when the quest reaches a stage outside dialogue, add it to "animations".
-Choices the quest remembers: [remember NAME] on a line stores a choice (e.g. [remember spared] when the player spares someone), [forget NAME] clears it, and [if chose NAME] / [if not chose NAME] only offers a line when the choice was (not) made. Use them for later lines that react to what the player did. More tags: [once] says a line only once; [persuade N] on a player line makes the first answer under it the success of a Speech check (Speech N) and the next answer the failure. Conditions in plain words: [if stage N] (also >=, <), [if done N] (stage N has been reached), [if has KEY xN], [if gold N], [if speech N], [if level N], [if female], [if male], [if race Nord], [if quest EditorID done]; several [if] tags on one line must all be true.
+Choices the quest remembers: [remember NAME] on a line stores a choice (e.g. [remember spared] when the player spares someone), [forget NAME] clears it, and [if chose NAME] / [if not chose NAME] only offers a line when the choice was (not) made. Use them for later lines that react to what the player did. More tags: [once] says a line only once; [persuade N] on a player line makes the first answer under it the success of a Speech check (Speech N) and the next answer the failure. Conditions in plain words: [if stage N] (also >=, <), [if done N] (stage N has been reached), [if has KEY xN], [if gold N], [if speech N], [if level N], [if female], [if male], [if race Nord], [if night], [if day], [if time 20-4], [if quest EditorID done], [if quest EditorID done N] (another quest reached stage N); several [if] tags on one line must all be true. A choice remembered in an earlier quest of a questline can be checked later with [if chose NAME].
 Lines nobody prompts go in blocks: "GREETING:" then NPC lines said when the player comes up to them (put [if …] on the GREETING: line to apply to all), "IDLE:" then things they say to themselves, and "SCENE: name [at stage N]" then lines characters say to each other in order (use [start] instead of [at stage N] to play it when the quest starts). Use greetings to make characters react to how the quest is going ("Any luck with the ring?").
 Put [if stage N] on lines that only make sense at one point of the quest, so they don't show up at the wrong time. When a conversation moves the quest on, add a talk step with the same "to" stage.`;
 
@@ -100,6 +104,9 @@ const CHECKLIST = `Before you answer, check the plan:
 7. Items the player picks up or reads have startsWith "location" and a location key in startsAtKey. Items handed over in dialogue are carried by the speaker (startsWith "character").
 8. Starting: talking to someone → startsWithGame true and startsWhen null; anything else → startsWithGame false and startsWhen filled in.
 9. Every field is there. Use null or [] where nothing applies, numbers without quotes, true/false without quotes.`;
+
+/** The checklist for a document whose conversations are written out: the dialogue points are about talk steps instead. */
+const WRITTEN_CHECKLIST = CHECKLIST.replace(/\n5\. [^\n]*\n6\. [^\n]*/, '\n5. Each thing a written conversation does (taking the job, agreeing to go, an ending) is a talk step to the stage it moves the quest to, with a note naming who and what. "conversations" holds only lines the author didn\'t write out, or nothing.').replace(/\n7\./, '\n6.').replace(/\n8\./, '\n7.').replace(/\n9\./, '\n8.');
 
 /** The plan's keys and stage numbers, to fix references against. */
 function planIndex(plan: QuestPlan): string {
@@ -174,7 +181,10 @@ export function newWhenRenamed(ws: Workspace, plan: QuestPlan, text: string): st
     const theirs = entryWords(npc.name, npc.editorId);
     const unique = ((ws.view(key!)?.data as { config?: { flags?: number } } | undefined)?.config?.flags ?? 0) & 0x20;
     const named = !!npc.name && new RegExp(`\\b${npc.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(text); // as a name: "Hulda", not "a farmer"
-    if (entryWords(c.name).some((w) => theirs.includes(w)) || (unique && named)) continue;
+    // …unless the character has a name of their own in the text ("Hesta Coldwater" planned as Gerda, whom the text
+    // names as someone else).
+    const ownName = /^[A-Z]/.test(c.name ?? '') && new RegExp(`\\b${(c.name ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(text);
+    if (entryWords(c.name).some((w) => theirs.includes(w)) || (unique && named && !ownName)) continue;
     out.push(`${c.name} is a new character, copied from ${npc.name ?? npc.editorId} (${npc.editorId ?? key})`);
     c.basedOn = c.existing;
     c.existing = null;
@@ -235,18 +245,27 @@ export function planCatalog(ws: Workspace, opts: { limit?: number; text?: string
   const cells = rank(all.filter((c) => c.interior && c.name))
     .slice(0, limit)
     .map((c) => `${c.editorId ?? c.formKey} "${c.name}"`);
-  // Outdoor cells have no names, only Editor IDs (PelagiaFarmExterior, RiverwoodEdge01): the ones the text is about,
-  // for the outside door of a new interior ("a farmhouse outside Whiterun").
+  // Outdoor cells have no names, only Editor IDs (PelagiaFarmExterior, RiverwoodEdge01) and the place they belong to
+  // ("Riverwood"): the ones the text is about, for people, enemies and items outside, and the outside door of a new
+  // interior ("a farmhouse outside Whiterun").
+  const placeName = (cell: FormKey) => {
+    const loc = (ws.view(cell)?.data as { location?: FormKey } | undefined)?.location;
+    return loc ? ws.summary(loc)?.name : undefined;
+  };
   const outside = text
-    ? rank(all.filter((c) => !c.interior && c.editorId && !/^test/i.test(c.editorId)))
+    ? rank(all.filter((c) => !c.interior && c.editorId && !/^test/i.test(c.editorId)).map((c) => ({ ...c, name: placeName(c.formKey) })))
         .filter((c) => c.score > 0)
-        .slice(0, 20)
-        .map((c) => c.editorId!)
+        .slice(0, 24)
+        .map((c) => (c.name && c.name.replace(/\s+/g, '') !== c.editorId ? `${c.editorId!} (${c.name})` : c.editorId!))
     : [];
+  // Places on the world map the text names ("the Guardian Stones"): outdoors, found by their map marker.
+  const lower = (text ?? '').toLowerCase();
+  const marked = text ? [...new Set(world.mapMarkers().map((m) => m.name))].filter((n) => n.length > 3 && lower.includes(n.toLowerCase().replace(/^the\s+/, ''))).slice(0, 12) : [];
+  if (marked.length) outside.push(...marked.map((n) => `"${n}" (a place on the map: give this name as existing)`));
   return [
     `Characters (Editor ID "Name"${text ? ', with details for the ones your text seems to mention' : ''}):\n${list(['NPC_'], undefined, true, limit)}`,
     `Interior locations:\n${cells.join('\n') || '(none)'}`,
-    ...(outside.length ? [`Outdoor places (Editor IDs, for doorFrom: where a new interior's door goes outside):\n${outside.join('\n')}`] : []),
+    ...(outside.length ? [`Outdoor places (Editor IDs of outdoor cells, with the place they're part of: for a location outside, and for doorFrom, where a new interior's door goes):\n${outside.join('\n')}`] : []),
     `Voice types:\n${list(['VTYP'], (_, e) => !!e, false, limit)}`,
     `Races:\n${list(['RACE'])}`,
     `Classes:\n${list(['CLAS'])}`,
@@ -263,8 +282,15 @@ export class QuestPlanner {
   /** What to call the AI in messages. */
   readonly name: string;
 
-  /** `signal`: Stop in the AI tab ends a plan that's still being written (with the built-in AI that can take minutes). */
-  constructor(opts: { apiKey?: string; ai?: AiProvider; send?: PlannerSend; model?: string; signal?: AbortSignal } = {}) {
+  /** Told what the planner is doing, for a progress message ("tagging Hesta's lines"). */
+  private readonly onStep?: (what: string) => void;
+
+  /**
+   * `signal`: Stop in the AI tab ends a plan that's still being written (with the built-in AI that can take minutes).
+   * `onStep` hears what it's doing at each step.
+   */
+  constructor(opts: { apiKey?: string; ai?: AiProvider; send?: PlannerSend; model?: string; signal?: AbortSignal; onStep?: (what: string) => void } = {}) {
+    this.onStep = opts.onStep;
     const ai: AiProvider | undefined = opts.ai ?? (opts.apiKey ? { kind: 'claude', apiKey: opts.apiKey } : undefined);
     this.name = aiName(ai);
     const signal = opts.signal;
@@ -331,13 +357,199 @@ export class QuestPlanner {
     };
   }
 
-  /** Plan a quest from a design document or a conversation. */
-  async plan(source: string, mode: PlannerMode, catalog: string): Promise<QuestPlan> {
+  /**
+   * Plan a quest from a design document or a conversation. `context` says what the quest is part of (a questline's
+   * earlier quests, whose characters, places and choices it can use).
+   */
+  async plan(source: string, mode: PlannerMode, catalog: string, opts: { context?: string } = {}): Promise<QuestPlan> {
     if (!source.trim()) throw new WorkspaceError('Write or paste something to plan from');
-    const params = this.request([{ role: 'user', content: `${MODES[mode]}\n\n<source>\n${source.trim()}\n</source>${this.free ? `\n\n${CHECKLIST}` : ''}` }], catalog, source);
-    const plan = await this.fixLogic(params, await this.run<QuestPlan>(params));
+    // Conversations the author wrote out are kept word for word: the AI plans around them and only adds their tags.
+    const written = mode === 'document' ? findDialogue(source).blocks : [];
+    if (written.length) return this.planWritten(source, catalog, written, opts.context ?? '');
+    const params = this.request([{ role: 'user', content: `${MODES[mode]}${opts.context ? `\n\n${opts.context}` : ''}\n\n<source>\n${source.trim()}\n</source>${this.free ? `\n\n${CHECKLIST}` : ''}` }], catalog, source);
+    const first = await this.run<QuestPlan>(params);
+    const mended = mendStages(first);
+    if (mended.length) first.assumptions = [...(first.assumptions ?? []), ...mended.map((x) => x[0]!.toUpperCase() + x.slice(1))];
+    const plan = await this.fixLogic(params, first);
     // Smaller models write better in small pieces: each conversation, then the journal, gets its own request.
     return this.free ? this.polish(plan, source) : plan;
+  }
+
+  /**
+   * A document with its conversations written out: the plan comes first (without them), then each character's
+   * conversations go in word for word, with the tags the AI reads from the author's directions; what still leaves the
+   * quest stuck gets one more round, and (free AIs) missing exchanges and journal entries are written.
+   */
+  private async planWritten(source: string, catalog: string, blocks: WrittenBlock[], context: string): Promise<QuestPlan> {
+    // The conversations go in as an outline (choices and directions): the AI plans around them without copying them.
+    const params = this.request([{ role: 'user', content: `${MODES.document}${context ? `\n\n${context}` : ''}\n\n<source>\n${findDialogue(source).prose.trim()}\n</source>\n\n${WRITTEN_NOTE}${this.free ? `\n\n${WRITTEN_CHECKLIST}` : ''}` }], catalog, source);
+    this.onStep?.('planning the stages, characters and places');
+    let plan = normalizePlan(await this.run<QuestPlan>(params));
+    addSpeakers(plan, blocks, catalog);
+    await this.addWrittenDialogue(plan, blocks, context);
+    // Stages a talk step says a conversation reaches, that no line reaches yet: ask which lines do it.
+    const unsaid = plan.steps.filter((st) => st.kind === 'talk' && !stagesSaid(plan).has(st.to));
+    if (unsaid.length) await this.addWrittenDialogue(plan, blocks, context, unsaid);
+    // Stages the plan ran together (talking, then doing; doing, then reporting back) and gold paid twice, now the lines are in.
+    const mended = mendStages(plan);
+    if (mended.length) plan.assumptions = [...(plan.assumptions ?? []), ...mended.map((x) => x[0]!.toUpperCase() + x.slice(1))];
+    const blocking = blockingIssues(validatePlan(plan));
+    if (blocking.length) this.onStep?.(`fixing what would leave the quest stuck (${blocking[0]!.message}${blocking.length > 1 ? `, and ${blocking.length - 1} more` : ''})`);
+    // A free AI fixes only the stages, steps and objectives (a few hundred words, not the whole plan again).
+    plan = this.free ? await this.fixSteps(plan) : await this.fixLogic(params, plan, true);
+    if (this.free) {
+      this.onStep?.('filling gaps in the dialogue and journal');
+      const brief = planBrief(plan, source);
+      const stages = plan.stages.map((x) => x.index);
+      const speakers = plan.characters.flatMap((c) => [c.key, c.name, ...(c.existing ? [c.existing] : [])]);
+      await this.writeMissingLines(plan, brief, (text) => lintScreenplay(text, { stages, speakers }).filter((l) => l.severity === 'error').length);
+      await this.writeJournal2(plan, brief);
+      // Lines it wrote that repeat the author's own are taken out again; a stage one of them sets that nothing else
+      // does goes on the author's line it repeats.
+      const authorLines = blocks.flatMap((b) => b.lines.map((l) => l.text));
+      const adopted = adoptStages(plan, authorLines);
+      if (adopted.length) plan.assumptions = [...(plan.assumptions ?? []), ...adopted];
+      plan.conversations = plan.conversations.map((c) => (c.title.startsWith('✎ ') ? c : { ...c, screenplay: withoutAuthorLines(c.screenplay, authorLines) })).filter((c) => c.screenplay.trim());
+    }
+    return plan;
+  }
+
+  /**
+   * The author's conversations into the plan, one character at a time: the AI says which tags go on which numbered
+   * lines (never the words), the tags are checked against the plan, and the lines go in as a screenplay. Lines the AI
+   * wrote itself that repeat the author's are taken out of its own conversations. With `stuck`, only those stages are
+   * asked about (which lines move the quest there), on top of the tags already in.
+   */
+  async addWrittenDialogue(plan: QuestPlan, all: WrittenBlock[], context = '', stuck: QuestPlan['steps'] = []): Promise<void> {
+    const speakers = [...new Set(all.map((b) => b.speaker.toLowerCase()))];
+    const authorLines = all.flatMap((b) => b.lines.map((l) => l.text));
+    const notes: string[] = [];
+    const made: QuestPlan['conversations'] = [];
+    for (const speaker of speakers) {
+      const blocks = blocksFor(all, speaker);
+      const who = characterFor(plan, speaker);
+      const title = who?.name ?? blocks[0]!.speaker;
+      // Only someone whose lines carry directions can be what moves the quest on.
+      const focus = stuck.length && blocks.some((b) => b.lines.some((l) => l.notes.length)) ? stuck : [];
+      if (stuck.length && !focus.length) continue;
+      this.onStep?.(stuck.length ? `finding which of ${title}'s lines move the quest on` : `tagging ${title}'s lines (${blocks.reduce((n, b) => n + b.lines.length, 0)} of them)`);
+      try {
+        const a = await this.annotate(plan, blocks, context, focus);
+        notes.push(...checkAnnotation(plan, a, title));
+        applyAnnotation(blocks, a);
+      } catch {
+        notes.push(`The directions in ${title}'s conversations weren't turned into tags (the AI's answer didn't come back right): check what their lines do`);
+      }
+      // What the directions say outright, where the AI said nothing.
+      const earlier = [...context.matchAll(/choices it remembers: ([^;]+);/g)].flatMap((m) => m[1]!.split(/,\s*/)).filter((c) => c && c !== 'none');
+      notes.push(...directionTags(blocks, plan, earlier).map((t) => `From your direction: ${t}`));
+      notes.push(...followDirections(plan, blocks).map((t) => `From your direction: ${t}`));
+      made.push({ title, screenplay: writtenScreenplay(structuredClone(blocks)) });
+    }
+    if (stuck.length && !made.length) return;
+    // The AI's own conversations keep only what the author didn't write.
+    const own = plan.conversations.filter((c) => !c.title.startsWith('✎ ')).map((c) => ({ ...c, screenplay: withoutAuthorLines(c.screenplay, authorLines) })).filter((c) => c.screenplay.trim());
+    const kept = stuck.length ? plan.conversations.filter((c) => c.title.startsWith('✎ ') && !made.some((m) => `✎ ${m.title}` === c.title)) : [];
+    plan.conversations = [...kept, ...made.map((m) => ({ title: `✎ ${m.title}`, screenplay: m.screenplay })), ...own];
+    const note = 'Kept word for word from your text: ';
+    plan.assumptions = [...(plan.assumptions ?? []).filter((x) => !x.startsWith(note) && !notes.includes(x)), `${note}${authorLines.length} lines in ${made.length} conversation(s) (marked ✎)`, ...new Set(notes)];
+  }
+
+  /** The tags for one character's written conversations, as the AI reads the author's directions. */
+  private async annotate(plan: QuestPlan, blocks: WrittenBlock[], context: string, stuck: QuestPlan['steps']): Promise<DialogueAnnotation> {
+    const ask = stuck.length
+      ? `Nothing moves the quest to ${stuck.map((st) => `stage ${st.to} (${st.note})`).join(', ')} yet. Which of these lines do it? Give just those lines, with [stage N].`
+      : 'Give the tags for these blocks and lines.';
+    return this.run(
+      {
+        model: this.model,
+        max_tokens: 4000,
+        output_config: { effort: 'medium', format: betaZodOutputFormat(AnnotationSchema) },
+        system: [{ type: 'text', text: `${ANNOTATE_RULES}\n\n${TAG_REFERENCE}` }],
+        messages: [{ role: 'user', content: `${annotateBrief(plan)}${context ? `\n${context}` : ''}\n\nThe author's dialogue:\n\n${describeBlocks(blocks)}\n\n${ask}` }],
+      },
+      AnnotationAnswer as unknown as z.ZodType<DialogueAnnotation>,
+    );
+  }
+
+  /**
+   * One small question to the AI, answered in a given shape (checked, with one chance to fix it). The beat reader
+   * (beatreader.ts) asks all its questions through this.
+   */
+  async ask<T>(system: string, user: string, schema: z.ZodType<T>, maxTokens = 2000): Promise<T> {
+    return this.run(
+      { model: this.model, max_tokens: maxTokens, output_config: { effort: 'low', format: betaZodOutputFormat(schema as never) }, system: [{ type: 'text', text: system }], messages: [{ role: 'user', content: user }] },
+      schema,
+    );
+  }
+
+  /** Whether this is a free AI (smaller, slower): the reader then asks smaller questions. */
+  get isFree(): boolean {
+    return this.free;
+  }
+
+  /** For free AIs: journal entries and objectives for stages that have none (the author's own are kept). */
+  private async writeJournal2(plan: QuestPlan, brief: string): Promise<void> {
+    const empty = plan.stages.filter((st) => !st.journal.trim() && !st.startsQuest);
+    if (!empty.length) return;
+    try {
+      const draft = await this.run(
+        {
+          model: this.model,
+          max_tokens: 3000,
+          output_config: { effort: 'medium', format: betaZodOutputFormat(JournalDraftSchema) },
+          system: [{ type: 'text', text: JOURNAL_RULES }],
+          messages: [{ role: 'user', content: `${brief}\n\nWrite the journal entry for stages ${empty.map((x) => x.index).join(', ')} only (the others are written). Objectives: return the ones listed, unchanged.\nObjectives now: ${JSON.stringify(plan.objectives.map((o) => ({ index: o.index, text: o.text, shownAtStage: o.shownAtStage, completedAtStage: o.completedAtStage })))}` }],
+        },
+        JournalDraftSchema,
+      );
+      for (const st of empty) {
+        const j = draft.stages.find((d) => d.index === st.index)?.journal.trim();
+        if (j) st.journal = j;
+      }
+    } catch {
+      // Left empty; the review shows it.
+    }
+  }
+
+  /**
+   * For free AIs: what would leave the quest stuck, fixed in the quest's stages, steps and objectives only (the rest of
+   * the plan and the dialogue stay as they are), then mended again. Kept only when it leaves fewer problems.
+   */
+  private async fixSteps(plan: QuestPlan): Promise<QuestPlan> {
+    const problems = blockingIssues(validatePlan(plan));
+    if (!problems.length) return plan;
+    const said = [...stagesSaid(plan)].sort((a, b) => a - b);
+    const lines = plan.conversations.flatMap((c) =>
+      c.screenplay
+        .split(/\r?\n/)
+        .filter((l) => /\[(stage|if stage|if\s+\d)/i.test(l))
+        .map((l) => `${c.title.replace(/^✎\s*/, '')}: ${l.trim().slice(0, 140)}`),
+    );
+    try {
+      const fixed = await this.run(
+        {
+          model: this.model,
+          max_tokens: 4000,
+          output_config: { effort: 'medium', format: betaZodOutputFormat(StepsFixSchema) },
+          system: [{ type: 'text', text: STEPS_FIX_RULES }],
+          messages: [
+            {
+              role: 'user',
+              content: `${planBrief(plan, '')}\n\nThe lines of dialogue that check or set a stage:\n${lines.join('\n') || '(none)'}\n\nStages the dialogue sets: ${said.join(', ') || 'none'}. Keep those numbers.\n\nWhat would leave the quest stuck:\n${problems.map((p) => `- ${p.message}`).join('\n')}\n\n${planIndex(plan)}\n\nNow: ${JSON.stringify({ stages: plan.stages, steps: plan.steps, objectives: plan.objectives })}\n\nReturn the corrected stages, steps and objectives.`,
+            },
+          ],
+        },
+        StepsFixSchema,
+      );
+      const next = structuredClone(plan);
+      Object.assign(next, { stages: fixed.stages, steps: fixed.steps, objectives: fixed.objectives });
+      repairPlan(normalizePlan(next));
+      mendStages(next);
+      return blockingIssues(validatePlan(next)).length < problems.length ? next : plan;
+    } catch {
+      return plan;
+    }
   }
 
   /**
@@ -345,18 +557,25 @@ export class QuestPlanner {
    * a key that isn't in the plan…), with the problems listed. The better of
    * the two plans is kept, so a worse answer never replaces a good one.
    */
-  private async fixLogic(params: BetaMessageStreamParams, plan: QuestPlan): Promise<QuestPlan> {
+  private async fixLogic(params: BetaMessageStreamParams, plan: QuestPlan, keepConversations = false): Promise<QuestPlan> {
     const problems = blockingIssues(validatePlan(plan));
     if (!problems.length) return plan;
+    // The author's conversations (✎) stay as they are: the AI sees and fixes the rest.
+    const theirs = keepConversations ? plan.conversations.filter((c) => c.title.startsWith('✎ ')) : [];
+    const shown = keepConversations ? { ...plan, conversations: plan.conversations.filter((c) => !theirs.includes(c)) } : plan;
     try {
       const fixed = await this.run<QuestPlan>({
         ...params,
         messages: [
           ...params.messages,
-          { role: 'assistant', content: JSON.stringify(plan) },
-          { role: 'user', content: `The plan has these problems, which would stop the quest working:\n${problems.map((p) => `- ${p.message}`).join('\n')}\n\n${planIndex(plan)}\n\nFix them, keep everything else as it is, and return the whole corrected plan.` },
+          { role: 'assistant', content: JSON.stringify(shown) },
+          {
+            role: 'user',
+            content: `The plan has these problems, which would stop the quest working:\n${problems.map((p) => `- ${p.message}`).join('\n')}\n\n${planIndex(plan)}\n\n${theirs.length ? "The author's written conversations are kept separately and aren't shown; fix the rest. " : ''}Fix them, keep everything else as it is, and return the whole corrected plan.`,
+          },
         ],
       });
+      if (keepConversations) fixed.conversations = [...theirs, ...fixed.conversations.filter((c) => !c.title.startsWith('✎ '))];
       return blockingIssues(validatePlan(fixed)).length < problems.length ? fixed : plan;
     } catch {
       return plan;
@@ -561,6 +780,205 @@ export class QuestPlanner {
 
 const ScreenplaySchema = z.object({ screenplay: z.string().describe('The whole conversation in screenplay format') });
 
+const AnnotationSchema = z.object({
+  blocks: z.array(z.object({ block: z.number().int(), tags: z.string().describe('Tags for every line of the block, e.g. "[if stage 10]"; for a scene "[at stage 100]"') })).describe('Blocks that need tags'),
+  lines: z
+    .array(z.object({ line: z.number().int(), words: z.string().describe('The first three words of that line, as written'), tags: z.string().describe('Tags for the line, e.g. "[stage 10] [remember promised]"; two ways of saying it are separated by |') }))
+    .describe('Only the lines that need tags'),
+});
+/** The same, as it's read back: an answer without the words is still used, by number. */
+const AnnotationAnswer = AnnotationSchema.extend({ lines: z.array(z.object({ line: z.number().int(), words: z.string().nullable().optional(), tags: z.string() })) });
+
+/** Told to the planner when the author's conversations are written out. */
+const WRITTEN_NOTE = `The conversations the author wrote out are shown above only as outlines "(Conversation N, with …)": they are added to the plan afterwards, word for word, with their tags. Don't write them into "conversations": write there only lines the author describes without writing them out (a greeting described in a sentence, what someone says during the day), or leave it empty. Plan the stages and the talk steps for what those conversations do (taking the job, agreeing to go, each ending); a talk step's note says which line does it.`;
+
+/** How the AI turns an author's directions into tags. */
+const ANNOTATE_RULES = `You add tags to dialogue a Skyrim quest's author has already written, so the quest works. The words stay exactly as they are: you only say which tags go on which numbered lines (with each line's first three words, to be sure which it is). Answer in the JSON format given.
+
+Blocks: give each block the tags that say when its lines can be said, from its heading and the plan. Usually [if stage N] (the stage the quest is at then; [if stage >= N] when it stays available), also [if night], [if day], [if chose NAME]. A block that can be said any time while the quest runs needs nothing. A scene (characters talking to each other) gets [at stage N]: the stage that starts it.
+Lines: turn the author's directions (after "—") into tags:
+- the quest moving on ("the player takes the job", "Rulnik starts following", "the quest is done", an ending) → [stage N] with the stage from the plan;
+- money or things changing hands → [gives gold x150] (the speaker gives the player), [takes KEY x3] (the speaker takes from the player), with item keys from the plan;
+- a choice the quest should remember ("she remembers the promise", "he remembers the deal") → [remember NAME] with a short name; "only if the player promised…" → [if chose NAME] with the same name;
+- other "only if …" / "if …" / "needs …" → [if …] (e.g. [if gold 300], [if done 40], [if not chose deal], [if dead varro] for "if Varro is dead");
+- "he attacks" → [attacks]; "leaves for good" → [leaves]; a line said two ways ("pays 150 gold, or 250 if persuaded") → the two tag sets separated by |, the first with its [if …]: "[if chose persuaded] [gives gold x250] | [gives gold x150]".
+Directions about objectives and the journal need no tag. Leave out blocks and lines that need nothing. Use only stage numbers, item keys and choice names from the plan and the questline.`;
+
+/** The tags the AI may use on written dialogue (the reference part of the planner's rules). */
+const TAG_REFERENCE = RULES.slice(RULES.indexOf('Tags at the end of a line:'), RULES.indexOf('Lines nobody prompts go in blocks'));
+
+/** What the AI needs to tag a quest's written dialogue: its stages, what moves it on, items and characters. */
+function annotateBrief(plan: QuestPlan): string {
+  return [
+    `Quest: ${plan.title}. ${plan.summary}`,
+    `Stages: ${plan.stages.map((st) => `${st.index}${st.startsQuest ? ' (start)' : ''}${st.completesQuest ? ' (completes the quest)' : ''}${st.failsQuest ? ' (fails it)' : ''}: ${st.journal || '(no journal)'}`).join(' | ')}`,
+    `What moves the quest on: ${plan.steps.map((st) => `${st.from ?? 'start'} → ${st.to} by ${st.kind}${st.targetKey ? ` ${st.targetKey}` : ''} (${st.note})`).join('; ') || 'dialogue only'}`,
+    `Items (keys for [gives]/[takes]/[if has]): ${plan.items.map((i) => `${i.key} = ${i.name}`).join('; ') || 'none'}`,
+    `Characters: ${plan.characters.map((c) => `${c.key.toUpperCase()} = ${c.name}`).join('; ')}`,
+  ].join('\n');
+}
+
+/**
+ * Someone who speaks in the author's dialogue but isn't in the plan ("LUCAN:" when the plan left Lucan out): added as
+ * the character from the load order whose name starts that way ("Lucan Valerius"), when there's exactly one.
+ */
+export function addSpeakers(plan: QuestPlan, blocks: WrittenBlock[], catalog: string): string[] {
+  const out: string[] = [];
+  const people = (catalog.split('\n\n').find((x) => x.startsWith('Characters')) ?? '')
+    .split('\n')
+    .map((l) => /^(\S+) "([^"]+)"/.exec(l))
+    .filter((m): m is RegExpExecArray => !!m)
+    .map((m) => ({ editorId: m[1]!, name: m[2]! }));
+  const speakers = new Set(blocks.flatMap((b) => b.lines.filter((l) => !l.player).map((l) => l.speaker.toLowerCase())));
+  for (const sp of speakers) {
+    if (characterFor(plan, sp)) continue;
+    const hits = people.filter((p) => p.name.toLowerCase() === sp || p.name.toLowerCase().split(/\s+/)[0] === sp);
+    if (hits.length !== 1) continue;
+    const h = hits[0]!;
+    const key = sp.replace(/[^a-z0-9]/g, '') || 'speaker';
+    plan.characters.push({ key, name: h.name, existing: h.editorId, basedOn: null, sex: null, race: null, role: 'Speaks in the conversations you wrote', appearance: '', look: null, voice: null, locationKey: null, spot: null, essential: null, className: null, level: null, outfit: null, factions: [], inventory: [], routine: [], combat: null, roles: null, relationships: [] });
+    out.push(`${h.name} (${h.editorId}) speaks in your dialogue, so they're in the quest as they are in the game`);
+  }
+  if (out.length) plan.assumptions = [...(plan.assumptions ?? []), ...out];
+  return out;
+}
+
+/** The plan's character a written speaker is ("HESTA", "Varro" → hesta / Varro Tullius). */
+export function characterFor(plan: QuestPlan, speaker: string): QuestPlan['characters'][number] | undefined {
+  const s = speaker.toLowerCase();
+  return plan.characters.find((c) => c.key.toLowerCase() === s || c.name.toLowerCase() === s) ?? plan.characters.find((c) => c.name.toLowerCase().split(/\s+/)[0] === s || c.key.toLowerCase().startsWith(s));
+}
+
+/**
+ * The AI's tags, checked against the plan: stages that don't exist, items that aren't in it and conditions that don't
+ * read are taken out. Returns what was taken out, in words.
+ */
+function checkAnnotation(plan: QuestPlan, a: DialogueAnnotation, who: string): string[] {
+  const stages = new Set(plan.stages.map((st) => st.index));
+  const items = new Set(plan.items.flatMap((i) => [i.key.toLowerCase(), i.name.toLowerCase()]));
+  const out: string[] = [];
+  const fix = (tags: string, where: string) =>
+    tags.replace(/\[([a-z]+)((?:\s+[^\]]*)?)\]/gi, (m: string, tag: string, rest: string) => {
+      const t = tag.toLowerCase();
+      const v = rest.trim();
+      let bad = '';
+      const stage = /^(?:stage\s*)?(?:[<>=!]=?\s*)?(\d+)$/i.exec(v)?.[1];
+      if ((t === 'stage' || t === 'at') && stage !== undefined && !stages.has(Number(stage))) bad = `there's no stage ${stage}`;
+      if (t === 'if' && /^(stage|done|not done)\b/i.test(v) && !stages.has(Number(/(\d+)/.exec(v)?.[1]))) bad = `there's no such stage`;
+      if (t === 'if' && !readableIf(m)) bad = 'the condition doesn’t read';
+      const item = /^(?:not\s+|no\s+)?(?:has\s+)?(.*?)(?:\s*[x×]\s*\d+)?$/i.exec(v)?.[1]?.toLowerCase() ?? '';
+      if ((t === 'gives' || t === 'takes' || (t === 'if' && /^(not\s+|no\s+)?has\b/i.test(v))) && item !== 'gold' && !items.has(item)) bad = `“${item}” isn't an item in the plan`;
+      if (!bad) return m;
+      out.push(`Left ${m} off ${where} (${bad})`);
+      return '';
+    });
+  for (const b of a.blocks ?? []) b.tags = fix(b.tags ?? '', `${who}'s block ${b.block}`);
+  for (const l of a.lines ?? []) l.tags = fix(l.tags ?? '', `${who}'s line ${l.line}`);
+  return out;
+}
+
+/**
+ * "(Rulnik starts following)" / "(he stops following)" on a line that moves the quest on: the character follows the
+ * player from (or until) that line's stage. Returns what changed.
+ */
+function followDirections(plan: QuestPlan, blocks: WrittenBlock[]): string[] {
+  const out: string[] = [];
+  for (const l of blocks.flatMap((b) => b.lines)) {
+    const stage = Number(/^\[stage\s+(\d+)\]$/i.exec(l.tags.find((t) => /^\[stage\s+\d+\]$/i.test(t)) ?? '')?.[1]);
+    if (!Number.isFinite(stage)) continue;
+    for (const n of l.notes) {
+      const m = /\b([A-Z][\w'’-]*|he|she|they)\s+(starts?|begins?|stops?)\s+following\b/i.exec(n);
+      if (!m) continue;
+      const who = /^(he|she|they)$/i.test(m[1]!) ? characterFor(plan, l.speaker) : characterFor(plan, m[1]!);
+      if (!who) continue;
+      const start = /^(starts?|begins?)$/i.test(m[2]!);
+      const follow = who.routine.find((r) => r.activity === 'follow');
+      if (start) {
+        if (follow?.fromStage === stage) continue;
+        if (follow) follow.fromStage = stage;
+        else who.routine.push({ activity: 'follow', where: null, hours: null, fromStage: stage, untilStage: null, line: null });
+        out.push(`${who.name} follows the player from stage ${stage}`);
+      } else if (follow && follow.untilStage !== stage) {
+        follow.untilStage = stage;
+        out.push(`${who.name} stops following the player at stage ${stage}`);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Where the AI wrote one of the author's lines again with a stage the author's conversations don't set ("Dead, then.
+ * I won't pretend to weep. [stage 50]"), that stage goes on the author's own line (in place of one other lines set
+ * too). Returns what changed.
+ */
+export function adoptStages(plan: QuestPlan, author: string[]): string[] {
+  const out: string[] = [];
+  const mine = plan.conversations.filter((c) => c.title.startsWith('✎ '));
+  const stagesIn = (convs: typeof mine) => convs.flatMap((c) => [...c.screenplay.matchAll(/\[stage\s+(\d+)\]/gi)].map((m) => Number(m[1])));
+  for (const c of plan.conversations.filter((x) => !x.title.startsWith('✎ '))) {
+    for (const row of c.screenplay.split(/\r?\n/)) {
+      const n = Number(/\[stage\s+(\d+)\]/i.exec(row)?.[1]);
+      const text = /^\s*[^:]+:\s*(.*)$/.exec(row)?.[1]?.replace(/\[[^\]]*\]/g, '').trim() ?? '';
+      if (!Number.isFinite(n) || !text || stagesIn(mine).includes(n)) continue;
+      const original = author.find((a) => similarity(a, text) >= 0.6);
+      if (!original) continue;
+      // (Every copy of it in the author's conversation: alternatives repeat a line once per combination.)
+      for (const m of mine) {
+        const rows = m.screenplay.split(/\r?\n/);
+        const at = rows.map((r, i) => (r.includes(original) && !/^\s*player\s*:/i.test(r) ? i : -1)).filter((i) => i >= 0);
+        if (!at.length) continue;
+        const counts = stagesIn(mine);
+        const had = at.map((i) => /\[stage\s+(\d+)\]/i.exec(rows[i]!));
+        // A stage only these lines set stays theirs.
+        if (had.some((h) => h && counts.filter((x) => x === Number(h[1])).length <= at.length)) break;
+        for (const [k, i] of at.entries()) rows[i] = had[k] ? rows[i]!.replace(had[k]![0], `[stage ${n}]`) : `${rows[i]!.trimEnd()} [stage ${n}]`;
+        m.screenplay = rows.join('\n');
+        out.push(`“${original.slice(0, 40)}${original.length > 40 ? '…' : ''}” in ${m.title} moves the quest to stage ${n}`);
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/** A screenplay without the topics and lines that repeat the author's own (an AI copying them out). */
+function withoutAuthorLines(screenplay: string, author: string[]): string {
+  const said = (line: string) => {
+    const text = /^\s*[^:]+:\s*(.*)$/.exec(line)?.[1]?.replace(/\[[^\]]*\]/g, '').trim() ?? '';
+    return !!text && author.some((a) => similarity(a, text) >= 0.6);
+  };
+  const out: string[] = [];
+  let chunk: string[] = [];
+  const flush = () => {
+    if (chunk.length && !chunk.some(said)) out.push(...chunk);
+    chunk = [];
+  };
+  let inBlock = false;
+  for (const line of screenplay.split(/\r?\n/)) {
+    if (/^(GREETINGS?|HELLO|IDLE|CHATTER|SCENE)\s*:/i.test(line.trim())) {
+      flush();
+      inBlock = true;
+      out.push(line);
+      continue;
+    }
+    if (inBlock && !/^\s*player\s*:/i.test(line)) {
+      if (!said(line)) out.push(line);
+      continue;
+    }
+    if (/^player\s*:/i.test(line)) {
+      flush();
+      inBlock = false;
+    }
+    chunk.push(line);
+  }
+  flush();
+  // Blocks left with nothing under them go too (a tag on a line of its own isn't anything said).
+  const kept = out.filter((l) => /^\s*[^\s:[\]][^:]*:/.test(l));
+  const lines = kept.filter((l, i) => !(/^(GREETINGS?|HELLO|IDLE|CHATTER|SCENE)\s*:/i.test(l.trim()) && (i + 1 >= kept.length || /^(GREETINGS?|HELLO|IDLE|CHATTER|SCENE|PLAYER)\s*:/i.test(kept[i + 1]!.trim()))));
+  return lines.join('\n').trim();
+}
+
 /** The dialogue part of the rules, for rewriting one conversation at a time. */
 const DIALOGUE_RULES = RULES.slice(RULES.indexOf('Conversations are written in this screenplay format'));
 
@@ -598,6 +1016,20 @@ function planBrief(plan: QuestPlan, source: string): string {
 export function blockingIssues(issues: PlanIssue[]): PlanIssue[] {
   return issues.filter((i) => i.severity === 'error' || /^(Nothing moves the quest|Nothing starts the quest|No stage completes|The player needs|The player loses|A line in .* sets stage|The quest starts with the game, so stage|.* fails the quest as soon as stage|.* whenever it's chosen, even before|The player has to pick up)/.test(i.message));
 }
+
+/** The part of a plan a free AI is asked to fix: stages, steps and objectives. */
+const StepsFixSchema = z.object({
+  stages: QuestPlanSchema.shape.stages,
+  steps: QuestPlanSchema.shape.steps,
+  objectives: QuestPlanSchema.shape.objectives,
+});
+
+const STEPS_FIX_RULES = `You fix the stages of a Skyrim quest so it can be played from start to end. The quest's characters, items, places and dialogue are already decided; you only change its stages, its steps (what moves the quest from one stage to the next) and its objectives. Answer in the JSON format given.
+
+- Every stage after the first needs something that reaches it: a step, or a line of dialogue with [stage N] (listed for you).
+- A step's kind says what the player does: talk (a line of dialogue does it), pickup, read, activate, death, arrive, clear (every enemy in a group dead), wait (in-game hours after its "from" stage), script (right away).
+- Keep the stage numbers the dialogue uses. Add a stage when two things the author describes happen one after the other (fetch something, then bring it back; wait a day, then come back).
+- Exactly one stage starts the quest; the last one completes it.`;
 
 const JournalDraftSchema = z.object({
   stages: z.array(z.object({ index: z.number().int(), journal: z.string() })),

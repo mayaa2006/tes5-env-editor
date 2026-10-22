@@ -159,11 +159,15 @@ Event OnActivate(ObjectReference akActionRef)
 EndEvent
 Event OnMadeUp()
 EndEvent
+Event OnInit()
+EndEvent
 `);
     const msgs = d.map((x) => x.message);
     expect(msgs).toContain('"Notifcation" is not a function on Debug');
     expect(msgs).toContain('"Nope" is not a function on ObjectReference');
     expect(msgs.some((m) => m.startsWith('Event "OnMadeUp" does not exist'))).toBe(true);
+    // OnInit belongs to the language: no .psc declares it, and every script may have it.
+    expect(msgs.some((m) => m.includes('OnInit'))).toBe(false);
     expect(msgs.some((m) => m.includes('GetFormID'))).toBe(false);
   });
 

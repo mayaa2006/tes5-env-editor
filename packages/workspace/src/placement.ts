@@ -94,8 +94,67 @@ export class Placer {
     this.taken.set(cell, [...(this.taken.get(cell) ?? []), p]);
   }
 
-  /** Somewhere a character can stand: next to `near` if given, otherwise open floor at the entrance level. */
-  async actorSpot(cell: FormKey, near: string | null): Promise<ActorSpot> {
+  /** Whether a cell is outdoors (its ground is terrain, not floors). */
+  private outdoors(cell: FormKey): boolean {
+    const c = this.world.cells().find((x) => x.formKey === cell);
+    return !!c && !c.interior;
+  }
+
+  /**
+   * Outdoors: dry, fairly flat open ground, as close as there is to the named object (beside it, facing it), or to
+   * `around` (where the group or the person they belong with stands), or to the middle of the cell.
+   */
+  private async outdoorSpot(cell: FormKey, near: string | null, around?: Vec3): Promise<ActorSpot> {
+    const s = await this.env.surfaces(cell);
+    const info = this.world.cells().find((x) => x.formKey === cell);
+    const x0 = (info?.grid?.x ?? 0) * 4096;
+    const y0 = (info?.grid?.y ?? 0) * 4096;
+    const t = this.world.terrain(cell);
+    let top = 0;
+    let bottom = 0;
+    if (t) {
+      top = -Infinity;
+      bottom = Infinity;
+      for (const h of t.heights) (top = Math.max(top, h)), (bottom = Math.min(bottom, h));
+    }
+    top += 3000;
+    const water = this.world.waterHeight(cell);
+    const target = near ? this.findRef(cell, near, (r) => r.sig !== 'ACHR') : undefined;
+    const focus = target?.transform.position ?? around ?? { x: x0 + 2048, y: y0 + 2048, z: 0 };
+    const b = target?.base ? this.env.boundsOf(target.base) : undefined;
+    const reach = target ? (b ? (Math.max(b.max.x - b.min.x, b.max.y - b.min.y) / 2) * target.transform.scale + 60 : 90) : around ? 120 : 0;
+    const inside = (x: number, y: number) => x > x0 + 48 && x < x0 + 4048 && y > y0 + 48 && y < y0 + 4048;
+    for (let ring = reach; ring <= reach + 2400; ring += 64) {
+      const n = ring === 0 ? 1 : Math.max(8, Math.round((Math.PI * 2 * ring) / 96));
+      const start = this.random() * Math.PI * 2;
+      for (let i = 0; i < n; i++) {
+        const a = start + (i / n) * Math.PI * 2;
+        const x = focus.x + Math.cos(a) * ring;
+        const y = focus.y + Math.sin(a) * ring;
+        if (!inside(x, y)) continue;
+        const hit = s.down(x, y, top, top - bottom + 1000);
+        // Ground, not a roof, a rock or a tree; not too steep; not under water.
+        if (!hit || hit.owner !== null || hit.normal.z < 0.85) continue;
+        if (water !== undefined && hit.point.z < water + 30) continue;
+        const p = hit.point;
+        if (!this.clear(s, p, 45) || !this.free(cell, p, 110)) continue;
+        this.take(cell, p);
+        const face = target ? target.transform.position : around && ring > 0 ? around : undefined;
+        return { position: p, yaw: face ? Math.atan2(face.x - p.x, face.y - p.y) : this.random() * Math.PI * 2, near: target };
+      }
+    }
+    // Nowhere dry and open: the middle of the cell, on the ground.
+    const p = { x: focus.x, y: focus.y, z: this.world.groundHeight(cell, focus.x, focus.y) ?? 0 };
+    this.take(cell, p);
+    return { position: p, yaw: this.random() * Math.PI * 2, near: target };
+  }
+
+  /**
+   * Somewhere a character can stand: next to `near` if given, otherwise open floor at the entrance level (indoors)
+   * or open ground (outdoors, close to `around` when given).
+   */
+  async actorSpot(cell: FormKey, near: string | null, around?: Vec3): Promise<ActorSpot> {
+    if (this.outdoors(cell)) return this.outdoorSpot(cell, near, around);
     const s = await this.env.surfaces(cell);
     const refs = this.refs(cell);
     const target = near ? this.findRef(cell, near, (r) => r.sig !== 'ACHR') : undefined;

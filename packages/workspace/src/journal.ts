@@ -11,7 +11,7 @@ import type { Workspace } from './engine';
 import type { QuestGraph } from './questgraph';
 import type { QuestPlan } from './questplan';
 
-export type JournalStepKind = 'talk' | 'pickup' | 'activate' | 'death' | 'arrive' | 'read' | 'equip' | 'drop' | 'hit' | 'load' | 'script' | 'clear';
+export type JournalStepKind = 'talk' | 'pickup' | 'activate' | 'death' | 'arrive' | 'read' | 'equip' | 'drop' | 'hit' | 'load' | 'script' | 'clear' | 'collect' | 'wait';
 
 /** A quest as the writer sees it. */
 export interface JournalContext {
@@ -49,6 +49,8 @@ const OBJECTIVE: Record<JournalStepKind, (t: string) => string> = {
   clear: (t) => `Defeat ${t}`,
   hit: (t) => `Confront ${t}`,
   arrive: (t) => `Go to ${t}`,
+  collect: (t) => `Collect ${t}`,
+  wait: () => '',
   script: () => '',
 };
 
@@ -64,6 +66,8 @@ const DONE: Record<JournalStepKind, (t: string) => string> = {
   death: (t) => `I killed ${t}.`,
   hit: (t) => `I confronted ${t}.`,
   arrive: (t) => `I reached ${t}.`,
+  collect: (t) => `I collected ${t}.`,
+  wait: () => '',
   script: () => '',
 };
 

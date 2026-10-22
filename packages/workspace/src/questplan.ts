@@ -96,14 +96,14 @@ export const PlanEncounterSchema = z.object({
   key: Key,
   what: z.string().describe('The enemies: a type like "bandit", "draugr", "wolf", "skeever" or an Editor ID from the load order'),
   count: z.number().int().describe('How many (1–12)'),
-  locationKey: z.string().describe('Location key from this plan or Editor ID of an existing interior where they wait'),
+  locationKey: z.string().describe('Location key from this plan (indoors or outdoors) or Editor ID of an existing interior where they wait'),
   spot: z.string().nullable().describe('Where in that place, e.g. "by the fire"; null for spread around'),
 });
 
 export const PlanLocationSchema = z.object({
   key: Key,
   name: z.string().describe('Name shown in game, e.g. "Riverside Cave"'),
-  existing: z.string().nullable().describe('Editor ID of an existing interior from the load order list; null to create a new interior'),
+  existing: z.string().nullable().describe('Editor ID of an existing place from the load order list: an interior, or an outdoor cell from "Outdoor places" for somewhere outside (a camp, a road, standing stones); null to create a new interior'),
   description: z.string().describe('What the place is, in a few words'),
   layoutLike: z.string().nullable().describe('For a new interior: Editor ID of an existing interior from the load order whose rooms, furniture, lights and clutter are copied (pick one that fits: an inn, a house, a cave, a shop…); null leaves it empty'),
   doorFrom: z.string().nullable().describe('For a new interior: location key or Editor ID of the place the player enters it from (a door is put there and linked); null for no door'),
@@ -118,7 +118,10 @@ export const PlanItemSchema = z.object({
   value: z.number().nullable().describe('Price in gold; null to pick one'),
   startsWith: z.enum(['location', 'character', 'player', 'nowhere']).describe('Where the item is when the quest begins. location: lying somewhere (needed for anything the player must pick up or read); character: carried by a character (e.g. to hand over with [gives …]); player: the player has it; nowhere: given later'),
   startsAtKey: z.string().nullable().describe('Location or character key for startsWith location/character'),
-  spot: z.string().nullable().describe('Where in the location, e.g. "in the chest by the bed", "on the bar", "under the table"; null for a table'),
+  spot: z.string().nullable().describe('Where in the location, e.g. "in the chest by the bed", "on the bar", "under the table"; null for a table. For several copies, one place each, separated by ";"'),
+  copies: z.number().int().nullable().describe('How many there are when there is more than one (e.g. 3 for "three pages scattered in the mine"); null for one'),
+  text: z.string().nullable().describe('For a book, note, letter or notice: what it says, word for word from the author\'s text; null when the text doesn\'t say'),
+  lockedWith: z.string().nullable().describe('For an item inside a locked container (a strongbox, a chest): the key that opens it, as an item key from this plan; null when it isn\'t locked'),
 });
 
 export const PlanStageSchema = z.object({
@@ -140,8 +143,14 @@ export const PlanObjectiveSchema = z.object({
 export const PlanStepSchema = z.object({
   from: z.number().int().nullable().describe('Stage the player must be at (null = any time)'),
   to: z.number().int().describe('Stage this step sets'),
-  kind: z.enum(['talk', 'pickup', 'activate', 'death', 'arrive', 'read', 'equip', 'drop', 'script', 'clear']).describe('talk: a conversation line with [stage N] does it (add the tag too); pickup / read / equip / drop: the player does this with an item; activate: the player uses an item or character; death: a character dies; arrive: the player enters a location; clear: every enemy in an encounter is dead; script: right away after the "from" stage'),
-  targetKey: z.string().nullable().describe('Item key (pickup/drop/read/equip/activate), character key (death/activate), location key (arrive) or encounter key (clear: every enemy in the group is dead); null for talk and script'),
+  kind: z
+    .enum(['talk', 'pickup', 'activate', 'death', 'arrive', 'read', 'equip', 'drop', 'script', 'clear', 'wait'])
+    .describe(
+      'talk: a conversation line with [stage N] does it (add the tag too); pickup / read / equip / drop: the player does this with an item (pickup also counts taking it from someone, looting it or pickpocketing it); activate: the player uses an item or character; death: a character dies; arrive: the player enters (or comes near) a location; clear: every enemy in an encounter is dead; wait: some in-game hours after the "from" stage ("come back tomorrow"); script: right away after the "from" stage',
+    ),
+  targetKey: z.string().nullable().describe('Item key (pickup/drop/read/equip/activate), character key (death/activate), location key (arrive) or encounter key (clear: every enemy in the group is dead); null for talk, wait and script'),
+  count: z.number().int().nullable().describe('pickup: how many the player must have (3 for "find all three pages"); null for one'),
+  hours: z.number().nullable().describe('wait: in-game hours after the "from" stage (24 for "come back tomorrow"); otherwise null'),
   note: z.string().describe('What happens, in a few words'),
 });
 
@@ -252,6 +261,15 @@ export function normalizePlan(plan: QuestPlan): QuestPlan {
     if (l.layoutLike === undefined) l.layoutLike = null;
     if (l.doorFrom === undefined) l.doorFrom = null;
   }
+  for (const i of plan.items ?? []) {
+    if (i.copies === undefined) i.copies = null;
+    if (i.text === undefined) i.text = null;
+    if (i.lockedWith === undefined) i.lockedWith = null;
+  }
+  for (const st of plan.steps ?? []) {
+    if (st.count === undefined) st.count = null;
+    if (st.hours === undefined) st.hours = null;
+  }
   if (plan.startsWhen === undefined) plan.startsWhen = null;
   plan.animations ??= [];
   plan.rewards ??= [];
@@ -266,12 +284,35 @@ export function normalizePlan(plan: QuestPlan): QuestPlan {
  * - stages with no start (the first one starts the quest).
  * Returns what was changed, in words.
  */
+/** "Torn Map Page 1", "Torn Map Page #2", "Torn Map Page (3)": a copy's number after the name. */
+const NUMBERED = /(?:\s+(?:\(\d+\)|\d+|[IVX]+)|\s*#\s*\d+)$/;
+const baseName = (name: string) => name.trim().replace(NUMBERED, '').toLowerCase();
+
 export function repairPlan(plan: QuestPlan): string[] {
   const changes: string[] = [];
   // Called on raw answers before they're checked: anything not shaped as expected is left for the check to report.
   type Obj = Record<string, unknown>;
   const list = (v: unknown): Obj[] => (Array.isArray(v) ? v.filter((x): x is Obj => !!x && typeof x === 'object') : []);
   const p = plan as unknown as Obj;
+  // Kinds of step and event the format doesn't have, written the way people say them ("travel" to the stones).
+  const STEP_NEAR: Record<string, string> = { travel: 'arrive', go: 'arrive', goto: 'arrive', reach: 'arrive', enter: 'arrive', escort: 'arrive', visit: 'arrive', location: 'arrive', speak: 'talk', dialogue: 'talk', conversation: 'talk', ask: 'talk', report: 'talk', find: 'pickup', take: 'pickup', collect: 'pickup', get: 'pickup', loot: 'pickup', steal: 'pickup', use: 'activate', open: 'activate', kill: 'death', dies: 'death', die: 'death', defeat: 'clear', fight: 'clear', combat: 'clear', ambush: 'clear', time: 'wait', later: 'wait', sleep: 'wait', give: 'drop', deliver: 'talk', immediately: 'script', auto: 'script', automatic: 'script' };
+  const STEP_KINDS = new Set(['talk', 'pickup', 'activate', 'death', 'arrive', 'read', 'equip', 'drop', 'script', 'clear', 'wait']);
+  for (const st of list(p.steps)) {
+    const k = typeof st.kind === 'string' ? st.kind.trim().toLowerCase() : '';
+    if (STEP_KINDS.has(k)) continue;
+    const to = STEP_NEAR[k] ?? 'script';
+    changes.push(`the step “${(st.note as string) || k}” is ${/^[aeiou]/.test(to) ? 'an' : 'a'} ${to} step (“${String(st.kind)}” isn't a kind of step)`);
+    st.kind = to;
+  }
+  const EVENT_NEAR: Record<string, string> = { appear: 'show', enable: 'show', reveal: 'show', disappear: 'hide', disable: 'hide', vanish: 'hide', attack: 'hostile', attacks: 'hostile', calm: 'friendly', teleport: 'moveTo', move: 'moveTo', travel: 'moveTo', notification: 'message', notify: 'message', die: 'kill', dies: 'kill', music: 'sound', play: 'sound', start: 'startQuest' };
+  for (const e of list(p.events)) {
+    const k = typeof e.kind === 'string' ? e.kind.trim() : '';
+    if ((PLAN_EVENT_KINDS as readonly string[]).includes(k)) continue;
+    const to = EVENT_NEAR[k.toLowerCase()] ?? (PLAN_EVENT_KINDS as readonly string[]).find((x) => x.toLowerCase() === k.toLowerCase());
+    if (!to) continue;
+    changes.push(`the event “${(e.note as string) || k}” is a ${to} event`);
+    e.kind = to;
+  }
   // The same key twice: a "character" that is really one of the plan's items (it never speaks and stands nowhere) is
   // dropped; two entries in one list get told apart.
   {
@@ -282,6 +323,13 @@ export function repairPlan(plan: QuestPlan): string[] {
     const kept = before.filter((c) => !(itemKeys.has(String(c.key)) && !speaks(c)));
     for (const c of before.filter((x) => !kept.includes(x))) changes.push(`left out the character “${String(c.name ?? c.key)}”, which is the item of the same name`);
     if (kept.length < before.length) p.characters = kept;
+    // A "place" that's one of the plan's items (a notice pinned to the bar): nothing to make, so it goes too.
+    const places = list(p.locations);
+    const realPlaces = places.filter((l) => !(itemKeys.has(String(l.key)) && !l.existing && !l.layoutLike && !l.doorFrom));
+    for (const l of places.filter((x) => !realPlaces.includes(x))) changes.push(`left out the place “${String(l.name ?? l.key)}”, which is the item of the same name`);
+    if (realPlaces.length < places.length) p.locations = realPlaces;
+    // A layout to copy and a door only make sense for a new interior; for one that exists they'd just be warned about.
+    for (const l of realPlaces) if (l.existing) (l.layoutLike = null), (l.doorFrom = null);
     for (const field of ['characters', 'locations', 'items', 'encounters'] as const) {
       const seen = new Set<string>();
       for (const e of list(p[field])) {
@@ -309,6 +357,13 @@ export function repairPlan(plan: QuestPlan): string[] {
   const fix = (o: Obj | null | undefined, field: string) => {
     const v = o?.[field];
     if (!o || typeof v !== 'string' || keys.has(v)) return;
+    // Several keys in one ("page1;page2;page3" for a marker on all three pages): the first that's in the plan.
+    const first = v.split(/\s*[;,]\s*/).find((k) => keys.has(k));
+    if (first && first !== v) {
+      changes.push(`"${v}" → "${first}"`);
+      o[field] = first;
+      return;
+    }
     const t = v.trim().toLowerCase();
     const key = lookup.get(t) ?? names.get(t);
     if (key) {
@@ -457,17 +512,21 @@ export function repairPlan(plan: QuestPlan): string[] {
   }
   for (const r of list(p.rewards)) if (typeof r.itemKey === 'string' && !itemKeys.has(r.itemKey)) (changes.push(`a reward of “${r.itemKey}”, which isn't an item in the plan, gives only its gold`), (r.itemKey = null));
   // A failure has to set a stage that fails the quest (one that completes it would hand out the reward instead).
+  // A stage the quest goes through on its way (a step or a line reaches it, or a step starts from it) is never turned
+  // into a failing one: the failure gets a stage of its own.
+  const onTheWay = (n: unknown) =>
+    list(p.steps).some((x) => x.to === n || x.from === n) || list(p.conversations).some((c) => typeof c.screenplay === 'string' && new RegExp(`\\[stage\\s+${String(n)}\\]`, 'i').test(c.screenplay)) || list(p.stages).some((x) => x.index === n && x.startsQuest === true);
   for (const f of list(p.failures)) {
     const st = list(p.stages).find((x) => x.index === f.failStage);
     if (st && st.failsQuest === true) continue;
-    if (st && st.completesQuest !== true) {
+    if (st && st.completesQuest !== true && !onTheWay(st.index)) {
       st.failsQuest = true;
       continue;
     }
     const index = Math.max(0, ...stageSet) + 100 - ((Math.max(0, ...stageSet) + 100) % 100);
     stageSet.add(index);
     (p.stages as Obj[]).push({ index, journal: f.kind === 'timeLimit' ? 'I took too long, and it was too late to finish what I was asked to do.' : 'Someone I needed is dead, and I can no longer finish what I was asked to do.', startsQuest: false, completesQuest: false, failsQuest: true });
-    changes.push(`“${(f.note as string) || 'a failure'}” sets the new stage ${index}, which fails the quest${st ? ` (stage ${f.failStage} completes it)` : ''}`);
+    changes.push(`“${(f.note as string) || 'a failure'}” sets the new stage ${index}, which fails the quest${st ? ` (stage ${f.failStage} ${st.completesQuest === true ? 'completes it' : 'is one the quest goes through'})` : ''}`);
     f.failStage = index;
   }
   // An item a character holds that the player must hand on ([takes …] / [if has …] elsewhere), with no line where
@@ -512,7 +571,7 @@ export function repairPlan(plan: QuestPlan): string[] {
     const gatedAt = (stage: number) => plan.conversations.some((c) => new RegExp(`\\[if\\s+(?:stage\\s*)?(?:==?\\s*)?${stage}\\][^\\n]*(?:\\n\\s+[^\\n]*)*\\[stage\\s+\\d+\\]`, 'i').test(c.screenplay));
     const deadEnds = stagesOf.filter((x) => !x.completesQuest && !x.failsQuest && (reached.has(x.index) || x.index === start) && !plan.steps.some((st) => st.from === x.index) && !gatedAt(x.index));
     if (ends.length === 1 && deadEnds.length === 1 && deadEnds[0]!.index < ends[0]!.index) {
-      plan.steps.push({ from: deadEnds[0]!.index, to: ends[0]!.index, kind: 'script', targetKey: null, note: 'Goes straight on to the end' });
+      plan.steps.push({ from: deadEnds[0]!.index, to: ends[0]!.index, kind: 'script', targetKey: null, count: null, hours: null, note: 'Goes straight on to the end' });
       changes.push(`stage ${deadEnds[0]!.index} led nowhere and nothing reached stage ${ends[0]!.index}, which completes the quest: it now goes straight on from ${deadEnds[0]!.index} to ${ends[0]!.index}`);
     }
   }
@@ -524,12 +583,324 @@ export function repairPlan(plan: QuestPlan): string[] {
     p.steps = kept;
     changes.push(`left out ${steps.length - kept.length} step(s) that would fail the quest right away (its failures already do that)`);
   }
+  // The same thing in one place written as separate items ("Torn Map Page" three times in the mine): one item with
+  // copies, one spot each, and their pickup steps one step that counts them.
+  {
+    const groups = new Map<string, Obj[]>();
+    for (const i of list(p.items)) {
+      if (typeof i.name !== 'string' || !i.name.trim() || i.startsWith !== 'location' || typeof i.startsAtKey !== 'string' || i.existing || i.lockedWith) continue;
+      const k = `${baseName(i.name)}\u0000${i.startsAtKey}\u0000${String(i.kind)}`;
+      groups.set(k, [...(groups.get(k) ?? []), i]);
+    }
+    for (const same of groups.values()) {
+      if (same.length < 2) continue;
+      const [first, ...rest] = same as [Obj, ...Obj[]];
+      const restKeys = new Set(rest.map((x) => x.key as string));
+      const all = new Set([first.key as string, ...restKeys]);
+      const total = same.reduce((n, x) => n + (typeof x.copies === 'number' && x.copies > 1 ? x.copies : 1), 0);
+      const spots = same.flatMap((x) => (typeof x.spot === 'string' && x.spot.trim() ? x.spot.split(';').map((s) => s.trim()).filter(Boolean) : []));
+      first.copies = total;
+      first.spot = spots.length ? spots.join('; ') : null;
+      // "Torn Map Page 1", "2", "3": one name for all of them.
+      first.name = (first.name as string).trim().replace(NUMBERED, '');
+      p.items = list(p.items).filter((x) => !restKeys.has(x.key as string));
+      // Everything that pointed at a copy points at the one item.
+      const point = (o: Obj, field: string) => {
+        if (typeof o[field] === 'string' && restKeys.has(o[field] as string)) o[field] = first.key;
+      };
+      for (const o of list(p.objectives)) point(o, 'targetKey');
+      for (const s of list(p.steps)) point(s, 'targetKey');
+      for (const e of list(p.events)) point(e, 'targetKey');
+      for (const r of list(p.rewards)) point(r, 'itemKey');
+      if (p.startsWhen && typeof p.startsWhen === 'object') point(p.startsWhen as Obj, 'targetKey');
+      const objectives = list(p.objectives);
+      const seenObjective = new Set<string>();
+      p.objectives = objectives.filter((o) => {
+        if (o.targetKey !== first.key) return true;
+        const k = `${String(o.shownAtStage)}:${String(o.completedAtStage)}`;
+        return seenObjective.has(k) ? false : (seenObjective.add(k), true);
+      });
+      // Picking up each copy in turn (20 → 30, 30 → 30, 30 → 30) is one step: all of them, from the first one's stage.
+      const pickups = list(p.steps).filter((s) => s.kind === 'pickup' && all.has(s.targetKey as string));
+      if (pickups.length > 1) {
+        const from = pickups.map((s) => s.from).find((f) => typeof f === 'number') ?? null;
+        const to = Math.max(...pickups.map((s) => (typeof s.to === 'number' ? s.to : -Infinity)));
+        const keep = pickups.find((s) => s.to === to && s.from !== s.to) ?? pickups[0]!;
+        Object.assign(keep, { from, to, count: total });
+        p.steps = list(p.steps).filter((s) => !pickups.includes(s) || s === keep);
+      } else if (pickups.length === 1) pickups[0]!.count = Math.max(total, typeof pickups[0]!.count === 'number' ? pickups[0]!.count : 0);
+      changes.push(`${rest.length + 1} items called “${first.name as string}” in one place are now one item with ${total} copies${pickups.length ? ', found by one step that counts them' : ''}`);
+    }
+  }
+  // A step that sets the stage it starts from does nothing.
+  if (Array.isArray(p.steps)) {
+    const steps = list(p.steps);
+    const kept = steps.filter((s) => !(typeof s.from === 'number' && s.from === s.to));
+    if (kept.length < steps.length) {
+      p.steps = kept;
+      changes.push(`left out ${steps.length - kept.length} step(s) that would set the stage they start from`);
+    }
+  }
+  // The thing that starts the quest written again as its first step ("reads the notice", 0 → 10): the quest starts on
+  // that very read, so the step goes straight on.
+  const start = p.startsWhen as Obj | null | undefined;
+  if (start && typeof start.kind === 'string' && typeof start.targetKey === 'string' && ['arrive', 'read', 'pickup', 'activate'].includes(start.kind)) {
+    const indexes = list(p.stages).filter((s) => typeof s.index === 'number');
+    const firstIndex = indexes.find((s) => s.startsQuest === true)?.index ?? (indexes.length ? Math.min(...indexes.map((s) => s.index as number)) : undefined);
+    for (const s of list(p.steps)) {
+      if (s.from !== firstIndex || s.targetKey !== start.targetKey || !(s.kind === start.kind || (start.kind === 'read' && s.kind === 'pickup') || (start.kind === 'pickup' && s.kind === 'read'))) continue;
+      changes.push(`the step “${(s.note as string) || (s.kind as string)}” is what starts the quest, so the quest goes straight on from stage ${String(s.from)} to ${String(s.to)}`);
+      Object.assign(s, { kind: 'script', targetKey: null, count: null });
+    }
+  }
+  // "Gerda and Varro attack the player" written as enemies spawning: the plan's own characters turn on the player.
+  // "The player returns to Hesta" written as moving the player there: they walk; nobody is moved.
+  if (Array.isArray(p.events)) {
+    const events: Obj[] = [];
+    for (const e of list(p.events)) {
+      const note = String(e.note ?? '');
+      const attackers = e.kind === 'spawn' && /\battack|turn on|fight/i.test(note) ? list(p.characters).filter((c) => [c.name, String(c.name ?? '').split(/\s+/)[0]].some((n) => typeof n === 'string' && n.length > 2 && new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(note))) : [];
+      if (attackers.length) {
+        for (const c of attackers) events.push({ atStage: e.atStage, kind: 'hostile', targetKey: c.key, toKey: null, what: null, count: null, note: `${String(c.name)} attacks the player` });
+        changes.push(`“${note}” makes ${attackers.map((c) => String(c.name)).join(' and ')} attack, instead of spawning enemies`);
+        continue;
+      }
+      if (e.kind === 'movePlayer' && /\bplayer\s+(returns?|goes|go|moves?|travels?|walks?|heads?)\b/i.test(note) && !/\b(fade|wakes?|teleport|carried|dragged|knocked)/i.test(note)) {
+        changes.push(`left out “${note}”: the player walks there themselves`);
+        continue;
+      }
+      events.push(e);
+    }
+    if (events.length !== list(p.events).length || events.some((x, i) => x !== list(p.events)[i])) p.events = events;
+  }
+  // Enemies spawned in the place where the plan already has them waiting (an encounter of the same kind there): the
+  // encounter is what the player meets, and a spawn would put a second group next to the player. An ambush somewhere
+  // else (on the road) is kept.
+  if (Array.isArray(p.events) && list(p.encounters).length) {
+    const word = (v: string) => (v.match(/bandit|draugr|wolf|wolves|skeever|spider|bear|troll|falmer|forsworn|vampire|necromancer|skeleton|mage|warlock|dwarven|centurion|sphere|spriggan|hagraven|giant|mammoth|sabre|horker|mudcrab|chaurus|thalmor|imperial|stormcloak|dragon/i)?.[0] ?? v).toLowerCase().replace(/^wolves$/, 'wolf');
+    const placeNames = (key: unknown) => {
+      const l = list(p.locations).find((x) => x.key === key);
+      return [key, l?.name, l?.existing].filter((n): n is string => typeof n === 'string' && n.length > 2).map((n) => n.toLowerCase());
+    };
+    // (A spawn by the player at the stage they reach that place is there too.)
+    const arrivesAt = (stage: unknown, place: unknown) => list(p.steps).some((st) => st.kind === 'arrive' && st.to === stage && st.targetKey === place);
+    const doubled = (e: Obj) =>
+      e.kind === 'spawn' && typeof e.what === 'string'
+        ? list(p.encounters).find((x) => word(String(x.what ?? '')) === word(e.what as string) && (e.targetKey === x.locationKey || placeNames(x.locationKey).some((n) => String(e.note ?? '').toLowerCase().includes(n)) || (blank(e.targetKey) && arrivesAt(e.atStage, x.locationKey))))
+        : undefined;
+    const events = list(p.events);
+    const kept: Obj[] = [];
+    for (const e of events) {
+      const enc = doubled(e);
+      if (!enc) kept.push(e);
+      // They appear then: the encounter is hidden until that stage (unless something already shows it).
+      else if (!events.some((x) => x.kind === 'show' && x.targetKey === enc.key) && !kept.some((x) => x.kind === 'show' && x.targetKey === enc.key)) {
+        kept.push({ atStage: e.atStage, kind: 'show', targetKey: enc.key, toKey: null, what: null, count: null, note: (e.note as string) || 'They appear' });
+        changes.push(`the spawn “${(e.note as string) || (e.what as string)}” now shows the plan's encounter “${enc.key as string}” at stage ${String(e.atStage)} (it waits there hidden until then)`);
+      } else changes.push(`left out the spawn “${(e.note as string) || (e.what as string)}”: the plan's encounter already has them there`);
+    }
+    if (kept.length !== events.length || kept.some((x, i) => x !== events[i])) p.events = kept;
+  }
+  // One of the plan's own items written into a character's inventory as well ("VarroStrongboxKey"): the item says who
+  // carries it, so it isn't looked for in the load order too.
+  for (const c of list(p.characters)) {
+    if (!Array.isArray(c.inventory)) continue;
+    const mine = (name: unknown) => list(p.items).find((i) => typeof name === 'string' && [i.key, i.name].some((n) => typeof n === 'string' && n.toLowerCase().replace(/[^a-z0-9]/g, '') === name.toLowerCase().replace(/[^a-z0-9]/g, '')));
+    const kept = list(c.inventory).filter((e) => {
+      const item = mine(e.item);
+      if (!item) return true;
+      if (item.startsWith !== 'character') Object.assign(item, { startsWith: 'character', startsAtKey: c.key, spot: null });
+      changes.push(`${String(c.name)} carries ${String(item.name)}, the plan's own item`);
+      return false;
+    });
+    if (kept.length < list(c.inventory).length) c.inventory = kept;
+  }
+  // A container locked with the plan's key: what's in it lies in a strongbox where its holder stays, not on them.
+  for (const i of list(p.items)) {
+    if (typeof i.lockedWith !== 'string' || !i.lockedWith || i.startsWith !== 'character') continue;
+    const holder = list(p.characters).find((c) => c.key === i.startsAtKey);
+    if (typeof holder?.locationKey !== 'string') continue;
+    Object.assign(i, { startsWith: 'location', startsAtKey: holder.locationKey, spot: typeof i.spot === 'string' && i.spot.trim() ? i.spot : 'in a locked strongbox' });
+    changes.push(`${String(i.name)} is locked away with ${String(i.lockedWith)}, so it lies in a strongbox where ${String(holder.name)} stays`);
+  }
   const stages = list(p.stages).filter((s) => typeof s.index === 'number');
   if (stages.length && !stages.some((s) => s.startsQuest === true)) {
     const first = stages.reduce((a, b) => ((b.index as number) < (a.index as number) ? b : a));
     first.startsQuest = true;
     changes.push(`stage ${first.index} starts the quest`);
   }
+  return changes;
+}
+
+/**
+ * "Kill the bandits, then tell Hesta" planned as one stage: the quest completes when the bandits die, and the line
+ * where the player reports (which also reaches that stage) is never said. The deed gets a stage of its own between,
+ * and what's said after it (the report, "after the bandits are dead") is offered from there. Returns what changed.
+ */
+export function reportStages(plan: QuestPlan): string[] {
+  const out: string[] = [];
+  if (!Array.isArray(plan.stages) || !Array.isArray(plan.steps) || !Array.isArray(plan.conversations)) return out;
+  for (const end of plan.stages.filter((x) => x && x.completesQuest && !x.failsQuest)) {
+    const done = end.index;
+    const deeds = plan.steps.filter((x) => x && x.to === done && typeof x.from === 'number' && !['talk', 'script', 'wait'].includes(x.kind));
+    const says = plan.conversations.some((c) => typeof c?.screenplay === 'string' && new RegExp(`\\[stage\\s+${done}\\]`, 'i').test(c.screenplay));
+    if (deeds.length !== 1 || !says) continue;
+    const deed = deeds[0]!;
+    const from = deed.from as number;
+    const taken = new Set(plan.stages.map((x) => x.index));
+    let mid = from + Math.max(1, Math.floor((done - from) / 2));
+    while (taken.has(mid) && mid < done) mid++;
+    if (mid >= done) continue;
+    plan.stages.push({ index: mid, journal: '', startsQuest: false, completesQuest: false, failsQuest: false });
+    plan.stages.sort((a, b) => a.index - b.index);
+    deed.to = mid;
+    for (const o of plan.objectives ?? []) if (o.completedAtStage === done && o.targetKey === deed.targetKey) o.completedAtStage = mid;
+    // What the player says to report (it reaches the end), and what's said "after", is offered from the new stage.
+    for (const c of plan.conversations) {
+      if (typeof c?.screenplay !== 'string') continue;
+      const rows = c.screenplay.split(/\r?\n/);
+      const gate = (row: number, at: number, top: boolean) => {
+        const r = rows[row - 1];
+        if (r === undefined) return;
+        const re = new RegExp(`\\[if\\s+(?:stage\\s*)?(?:==?\\s*)?${at}\\]`, 'i');
+        if (re.test(r)) rows[row - 1] = r.replace(re, `[if stage ${mid}]`);
+        else if (top && at === from && !/\[if\s+(?:stage\s*)?(?:[<>=!]=?\s*)?\d+\]/i.test(r)) rows[row - 1] = `${r.trimEnd()} [if stage ${mid}]`;
+      };
+      const reaches = (pl: ScriptPlayerLine): boolean => pl.responses.some((x) => x.tags.stage === String(done) || x.choices.some(reaches)) || pl.tags.stage === String(done);
+      const parsed = parseScreenplay(c.screenplay);
+      // The player's choices under it carry the same condition (the screenplay repeats it on each).
+      const all = (pl: ScriptPlayerLine): ScriptPlayerLine[] => [pl, ...pl.responses.flatMap((x) => x.choices.flatMap(all))];
+      for (const t of parsed.topics) for (const pl of all(t)) gate(pl.line, reaches(t) ? from : done, pl === t);
+      for (const b of parsed.blocks) if (b.kind !== 'scene') for (const l of b.lines) gate(l.line, done, false);
+      c.screenplay = rows.join('\n');
+    }
+    out.push(`“${deed.note || deed.kind}” now reaches a stage of its own (${mid}), and the conversation that reaches stage ${done} is offered from there, so the player reports back after it`);
+  }
+  return out;
+}
+
+/**
+ * A line that sets a stage the quest is already past, where it's offered ("[if stage 30]" then "[stage 20]"): setting
+ * it would do nothing (or worse), so the tag goes. Returns what changed.
+ */
+export function backwardStages(plan: QuestPlan): string[] {
+  const out: string[] = [];
+  const exact = (v: string | undefined) => {
+    const m = /^\s*(?:stage\s*)?(?:==?\s*)?(\d+)\s*$/i.exec(v ?? '');
+    return m ? Number(m[1]) : undefined;
+  };
+  for (const c of Array.isArray(plan.conversations) ? plan.conversations : []) {
+    if (typeof c?.screenplay !== 'string') continue;
+    const rows = c.screenplay.split(/\r?\n/);
+    const visit = (pl: ScriptPlayerLine, gate: number | undefined) => {
+      const g = exact(pl.tags.if) ?? gate;
+      for (const r of pl.responses) {
+        const rg = exact(r.tags.if) ?? g;
+        for (const [line, v] of [[r.line, r.tags.stage], [pl.line, pl.tags.stage]] as const) {
+          const n = Number(v);
+          if (v && rg !== undefined && Number.isFinite(n) && n < rg && rows[line - 1] !== undefined) {
+            rows[line - 1] = rows[line - 1]!.replace(new RegExp(`\\s*\\[stage\\s+${n}\\]`, 'i'), '');
+            out.push(`took [stage ${n}] off a line in “${c.title}” offered at stage ${rg} (the quest is past it by then)`);
+          }
+        }
+        for (const ch of r.choices) visit(ch, rg);
+      }
+    };
+    for (const t of parseScreenplay(c.screenplay).topics) visit(t, undefined);
+    c.screenplay = rows.join('\n');
+  }
+  return [...new Set(out)];
+}
+
+/**
+ * "Meet Rulnik, then take him to the stones" planned as one stage: the line where he agrees ("Lead the way") sets the
+ * stage arriving at the stones is meant to set, so talking skips the walk. The line gets a stage of its own just before
+ * (the walk starts there), and whoever follows from the old stage follows from the new one. Returns what changed.
+ */
+export function talkThenDeed(plan: QuestPlan): string[] {
+  const out: string[] = [];
+  if (!Array.isArray(plan.stages) || !Array.isArray(plan.steps) || !Array.isArray(plan.conversations)) return out;
+  const DEEDS = new Set(['pickup', 'activate', 'death', 'arrive', 'read', 'equip', 'drop', 'clear']);
+  for (const deed of plan.steps.filter((x) => x && DEEDS.has(x.kind) && typeof x.from === 'number')) {
+    const to = deed.to;
+    const from = deed.from as number;
+    const target = plan.stages.find((x) => x.index === to);
+    if (!target || target.completesQuest || target.failsQuest || !stagesSaid(plan).has(to) || plan.steps.some((x) => x.kind === 'talk' && x.to === to)) continue;
+    const taken = new Set(plan.stages.map((x) => x.index));
+    let mid = from + Math.max(1, Math.floor((to - from) / 2));
+    while (taken.has(mid) && mid < to) mid++;
+    if (mid >= to) continue;
+    plan.stages.push({ index: mid, journal: '', startsQuest: false, completesQuest: false, failsQuest: false });
+    plan.stages.sort((a, b) => a.index - b.index);
+    const re = new RegExp(`\\[stage\\s+${to}\\]`, 'gi');
+    for (const c of plan.conversations) if (typeof c?.screenplay === 'string') c.screenplay = c.screenplay.replace(re, `[stage ${mid}]`);
+    deed.from = mid;
+    plan.steps.push({ from, to: mid, kind: 'talk', targetKey: null, count: null, hours: null, note: `The conversation before “${deed.note || deed.kind}”` });
+    for (const c of plan.characters ?? []) for (const r of c.routine ?? []) if (r.activity === 'follow' && r.fromStage === to) r.fromStage = mid;
+    for (const o of plan.objectives ?? []) if (o.shownAtStage === to && o.targetKey === deed.targetKey) o.shownAtStage = mid;
+    out.push(`the line that set stage ${to} now sets a stage of its own (${mid}), so “${deed.note || deed.kind}” still has to happen after it`);
+  }
+  return out;
+}
+
+/**
+ * The mends that need the plan's dialogue as it will be built (for a written quest, the author's lines with their
+ * tags): stages run together pulled apart, stages the quest is past dropped, gold paid twice paid once.
+ */
+export function mendStages(plan: QuestPlan): string[] {
+  return [...doubledRewards(plan), ...reportStages(plan), ...backwardStages(plan), ...talkThenDeed(plan), ...talkStepSpeakers(plan)];
+}
+
+/**
+ * A talk step that names who the player talks to ("Hulda tells the player Varro keeps strange hours"), where nothing
+ * that character says in the author's conversation moves the quest on: their first answer does, offered at the step's
+ * stage. Returns what changed.
+ */
+export function talkStepSpeakers(plan: QuestPlan): string[] {
+  const out: string[] = [];
+  if (!Array.isArray(plan.steps) || !Array.isArray(plan.conversations) || !Array.isArray(plan.characters)) return out;
+  for (const st of plan.steps.filter((x) => x && x.kind === 'talk' && typeof x.from === 'number')) {
+    if (stagesSaid(plan).has(st.to)) continue;
+    const note = (st.note ?? '').toLowerCase();
+    // Who the step names first ("Hulda tells the player Varro…" is about Hulda), among those with a conversation that
+    // moves nothing on yet.
+    const at = (c: PlanCharacter) =>
+      Math.min(...[c.name, c.name?.split(/\s+/)[0], c.key].filter((n): n is string => !!n && n.length > 2).map((n) => note.search(new RegExp(`\\b${n.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`))).filter((i) => i >= 0));
+    // (Only the author's own conversations, ✎: where the AI writes the dialogue, it writes the line that's missing.)
+    const conv = (ch: PlanCharacter) => plan.conversations.find((c) => c.title === `✎ ${ch.name}` && !/\[stage\s+\d+\]/i.test(c.screenplay));
+    const named = plan.characters.filter((c) => Number.isFinite(at(c)) && conv(c)).sort((a, b) => at(a) - at(b));
+    if (!named.length) continue;
+    const c = conv(named[0]!)!;
+    const first = parseScreenplay(c.screenplay).topics[0];
+    const answer = first?.responses[0];
+    if (!first || !answer) continue;
+    const rows = c.screenplay.split(/\r?\n/);
+    const last = answer.line + answer.lines.length - 1;
+    if (rows[last - 1] === undefined || rows[first.line - 1] === undefined) continue;
+    rows[last - 1] = `${rows[last - 1]!.trimEnd()} [stage ${st.to}]`;
+    if (!/\[if\s+(?:stage\s*)?(?:[<>=!]=?\s*)?\d+\]/i.test(rows[first.line - 1]!)) rows[first.line - 1] = `${rows[first.line - 1]!.trimEnd()} [if stage ${st.from}]`;
+    c.screenplay = rows.join('\n');
+    out.push(`“${st.note}”: what ${named[0]!.name} answers to “${first.text}” moves the quest to stage ${st.to}`);
+  }
+  return out;
+}
+
+/**
+ * Gold paid twice: a reward at a stage where the line that sets that stage already hands the gold over ([gives gold
+ * x150] [stage 40]). The line is what the author wrote, so the reward's gold is taken off. Returns what was changed.
+ */
+export function doubledRewards(plan: QuestPlan): string[] {
+  const rows = (Array.isArray(plan.conversations) ? plan.conversations : []).flatMap((c) => (typeof c?.screenplay === 'string' ? c.screenplay.split(/\r?\n/) : []));
+  const changes: string[] = [];
+  if (!Array.isArray(plan.rewards)) return changes;
+  for (const r of plan.rewards) {
+    if (!r || typeof r.gold !== 'number' || r.gold <= 0) continue;
+    const pays = rows.some((row) => /\[gives\s+gold\b/i.test(row) && new RegExp(`\\[stage\\s+${r.atStage}\\]`, 'i').test(row));
+    if (!pays) continue;
+    changes.push(`the reward of ${r.gold} gold at stage ${r.atStage} is left out: the line that reaches that stage already pays it`);
+    r.gold = null;
+  }
+  plan.rewards = plan.rewards.filter((r) => !r || r.gold !== null || r.itemKey || r.skill);
   return changes;
 }
 
@@ -709,11 +1080,24 @@ export function validatePlan(input: QuestPlan): PlanIssue[] {
     if (e.count < 1 || e.count > 12) err(`${e.count} ${e.what}: use 1 to 12 enemies in a group`);
     if (!e.what.trim()) err(`An enemy group doesn't say what the enemies are`);
   }
-  const need: Record<PlanStep['kind'], string[]> = { clear: ['encounter'], talk: [], script: [], pickup: ['item'], drop: ['item'], read: ['item'], equip: ['item'], activate: ['item', 'character'], death: ['character'], arrive: ['location'] };
+  const need: Record<PlanStep['kind'], string[]> = { clear: ['encounter'], talk: [], script: [], wait: [], pickup: ['item'], drop: ['item'], read: ['item'], equip: ['item'], activate: ['item', 'character'], death: ['character'], arrive: ['location'] };
   for (const s of plan.steps ?? []) {
     if (!stages.has(s.to)) err(`A step sets stage ${s.to}, which doesn't exist`);
     if (s.from !== null && !stages.has(s.from)) err(`A step starts from stage ${s.from}, which doesn't exist`);
+    if (!need[s.kind]) {
+      err(`The "${s.note || s.kind}" step is a kind of step there isn't (“${String(s.kind)}”)`);
+      continue;
+    }
     if (need[s.kind].length && !isKind(s.targetKey, ...need[s.kind])) err(`The "${s.note || s.kind}" step needs a ${need[s.kind].join(' or ')} key, but has "${s.targetKey ?? 'none'}"`);
+    if (s.kind === 'wait' && s.from === null) err(`“${s.note || 'Wait'}” waits after a stage, but doesn't say which (from)`);
+    if (s.kind === 'wait' && !((s.hours ?? 0) > 0)) err(`“${s.note || 'Wait'}” needs the in-game hours to wait (24 for a day)`);
+    if (s.count !== null && s.count !== undefined && (s.count < 1 || s.count > 100)) err(`“${s.note || s.kind}” needs ${s.count} of something; use 1 to 100`);
+  }
+  for (const i of plan.items ?? []) {
+    if (i.copies !== null && i.copies !== undefined && (i.copies < 1 || i.copies > 20)) err(`${i.name}: ${i.copies} copies; use 1 to 20`);
+    if (i.lockedWith && !isKind(i.lockedWith, 'item')) err(`${i.name} is locked with “${i.lockedWith}”, which isn't an item in the plan`);
+    if (i.lockedWith && !(i.startsWith === 'location' && i.spot && /\b(in|inside)\b/i.test(i.spot))) warn(`${i.name} is locked with a key, but isn't put in a container (spot “in the …”), so nothing is locked`);
+    if (i.text?.trim() && i.kind !== 'book') warn(`${i.name} has text to read, but isn't a book, note or letter (kind book), so the text is left out`);
   }
   for (const r of plan.rewards ?? []) {
     if (!stages.has(r.atStage)) err(`A reward is given at stage ${r.atStage}, which doesn't exist`);
@@ -785,8 +1169,10 @@ export function validatePlan(input: QuestPlan): PlanIssue[] {
     const dies = (plan.steps ?? []).some((st) => st.kind === 'death' && st.targetKey === c.key) || (plan.events ?? []).some((e) => (e.kind === 'kill' || e.kind === 'hostile') && e.targetKey === c.key) || !!c.combat?.hostile;
     return hands || dies;
   };
+  // (Pickpocketing it, stealing it or taking it from them counts: the quest watches the item itself.)
+  const taken = (i: PlanItem) => (plan.steps ?? []).some((st) => st.kind === 'pickup' && st.targetKey === i.key && /pickpocket|steal|stole|take .*from|takes? it from|loot/i.test(st.note ?? ''));
   for (const i of plan.items ?? [])
-    if ((plan.steps ?? []).some((st) => st.kind === 'pickup' && st.targetKey === i.key) && !released(i)) {
+    if ((plan.steps ?? []).some((st) => st.kind === 'pickup' && st.targetKey === i.key) && !released(i) && !taken(i)) {
       const c = (plan.characters ?? []).find((x) => x.key === i.startsAtKey)!;
       warn(`The player has to pick up ${i.name}, but ${c.name} carries it and never hands it over or dies: put it on the character it should be taken from (one who fights or dies), somewhere to pick up, or have ${c.name} hand it over with [gives ${i.key} x1]`);
     }

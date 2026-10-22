@@ -12,7 +12,7 @@ import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
 import { unzipSync } from 'fflate';
 import { WorkspaceError } from './engine';
-import { LLAMA_CPP, LOCAL_MODELS, formatBytes, modelUrl, type LocalAiDevice, type LocalAiStatus, type LocalModel } from './localai';
+import { LLAMA_CPP, LOCAL_MODELS, formatBytes, modelUrl, type LocalAiDevice, type LocalAiStatus, type LocalGpu, type LocalModel } from './localai';
 
 type Fetch = typeof globalThis.fetch;
 
@@ -45,6 +45,9 @@ export class LocalAi {
   private movedOffGpu = false;
   /** When a server on the graphics card last stopped by itself (the card may have gone down with it). */
   private gpuExitAt = 0;
+  /** The graphics cards llama.cpp can use, checked once the runner is downloaded. */
+  private gpus?: LocalGpu[];
+  private gpuCheck?: Promise<void>;
 
   constructor(private readonly opts: LocalAiOptions) {
     this.models = opts.models ?? LOCAL_MODELS;
@@ -73,6 +76,7 @@ export class LocalAi {
 
   status(): LocalAiStatus {
     const s = this.server;
+    this.checkGpus();
     return {
       supported: this.supported,
       folder: this.opts.dir,
@@ -80,13 +84,40 @@ export class LocalAi {
       installed: this.models.filter((m) => isComplete(this.modelPath(m), m.size)).map((m) => m.id),
       ...(this.download ? { download: { model: this.download.model, what: this.download.what, done: this.download.done, total: this.download.total } } : {}),
       server: s
-        ? { state: s.device === undefined ? 'starting' : 'running', model: s.model, ...(s.device ? { device: s.device } : {}) }
+        ? { state: s.device === undefined ? 'starting' : 'running', model: s.model, ...(s.device ? { device: s.device } : {}), ...(s.device && s.device !== 'processor' && offloadOf(s.log) ? { offload: offloadOf(s.log) } : {}) }
         : this.error
           ? { state: 'error', error: this.error }
           : { state: 'stopped' },
       prefer: this.prefer,
       ...(this.movedOffGpu ? { movedOffGpu: true } : {}),
+      ...(this.gpus ? { gpus: this.gpus } : {}),
     };
+  }
+
+  /**
+   * Which graphics cards llama.cpp can use, and how much memory each has free (its --list-devices), so the settings
+   * can say which models run entirely on the card. Checked once, when the runner is there; the answer comes as a
+   * status change.
+   */
+  private checkGpus(): void {
+    const exe = this.serverExe();
+    if (!exe || this.gpus || this.gpuCheck) return;
+    this.gpuCheck = new Promise<void>((resolve) => {
+      let out = '';
+      const finish = (gpus: LocalGpu[] | undefined) => {
+        clearTimeout(timer);
+        this.gpus = gpus;
+        if (!gpus) this.gpuCheck = undefined;
+        this.changed();
+        resolve();
+      };
+      const child = spawn(exe, ['--list-devices'], { cwd: dirname(exe), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      const timer = setTimeout(() => child.kill(), 30_000);
+      child.stdout?.on('data', (d: Buffer) => (out += d.toString()));
+      child.stderr?.on('data', (d: Buffer) => (out += d.toString()));
+      child.once('error', () => finish(undefined));
+      child.once('exit', () => finish(/Available devices/.test(out) ? parseDevices(out) : undefined));
+    });
   }
 
   private get onProcessor() {
@@ -361,6 +392,22 @@ function freePort(): Promise<number> {
       s.close(() => resolve(port));
     });
   });
+}
+
+/**
+ * The graphics cards in llama-server's --list-devices ("Vulkan0: NVIDIA GeForce RTX 3060 (12288 MiB, 11520 MiB
+ * free)"), leaving out software renderers that only pretend to be one.
+ */
+export function parseDevices(text: string): LocalGpu[] {
+  return [...text.matchAll(/^\s*[A-Za-z]+\d*:\s*(.+?)\s*\((\d+) MiB, (\d+) MiB free\)\s*$/gm)]
+    .map((m) => ({ name: m[1]!.trim(), memoryMb: Number(m[2]), freeMb: Number(m[3]) }))
+    .filter((g) => !/llvmpipe|lavapipe|swiftshader|basic render|software/i.test(g.name));
+}
+
+/** How much of the model went on the graphics card, from the server's log ("offloaded 20/33 layers to GPU"). */
+export function offloadOf(log: string[]): { layers: number; of: number } | undefined {
+  const m = log.map((l) => /offloaded (\d+)\/(\d+) layers to GPU/.exec(l)).find(Boolean);
+  return m ? { layers: Number(m[1]), of: Number(m[2]) } : undefined;
 }
 
 /** What the model runs on, from the server's log: a graphics card's name, or the processor. */

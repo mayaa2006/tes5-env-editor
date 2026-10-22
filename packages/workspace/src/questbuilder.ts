@@ -19,7 +19,7 @@ import { lintQuestDialogue } from './dialoguelint';
 import { Placer } from './placement';
 import { createPackage, stageConditions, type PackageSpec } from './routines';
 import { normalizePlan, validatePlan, type PlanCharacter, type PlanEncounter, type PlanEvent, type PlanItem, type PlanLocation, type PlanStep, type QuestPlan } from './questplan';
-import { WorldService } from './world';
+import { WorldService, type Vec3 } from './world';
 import { generateCellNavmesh } from './automations';
 
 const ESSENTIAL = 0x2;
@@ -115,6 +115,8 @@ interface BuildSession {
   encounters: Map<string, FormKey[]>;
   /** New interiors made in this build: their copied load doors (or empty). */
   newPlaces: Map<string, { loadDoors: FormKey[]; empty?: boolean }>;
+  /** Outdoor places: where the first person or group put there stands, so the rest (and the quest marker) gather there. */
+  focus: Map<string, Vec3>;
   report: QuestBuildReport;
 }
 
@@ -326,9 +328,22 @@ export class QuestBuilder {
       out.push(t ? { kind: 'character', key: c.key, name: c.name, existing: null, template: t, text: `New, copied from ${this.label(t)}${note}`, changes } : { kind: 'character', key: c.key, name: c.name, existing: null, template: null, text: 'No character to copy from', error: `${c.name}: there's no character in the load order to copy` });
     }
     for (const l of plan.locations) {
+      // A place the plan names without a cell: the interior of that name, or else (wilderness cells have no names) the
+      // map marker of that name, outdoors.
+      const unplanned = !l.existing && !l.layoutLike && !l.doorFrom;
+      const inside = unplanned ? this.findForm(['CELL'], l.name) : undefined;
+      if (inside) {
+        out.push({ kind: 'location', key: l.key, name: l.name, existing: inside, template: null, text: `Uses ${this.label(inside)}${this.isOutdoors(inside) ? ' (outdoors)' : ''}` });
+        continue;
+      }
+      const marker = unplanned || (l.existing && !this.findForm(['CELL'], l.existing) && !this.findForm(['CELL'], l.name)) ? this.world.mapMarker(l.existing ?? l.name) ?? this.world.mapMarker(l.name) : undefined;
+      if (marker) {
+        out.push({ kind: 'location', key: l.key, name: l.name, existing: marker.cell, template: null, text: `Uses ${this.label(marker.cell)} (outdoors, by the map marker “${marker.name}”)` });
+        continue;
+      }
       if (l.existing) {
         const k = this.findForm(['CELL'], l.existing) ?? this.findForm(['CELL'], l.name);
-        out.push(k ? { kind: 'location', key: l.key, name: l.name, existing: k, template: null, text: `Uses ${this.label(k)}` } : { kind: 'location', key: l.key, name: l.name, existing: null, template: null, text: `No cell called “${l.existing}”`, error: `${l.name}: no cell called “${l.existing}” in the load order` });
+        out.push(k ? { kind: 'location', key: l.key, name: l.name, existing: k, template: null, text: `Uses ${this.label(k)}${this.isOutdoors(k) ? ' (outdoors)' : ''}` } : { kind: 'location', key: l.key, name: l.name, existing: null, template: null, text: `No cell called “${l.existing}”`, error: `${l.name}: no cell called “${l.existing}” in the load order` });
       } else {
         const like = l.layoutLike ? this.findForm(['CELL'], l.layoutLike) : undefined;
         const from = l.doorFrom ? (plan.locations.find((x) => x.key === l.doorFrom)?.name ?? (this.findForm(['CELL'], l.doorFrom) ? this.label(this.findForm(['CELL'], l.doorFrom)!) : undefined)) : undefined;
@@ -346,7 +361,10 @@ export class QuestBuilder {
         out.push({ kind: 'item', key: i.key, name: i.name, existing: null, template: null, text: `No item called “${i.existing}”`, error: `${i.name}: no item called “${i.existing}” in the load order` });
         continue;
       }
-      const based = i.basedOn ? this.characters.findLoose([ITEM_TEMPLATE_SIG[i.kind]], i.basedOn) ?? this.characters.findLoose(ITEM_SIGS, i.basedOn) : undefined;
+      // A key or a book is only copied from one of its own kind: a key copied from clothes opens nothing, and a book
+      // copied from anything else can't be read.
+      const strict = i.kind === 'key' || i.kind === 'book';
+      const based = i.basedOn ? this.characters.findLoose([ITEM_TEMPLATE_SIG[i.kind]], i.basedOn) ?? (strict ? undefined : this.characters.findLoose(ITEM_SIGS, i.basedOn)) : undefined;
       const t = based ?? this.itemTemplate(i.kind, i.name);
       out.push(t ? { kind: 'item', key: i.key, name: i.name, existing: null, template: t, text: `New, copied from ${this.label(t)}${i.basedOn && !based ? ` (no “${i.basedOn}” found)` : ''}` } : { kind: 'item', key: i.key, name: i.name, existing: null, template: null, text: 'No item to copy from', error: `${i.name}: there's no item in the load order to copy` });
     }
@@ -400,6 +418,7 @@ export class QuestBuilder {
       failParts: [...(record?.failParts ?? [])],
       encounters: new Map(Object.entries(record?.encounters ?? {})),
       newPlaces: new Map(),
+      focus: new Map(),
       report: { quest: record?.quest ?? null, editorId: record ? (this.ws.view(record.quest)?.editorId ?? plan.editorId) : '', created: [], changed: [], reused: [], updated: [], dialogue: { topics: 0, responses: 0, greetings: 0, scenes: 0 }, notes: [...plan.assumptions.map((a) => `Assumed: ${a}`)], warnings: [], problems: [] },
     };
   }
@@ -469,6 +488,9 @@ export class QuestBuilder {
     if (r.existing) {
       s.cells.set(l.key, r.existing);
       s.report.reused.push({ kind: 'location', formKey: r.existing, label: this.label(r.existing) });
+      // Found by its map marker: people and enemies there stand near it.
+      const marker = /by the map marker/.test(r.text) ? this.world.mapMarker(l.existing ?? l.name) ?? this.world.mapMarker(l.name) : undefined;
+      if (marker && !s.focus.has(l.key)) s.focus.set(l.key, marker.position);
       return;
     }
     const editorId = this.ws.uniqueEditorId(`${s.prefix}${pascal(l.name)}`);
@@ -595,10 +617,19 @@ export class QuestBuilder {
     }
     const cell = s.cells.get(c.locationKey)!;
     const npc = s.npcs.get(c.key)!;
-    const spot = await s.placer.actorSpot(cell, c.spot);
-    if (c.spot && !spot.near) s.report.notes.push(`${c.name}: nothing like “${c.spot}” in ${this.label(cell)}, so they stand on open floor.`);
+    const outside = this.isOutdoors(cell);
+    const spot = await s.placer.actorSpot(cell, c.spot, s.focus.get(c.locationKey));
+    if (outside && !s.focus.has(c.locationKey)) s.focus.set(c.locationKey, spot.position);
+    if (c.spot && !spot.near) s.report.notes.push(`${c.name}: nothing like “${c.spot}” in ${this.label(cell)}, so they stand on open ${outside ? 'ground' : 'floor'}.`);
     const ref = this.world.placeReference(cell, npc, { position: spot.position, rotation: { x: 0, y: 0, z: spot.yaw } }, { persistent: true, editorId: this.ws.uniqueEditorId(`${this.ws.view(npc)?.editorId ?? s.prefix}Ref`) });
-    s.report.created.push({ kind: 'placed', formKey: ref, label: `${c.name} in ${this.label(cell)}${spot.near ? `, ${c.spot}` : ''}` });
+    s.report.created.push({ kind: 'placed', formKey: ref, label: `${c.name} in ${this.label(cell)}${outside ? ' (outdoors)' : ''}${spot.near ? `, ${c.spot}` : ''}` });
+    if (outside) s.report.notes.push(`${c.name} stands outdoors in ${this.label(cell)}: check the spot in the World tab (outdoors, 1 cell around) and move them if another mod builds there.`);
+  }
+
+  /** Whether a cell is outdoors. */
+  private isOutdoors(cell: FormKey): boolean {
+    const c = this.world.cells().find((x) => x.formKey === cell);
+    return !!c && !c.interior;
   }
 
   private nextSlot(s: BuildSession, cell: FormKey): number {
@@ -613,9 +644,14 @@ export class QuestBuilder {
     const playerGets: string[] = [];
     for (const i of list) {
       const item = s.items.get(i.key)!;
+      // Several of one item (three pages in a mine): each in its own spot when the plan gives one ("by the forge; in a chest").
+      const copies = i.startsWith === 'location' ? Math.max(1, Math.min(20, i.copies ?? 1)) : 1;
+      const spots = (i.spot ?? '').split(';').map((x) => x.trim()).filter(Boolean);
+      for (let copy = 0; copy < copies; copy++) {
+      const spot = spots.length ? spots[Math.min(copy, spots.length - 1)]! : i.spot;
       if (i.startsWith === 'location' && i.startsAtKey) {
         const cell = s.cells.get(i.startsAtKey)!;
-        const where = s.placer.itemSpot(cell, i.spot, this.nextSlot(s, cell));
+        const where = s.placer.itemSpot(cell, spot, this.nextSlot(s, cell));
         if (where.kind === 'container') {
           // A container's contents belong to its base, so this one gets its own copy of the base.
           const ref = where.container;
@@ -627,15 +663,25 @@ export class QuestBuilder {
             s.report.created.push({ kind: 'item', formKey: base, label: `${this.label(base)}: a copy of ${ref.baseName ?? ref.baseEditorId} for the one in ${this.label(cell)}` });
           }
           this.ws.editRecord(base, (d: any) => void (d.items = [...(d.items ?? []), { item: { item, count: 1 } }]), 'Put in container');
-          s.inContainer.set(i.key, ref.formKey);
+          if (!s.inContainer.has(i.key)) s.inContainer.set(i.key, ref.formKey);
           s.report.created.push({ kind: 'placed', formKey: ref.formKey, label: `${i.name} in the ${(ref.baseName ?? 'container').toLowerCase()} in ${this.label(cell)}` });
+          // Locked so only the plan's key opens it.
+          const key = i.lockedWith ? s.items.get(i.lockedWith) : undefined;
+          if (key && this.ws.summary(key)?.sig === 'KEYM') {
+            this.ws.editRecord(ref.formKey, (d: any) => void (d.lock = { level: 255, key, flags: 0 }), 'Lock it');
+            s.report.notes.push(`The ${(ref.baseName ?? 'container').toLowerCase()} holding ${i.name} is locked: only ${this.label(key)} opens it.`);
+          } else if (i.lockedWith) s.report.warnings.push(`${i.name}'s container should be locked with “${i.lockedWith}”, but that isn't a key in the plan, so it was left unlocked.`);
           continue;
         }
-        if (i.spot && !where.on) s.report.notes.push(`${i.name}: nothing like “${i.spot}” in ${this.label(cell)}, so it's on the floor.`);
-        const ref = this.world.placeReference(cell, item, { position: where.position, rotation: { x: 0, y: 0, z: s.random() * Math.PI * 2 } }, { persistent: true, editorId: this.ws.uniqueEditorId(`${s.prefix}${pascal(i.name)}Ref`) });
-        s.placedItems.set(i.key, ref);
+        const outside = this.isOutdoors(cell);
+        if (spot && !where.on) s.report.notes.push(`${i.name}: nothing like “${spot}” in ${this.label(cell)}, so it's on the ${outside ? 'ground' : 'floor'}.`);
+        // Outdoors with nothing to put it on: on open ground near the place's people (dropped onto it below).
+        const position = outside && !where.on ? (await s.placer.actorSpot(cell, spot, s.focus.get(i.startsAtKey))).position : where.position;
+        if (outside && !where.on) position.z += 20;
+        const ref = this.world.placeReference(cell, item, { position, rotation: { x: 0, y: 0, z: s.random() * Math.PI * 2 } }, { persistent: true, editorId: this.ws.uniqueEditorId(`${s.prefix}${pascal(i.name)}Ref`) });
+        if (!s.placedItems.has(i.key)) s.placedItems.set(i.key, ref);
         dropMe.push(ref);
-        s.report.created.push({ kind: 'placed', formKey: ref, label: `${i.name} ${where.on ? `on the ${(where.on.baseName ?? where.on.baseEditorId ?? 'table').toLowerCase()}` : 'on the floor'} in ${this.label(cell)}` });
+        s.report.created.push({ kind: 'placed', formKey: ref, label: `${i.name} ${where.on ? `on the ${(where.on.baseName ?? where.on.baseEditorId ?? 'table').toLowerCase()}` : outside ? 'on the ground' : 'on the floor'} in ${this.label(cell)}` });
       } else if (i.startsWith === 'character' && i.startsAtKey) {
         const npc = s.npcs.get(i.startsAtKey)!;
         if (s.quest && followed(s.plan, i.key)) {
@@ -649,6 +695,7 @@ export class QuestBuilder {
         this.ws.editRecord(npc, (d: any) => void (d.items = [...(d.items ?? []), { item: { item, count: 1 } }]), 'Add to inventory');
         if (parseFormKey(npc).plugin !== this.ws.activeName) s.report.warnings.push(`${i.name} was added to ${this.label(npc)}'s inventory, which changes a character from ${parseFormKey(npc).plugin} (other mods that change them will conflict).`);
       } else if (i.startsWith === 'player') playerGets.push(`Game.GetPlayer().AddItem(${formExpression(item)}, 1)`);
+      }
     }
     if (dropMe.length) {
       const { missed } = await this.env.dropToSurface(dropMe);
@@ -666,7 +713,7 @@ export class QuestBuilder {
     if (s.npcs.has(key)) return this.graphs.aliasFor(quest, s.npcs.get(key)!);
     if (s.placedItems.has(key)) return this.graphs.aliasFor(quest, s.placedItems.get(key)!);
     if (s.inContainer.has(key)) return this.graphs.itemInContainerAlias(quest, s.items.get(key)!, s.inContainer.get(key)!);
-    if (s.cells.has(key)) return this.graphs.aliasFor(quest, this.graphs.markerIn(quest, s.cells.get(key)!));
+    if (s.cells.has(key)) return this.graphs.aliasFor(quest, this.graphs.markerIn(quest, s.cells.get(key)!, s.focus.get(key)));
     // A group of enemies: the marker points at the first of them.
     const enemies = s.encounters.get(key);
     if (enemies?.length) return this.graphs.aliasFor(quest, enemies[0]!);
@@ -891,6 +938,9 @@ export class QuestBuilder {
       case 'lock':
       case 'show':
       case 'hide': {
+        // A group of enemies appears (an ambush) or goes away together.
+        const group = e.targetKey ? s.encounters.get(e.targetKey) : undefined;
+        if (group?.length && (e.kind === 'show' || e.kind === 'hide')) return group.map((ref) => `(${formExpression(ref)} as ObjectReference).${e.kind === 'show' ? 'Enable()' : 'Disable()'}`);
         const r = thing();
         if (!r) return skip(`can't find “${e.targetKey}”`);
         return [`${r.expr}.${{ unlock: 'Lock(False)', lock: 'Lock(True)', show: 'Enable()', hide: 'Disable()' }[e.kind]}`];
@@ -935,6 +985,12 @@ export class QuestBuilder {
       if ((e.kind === 'show' || e.kind === 'hide') && e.targetKey && !firstByTarget.has(e.targetKey)) firstByTarget.set(e.targetKey, e);
     for (const [key, e] of firstByTarget) {
       if (e.kind !== 'show') continue;
+      const group = s.encounters.get(key);
+      if (group?.length) {
+        for (const ref of group) if (!(this.ws.view(ref)!.flags & RecordFlags.InitiallyDisabled)) this.ws.setFlags(ref, RecordFlags.InitiallyDisabled);
+        s.report.notes.push(`${this.encounterLabel(s, key)} start hidden and appear at stage ${e.atStage}.`);
+        continue;
+      }
       const ref = this.placedRefOf(s, key);
       if (!ref) {
         s.report.notes.push(`${key} is shown at stage ${e.atStage}; make sure it starts hidden (Initially Disabled) so it can appear.`);
@@ -976,7 +1032,8 @@ export class QuestBuilder {
     const refs: FormKey[] = [];
     const n = Math.max(1, Math.min(12, e.count));
     for (let i = 0; i < n; i++) {
-      const spot = await s.placer.actorSpot(cell, e.spot);
+      const spot = await s.placer.actorSpot(cell, e.spot, s.focus.get(e.locationKey));
+      if (this.isOutdoors(cell) && !s.focus.has(e.locationKey)) s.focus.set(e.locationKey, spot.position);
       refs.push(this.world.placeReference(cell, base, { position: spot.position, rotation: { x: 0, y: 0, z: spot.yaw } }, { persistent: true }));
     }
     s.encounters.set(e.key, refs);
@@ -1052,9 +1109,24 @@ export class QuestBuilder {
       if (!said) s.report.warnings.push(`Nothing said in a conversation sets stage ${st.to} (“${st.note}”). Add [stage ${st.to}] to the line that should.`);
       return;
     }
+    if (st.kind === 'wait' || (st.kind === 'script' && (st.hours ?? 0) > 0)) {
+      if (st.from === null) s.report.warnings.push(`“${st.note}” waits after a stage, but doesn't say which; it was left out.`);
+      else {
+        await this.graphs.addEdge(quest, { from: st.from, to: st.to, kind: 'wait', hours: st.hours ?? 24 });
+        s.report.notes.push(`Stage ${st.to} follows ${st.hours ?? 24} in-game hours after stage ${st.from} (sleeping or waiting counts).`);
+      }
+      return;
+    }
     if (st.kind === 'script') {
       if (st.from === null) s.report.warnings.push(`“${st.note}” should happen right away, but it doesn't say after which stage; it was left out.`);
       else await this.graphs.addEdge(quest, { from: st.from, to: st.to, kind: 'script' });
+      return;
+    }
+    // Having several of something ("find all three pages"), however the player got them.
+    const item = st.kind === 'pickup' && st.targetKey ? s.plan.items.find((x) => x.key === st.targetKey) : undefined;
+    const count = item ? (st.count ?? 1) > 1 ? st.count! : (item.copies ?? 1) > 1 ? item.copies! : 1 : 1;
+    if (item && count > 1) {
+      await this.graphs.addEdge(quest, { from: st.from, to: st.to, kind: 'collect', item: s.items.get(item.key)!, count });
       return;
     }
     if (st.kind === 'clear') {
@@ -1080,6 +1152,9 @@ export class QuestBuilder {
 
   private stepTarget(s: BuildSession, st: QuestPlan['steps'][number]): FormKey | undefined {
     if (!st.targetKey) return undefined;
+    // Arriving outdoors: near where the place's people or enemies are, not the middle of the cell.
+    const cell = s.cells.get(st.targetKey);
+    if (st.kind === 'arrive' && cell && s.focus.has(st.targetKey) && s.quest) return this.graphs.markerIn(s.quest, cell, s.focus.get(st.targetKey));
     return s.npcs.get(st.targetKey) ?? s.placedItems.get(st.targetKey) ?? (s.inContainer.has(st.targetKey) ? s.items.get(st.targetKey) : undefined) ?? s.cells.get(st.targetKey);
   }
 
@@ -1263,7 +1338,15 @@ export class QuestBuilder {
     }
     const stages = g.nodes.map((n) => ({ index: n.stage, journal: n.text, startsQuest: n.startUp, completesQuest: n.completesQuest, failsQuest: n.failsQuest }));
     const objectives = g.objectives.map((o) => ({ index: o.index, text: o.text, shownAtStage: g.nodes.find((n) => n.shows.includes(o.index))?.stage ?? stages[0]?.index ?? 0, completedAtStage: g.nodes.find((n) => n.completes.includes(o.index))?.stage ?? null, targetKey: null }));
-    const steps = g.edges.map((e) => ({ from: e.from, to: e.to, kind: e.kind === 'hit' || e.kind === 'load' ? ('script' as const) : (e.kind as PlanStep['kind']), targetKey: e.target ? (keys.get(e.target) ?? null) : null, note: e.label }));
+    const steps: PlanStep[] = g.edges.map((e) => ({
+      from: e.from,
+      to: e.to,
+      kind: e.kind === 'hit' || e.kind === 'load' ? 'script' : e.kind === 'collect' ? 'pickup' : (e.kind as PlanStep['kind']),
+      targetKey: e.target ? (keys.get(e.target) ?? null) : null,
+      count: null,
+      hours: null,
+      note: e.label,
+    }));
     const screenplay = this.dialogue.toScreenplay(quest).trim();
     const first = g.starts.find((x) => x.kind !== 'game');
     const startsWhen: QuestPlan['startsWhen'] =
@@ -1592,7 +1675,7 @@ export class QuestBuilder {
         // Scripts belong to the original's quest (a quest item copied for its looks), not this one.
         delete d.scripts;
         if (d.data && i.value !== null) d.data = { ...d.data, value: Math.max(0, Math.round(i.value)) };
-        if (this.ws.summary(item)?.sig === 'BOOK') d.text = `<p align="center">${i.name}</p>`;
+        if (this.ws.summary(item)?.sig === 'BOOK') d.text = i.text?.trim() ? bookText(i.name, i.text) : `<p align="center">${i.name}</p>`;
       },
       `Set up ${i.name}`,
     );
@@ -1600,9 +1683,25 @@ export class QuestBuilder {
     report.created.push({ kind: 'item', formKey: item, label: `${i.name} (${editorId}), copied from ${this.label(template)}` });
     if (sig === 'MISC' && ITEM_TEMPLATE_SIG[i.kind] !== 'MISC') report.notes.push(`${i.name} should be a ${i.kind} but there's none to copy, so it's a misc item.`);
     else if (sig !== ITEM_TEMPLATE_SIG[i.kind]) report.notes.push(`${i.name} is copied from ${this.label(template)}, the closest item by name, so it looks like one.`);
-    if (sig === 'BOOK') report.notes.push(`${i.name}: write the book's text in the Objects tab.`);
+    if (sig === 'BOOK' && !i.text?.trim()) report.notes.push(`${i.name}: write the book's text in the Objects tab.`);
     return item;
   }
+}
+
+/**
+ * What a book, note or letter says, as the game's book text: paragraphs kept, quoting marks from the author's
+ * document taken off, and notes, letters and notices in the handwritten font.
+ */
+export function bookText(name: string, text: string): string {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.replace(/^\s*>\s?/, '').trimEnd())
+    .join('\n')
+    .trim()
+    .replace(/</g, '&lt;')
+    .replace(/\n{3,}/g, '\n\n');
+  const handwritten = /\b(note|letter|notice|ledger|journal|diary|list|message|orders?|bill|poster|scrap)\b/i.test(name);
+  return handwritten ? `<font face='$HandwrittenFont'>${lines}</font>` : `<p align="left">${lines}</p>`;
 }
 
 /**
@@ -1620,6 +1719,11 @@ export function rewriteScreenplay(text: string, speakers: Map<string, string>, i
       out = out.replace(/\[(gives|takes|if\s+(?:not\s+|no\s+)?has)\s+([^\]]*?)(\s*[x×]\s*\d+)?\]/gi, (m, verb: string, what: string, count?: string) => {
         const id = items.get(what.trim().toLowerCase());
         return id ? `[${verb} ${id}${count ?? ''}]` : m;
+      });
+      // [if dead varro]: the character the plan's key stands for.
+      out = out.replace(/\[if\s+((?:not\s+)?(?:dead|alive|killed))\s+([^\]]+?)\]/gi, (m, what: string, who: string) => {
+        const id = speakers.get(who.trim().toLowerCase());
+        return id ? `[if ${what} ${id}]` : m;
       });
       return out;
     })

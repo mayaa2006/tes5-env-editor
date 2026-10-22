@@ -52,6 +52,8 @@ for (const size of [
     if (process.env.SCREENSHOT_DIR) await dlg.screenshot({ path: `${process.env.SCREENSHOT_DIR}/free-ai-${size.width}.png` });
     await dlg.getByTestId('ai-done').click();
     await expect(dlg.getByTestId('ai-summary')).toContainText('Planning with qwen3:14b (Ollama)');
+    // Planned in one go (reading beat by beat has its own test).
+    await dlg.getByTestId('plan-how').locator('select').selectOption('whole');
     await dlg.getByTestId('plan-quest').click();
 
     const review = dlg.getByTestId('plan-review');
@@ -109,6 +111,8 @@ test('plan with a free online service: key link, live model list (1280×800)', a
   await expect(dlg.getByTestId('openai-found')).toContainText('Key works: 2 model(s)');
   await expect(dlg.getByTestId('openai-model')).toHaveValue('deepseek-ai/deepseek-v4.1-flash');
   if (process.env.SCREENSHOT_DIR) await dlg.screenshot({ path: `${process.env.SCREENSHOT_DIR}/free-online-1280.png` });
+  // Planned in one go (reading beat by beat has its own test).
+  await dlg.getByTestId('plan-how').locator('select').selectOption('whole');
   await dlg.getByTestId('plan-quest').click();
   await expect(dlg.getByTestId('plan-review')).toBeVisible();
   expect(chats[0].model).toBe('deepseek-ai/deepseek-v4.1-flash');

@@ -26,6 +26,7 @@ import {
   normalizePlan,
   pickPlanExample,
   planCatalog,
+  mendStages,
   repairPlan,
   rewriteScreenplay,
   validatePlan,
@@ -56,7 +57,7 @@ describe('quest plan', () => {
   it('catches broken references', () => {
     const p = exampleQuestPlan();
     p.items[0]!.startsAtKey = 'nowhere';
-    p.steps.push({ from: 20, to: 300, kind: 'death', targetKey: 'ring', note: 'Kill the ring' });
+    p.steps.push({ from: 20, to: 300, kind: 'death', targetKey: 'ring', count: null, hours: null, note: 'Kill the ring' });
     p.characters.push({ ...p.characters[1]!, name: 'Twin' });
     const msgs = validatePlan(p).map((i) => i.message);
     expect(msgs).toContain('Brynja\'s Ring starts in "nowhere", which isn\'t a location in the plan');
@@ -73,7 +74,7 @@ describe('plans that would get stuck', () => {
     const plan = exampleQuestPlan();
     // Eirik's step "tells the player where the ring is" is a talk step, but none of his lines has [stage 15].
     plan.stages.push({ index: 15, journal: 'Eirik told me where the ring is.', startsQuest: false, completesQuest: false, failsQuest: false });
-    plan.steps.push({ from: 10, to: 15, kind: 'talk', targetKey: null, note: 'Eirik tells the player where the ring is' });
+    plan.steps.push({ from: 10, to: 15, kind: 'talk', targetKey: null, count: null, hours: null, note: 'Eirik tells the player where the ring is' });
     expect(messages(plan)).toContain('Nothing moves the quest to stage 15: “Eirik tells the player where the ring is” happens in a conversation, but no line has [stage 15]. Add [stage 15] to the line that does it');
     plan.conversations[1]!.screenplay += '\nPLAYER: Where is it? [if stage 10]\nEIRIK: Under the table. [stage 15]';
     expect(messages(plan).filter((m) => m.includes('stage 15'))).toEqual([]);
@@ -83,7 +84,7 @@ describe('plans that would get stuck', () => {
     const plan = exampleQuestPlan();
     expect(validatePlan(plan).filter((i) => /^The player (needs|loses)/.test(i.message))).toEqual([]);
     // The ring is Eirik's and nobody gives it to the player, yet Brynja takes it from them.
-    plan.items[0] = { ...plan.items[0]!, startsWith: 'character', startsAtKey: 'eirik', spot: null };
+    plan.items[0] = { ...plan.items[0]!, startsWith: 'character', startsAtKey: 'eirik', spot: null, copies: null, text: null, lockedWith: null };
     plan.steps = plan.steps.filter((st) => st.kind !== 'pickup');
     expect(messages(plan)).toContain("The player needs Brynja's Ring ([takes ring] or [if has ring]) but never gets it: put it somewhere to pick up (startsWith \"location\" and a pickup step), have its owner hand it over with [gives ring x1], or give it as a reward");
     // Eirik hands it over: fine.
@@ -100,7 +101,7 @@ describe('plans that would play wrong', () => {
     const plan = exampleQuestPlan();
     // Two endings chosen at stage 20, written with nothing limiting when they're offered.
     plan.stages.push({ index: 110, journal: 'I kept the ring and Brynja trained me instead.', startsQuest: false, completesQuest: true, failsQuest: false });
-    plan.steps.push({ from: 20, to: 110, kind: 'talk', targetKey: null, note: 'The player asks for training instead' });
+    plan.steps.push({ from: 20, to: 110, kind: 'talk', targetKey: null, count: null, hours: null, note: 'The player asks for training instead' });
     plan.conversations[0]!.screenplay += '\nPLAYER: Teach me instead.\nBRYNJA: Very well. [skill Speech x1] [stage 110] [goodbye]';
     expect(validatePlan(plan).map((i) => i.message)).toContain("“Teach me instead.” (Brynja) moves the quest to stage 110 whenever it's chosen, even before the quest gets there, so the player can skip ahead. Add [if stage N] for the stage it belongs to");
     // An AI's plan is mended from its own step: offered at stage 20 only.
@@ -112,7 +113,7 @@ describe('plans that would play wrong', () => {
   it('an item to pick up that someone carries and never lets go of', () => {
     const plan = exampleQuestPlan();
     // Brynja holds her own ring, yet the plan says the player picks it up.
-    plan.items[0] = { ...plan.items[0]!, startsWith: 'character', startsAtKey: 'brynja', spot: null };
+    plan.items[0] = { ...plan.items[0]!, startsWith: 'character', startsAtKey: 'brynja', spot: null, copies: null, text: null, lockedWith: null };
     const msg = "The player has to pick up Brynja's Ring, but Brynja carries it and never hands it over or dies: put it on the character it should be taken from (one who fights or dies), somewhere to pick up, or have Brynja hand it over with [gives ring x1]";
     expect(validatePlan(plan).map((i) => i.message)).toContain(msg);
     // Eirik has it and dies for it: fine.
@@ -142,7 +143,7 @@ describe('plans that would play wrong', () => {
   it('has the holder hand over an item the player must deliver, when the job is taken', () => {
     const plan = exampleQuestPlan();
     // Brynja keeps the ring and Eirik takes it from the player: Brynja hands it over when the job is taken.
-    plan.items[0] = { ...plan.items[0]!, startsWith: 'character', startsAtKey: 'brynja', spot: null };
+    plan.items[0] = { ...plan.items[0]!, startsWith: 'character', startsAtKey: 'brynja', spot: null, copies: null, text: null, lockedWith: null };
     plan.steps = plan.steps.filter((st) => st.kind !== 'pickup');
     plan.conversations[0]!.screenplay = plan.conversations[0]!.screenplay.replace('[takes ring x1] ', '');
     plan.conversations[1]!.screenplay += '\nPLAYER: Brynja sent this. [if stage 10]\nEIRIK: Ah, the ring. [takes ring x1] [stage 20] [goodbye]';
@@ -161,7 +162,7 @@ describe('plans that would play wrong', () => {
   it('a “right away” step into a failing stage', () => {
     const plan = exampleQuestPlan();
     plan.stages.push({ index: 90, journal: 'I kept the ring.', startsQuest: false, completesQuest: false, failsQuest: true });
-    plan.steps.push({ from: 20, to: 90, kind: 'script', targetKey: null, note: 'The player keeps the ring' });
+    plan.steps.push({ from: 20, to: 90, kind: 'script', targetKey: null, count: null, hours: null, note: 'The player keeps the ring' });
     expect(validatePlan(plan).map((i) => i.message)).toContain('“The player keeps the ring” fails the quest as soon as stage 20 is reached (a “right away” step into a failing stage). Use a failure instead (a time limit, or someone dying)');
     // With a time limit already failing it, the step is mended away.
     plan.failures.push({ kind: 'timeLimit', targetKey: null, days: 3, fromStage: 10, failStage: 90, note: 'Three days' });
@@ -211,6 +212,184 @@ describe('plans that would play wrong', () => {
     expect(repairPlan(plan)).toContain('stage 100 led nowhere and nothing reached stage 200, which completes the quest: it now goes straight on from 100 to 200');
     expect(plan.steps.at(-1)).toMatchObject({ from: 100, to: 200, kind: 'script' });
     expect(validatePlan(plan).some((i) => i.message.includes('stage 200'))).toBe(false);
+  });
+
+  it('mends what a free AI wrote for a written quest: copies as separate items, the start as a step, a doubled spawn and reward', () => {
+    // As Qwen3.5 4B planned "Lines on a Map": three page items in the mine, picked up 20 → 30, 30 → 30, 30 → 30; the
+    // notice that starts the quest read again as its first step; bandits spawned where an encounter waits; gold paid
+    // by a reward and by the line that ends the quest.
+    const plan = exampleQuestPlan();
+    plan.locations.push({ key: 'mine', name: 'Embershard Mine', existing: 'EmbershardMine01', description: 'A bandit mine', layoutLike: null, doorFrom: null });
+    plan.items = [
+      { key: 'notice', name: 'Wanted Notice', kind: 'book', existing: null, basedOn: null, value: null, startsWith: 'location', startsAtKey: 'tavern', spot: 'on the board', copies: null, text: 'Cartographer wanted.', lockedWith: null },
+      // (Named "Torn Map Page 1", "2" and "3", as the model did on the next run.)
+      ...['by the forge', 'in a chest', 'on a table near the back'].map((spot, n) => ({ key: `mapPage${n + 1}`, name: `Torn Map Page ${n + 1}`, kind: 'misc' as const, existing: null, basedOn: null, value: null, startsWith: 'location' as const, startsAtKey: 'mine', spot, copies: null, text: null, lockedWith: null })),
+    ];
+    plan.encounters = [{ key: 'bandits', what: 'LvlBanditMelee', count: 3, locationKey: 'mine', spot: null }];
+    // The notice listed as a place too; the marker on all three pages at once.
+    plan.locations.push({ key: 'notice', name: 'Wanted Notice', existing: null, description: 'Pinned to the bar', layoutLike: null, doorFrom: null });
+    plan.startsWithGame = false;
+    plan.startsWhen = { kind: 'read', targetKey: 'notice', quest: null, stage: null };
+    plan.objectives = [
+      { index: 10, text: 'Find the map pages', shownAtStage: 10, completedAtStage: 20, targetKey: 'mapPage1' },
+      { index: 11, text: 'Find the map pages', shownAtStage: 10, completedAtStage: 20, targetKey: 'mapPage2;mapPage3' },
+      { index: 20, text: 'Return to Brynja', shownAtStage: 20, completedAtStage: 100, targetKey: 'brynja' },
+    ];
+    plan.steps = [
+      { from: 0, to: 10, kind: 'read', targetKey: 'notice', count: null, hours: null, note: 'The player reads the notice' },
+      { from: 10, to: 20, kind: 'pickup', targetKey: 'mapPage1', count: null, hours: null, note: 'First page' },
+      { from: 20, to: 20, kind: 'pickup', targetKey: 'mapPage2', count: null, hours: null, note: 'Second page' },
+      { from: 20, to: 20, kind: 'pickup', targetKey: 'mapPage3', count: null, hours: null, note: 'Third page' },
+      { from: 20, to: 100, kind: 'talk', targetKey: null, count: null, hours: null, note: 'The player returns' },
+    ];
+    plan.events = [{ atStage: 10, kind: 'spawn', targetKey: null, toKey: null, what: 'LvlBanditAmbushMeleeNordM', count: 3, note: 'Bandits appear in Embershard Mine' }];
+    plan.rewards = [{ atStage: 100, gold: 100, itemKey: null, skill: null }];
+    plan.conversations[0]!.screenplay = plan.conversations[0]!.screenplay.replace('[takes ring x1] ', '');
+    const changes = [...repairPlan(plan), ...mendStages(plan)];
+    expect(changes).toEqual(
+      expect.arrayContaining([
+        '3 items called “Torn Map Page” in one place are now one item with 3 copies, found by one step that counts them',
+        'the step “The player reads the notice” is what starts the quest, so the quest goes straight on from stage 0 to 10',
+        'the spawn “Bandits appear in Embershard Mine” now shows the plan\'s encounter “bandits” at stage 10 (it waits there hidden until then)',
+        'the reward of 100 gold at stage 100 is left out: the line that reaches that stage already pays it',
+        'left out the place “Wanted Notice”, which is the item of the same name',
+        '"mapPage2;mapPage3" → "mapPage2"',
+      ]),
+    );
+    expect(plan.locations.map((l) => l.key)).toEqual(['tavern', 'mine']);
+    expect(plan.items.map((i) => i.key)).toEqual(['notice', 'mapPage1']);
+    expect(plan.items[1]).toMatchObject({ name: 'Torn Map Page', copies: 3, spot: 'by the forge; in a chest; on a table near the back' });
+    expect(plan.steps.map((s) => `${s.from}→${s.to} ${s.kind} ${s.targetKey ?? ''} ${s.count ?? ''}`.trim())).toEqual(['0→10 script', '10→20 pickup mapPage1 3', '20→100 talk']);
+    expect(plan.objectives.map((o) => o.targetKey)).toEqual(['mapPage1', 'brynja']);
+    expect(plan.events).toEqual([{ atStage: 10, kind: 'show', targetKey: 'bandits', toKey: null, what: null, count: null, note: 'Bandits appear in Embershard Mine' }]);
+    expect(plan.rewards).toEqual([]);
+    expect(validatePlan(plan).filter((i) => i.severity === 'error')).toEqual([]);
+  });
+
+  it('mends kinds of step and event a free AI makes up, and an ambush where the player arrives', () => {
+    // As Qwen3.5 4B planned "The Apprentice's Road": escorting Rulnik to the stones as a "travel" step, and 4 bandits
+    // spawned by the player as they arrive where the plan's encounter already waits.
+    const plan = exampleQuestPlan();
+    plan.locations.push({ key: 'stones', name: 'The Guardian Stones', existing: null, description: 'Outside', layoutLike: null, doorFrom: null });
+    plan.encounters = [{ key: 'bandits', what: 'LvlBanditAmbushMeleeNordM', count: 4, locationKey: 'stones', spot: 'around the stones' }];
+    plan.steps[1] = { from: 10, to: 20, kind: 'travel' as never, targetKey: 'stones', count: null, hours: null, note: 'Escort Rulnik to the stones' };
+    plan.events = [{ atStage: 20, kind: 'appear' as never, targetKey: 'bandits', toKey: null, what: null, count: null, note: 'Bandits appear' }];
+    expect(validatePlan(plan).map((i) => i.message)).toContain('The "Escort Rulnik to the stones" step is a kind of step there isn\'t (“travel”)');
+    plan.events.push({ atStage: 20, kind: 'spawn', targetKey: null, toKey: null, what: 'LvlBanditAmbushMeleeNordM', count: 4, note: 'Bandits ambush the player and Rulnik' });
+    const changes = repairPlan(plan);
+    expect(changes).toEqual(expect.arrayContaining(['the step “Escort Rulnik to the stones” is an arrive step (“travel” isn\'t a kind of step)', 'the event “Bandits appear” is a show event', "left out the spawn “Bandits ambush the player and Rulnik”: the plan's encounter already has them there"]));
+    expect(plan.steps[1]!.kind).toBe('arrive');
+    expect(plan.events.map((e) => e.kind)).toEqual(['show']);
+  });
+
+  it('gives "agree to go, then get there" a stage between, so talking does not skip the walk', () => {
+    // As Qwen3.5 4B planned it: Rulnik's "Lead the way" sets stage 20, which arriving at the stones is meant to set.
+    const plan = exampleQuestPlan();
+    plan.locations.push({ key: 'valley', name: 'Demo Valley', existing: 'DemoValley1_0', description: 'Outside', layoutLike: null, doorFrom: null });
+    plan.steps[1] = { from: 10, to: 20, kind: 'arrive', targetKey: 'valley', count: null, hours: null, note: 'Escort Eirik to the valley' };
+    plan.conversations[1]!.screenplay = "PLAYER: Brynja sent me. [if stage 10]\nEIRIK: Lead the way. [stage 20]";
+    plan.characters[1]!.routine = [{ activity: 'follow', where: null, hours: null, fromStage: 20, untilStage: 100, line: null }];
+    expect(validatePlan(plan).map((i) => i.message)).toContain('A line in “Eirik” sets stage 20, which “Escort Eirik to the valley” is meant to reach, so the player can skip it by talking. Take out that [stage 20], or add a talk step if saying it should count');
+    expect([...repairPlan(plan), ...mendStages(plan)]).toContain('the line that set stage 20 now sets a stage of its own (15), so “Escort Eirik to the valley” still has to happen after it');
+    expect(plan.conversations[1]!.screenplay).toBe('PLAYER: Brynja sent me. [if stage 10]\nEIRIK: Lead the way. [stage 15]');
+    expect(plan.steps.map((x) => `${x.from}→${x.to} ${x.kind}`)).toEqual(['0→10 talk', '15→20 arrive', '20→100 talk', '10→15 talk']);
+    expect(plan.characters[1]!.routine[0]!.fromStage).toBe(15);
+    expect(validatePlan(plan).filter((i) => i.severity === 'error' || /skip it by talking/.test(i.message))).toEqual([]);
+  });
+
+  it("gives a failure its own stage when the AI named one the quest goes through, and drops a line's stage the quest is past", () => {
+    // As Qwen3.5 4B planned it: "the quest fails if Rulnik dies", failing at stage 20 (arriving at the stones).
+    const plan = exampleQuestPlan();
+    plan.failures = [{ kind: 'death', targetKey: 'eirik', days: null, fromStage: null, failStage: 20, note: 'Rulnik is dead' }];
+    plan.conversations[1]!.screenplay = 'PLAYER: Are you hurt? [if stage 100]\nEIRIK: Hesta needs to know. [stage 20]';
+    const changes = [...repairPlan(plan), ...mendStages(plan)];
+    expect(changes).toEqual(expect.arrayContaining(['“Rulnik is dead” sets the new stage 200, which fails the quest (stage 20 is one the quest goes through)', 'took [stage 20] off a line in “Eirik” offered at stage 100 (the quest is past it by then)']));
+    expect(plan.stages.find((x) => x.index === 20)!.failsQuest).toBe(false);
+    expect(plan.failures[0]!.failStage).toBe(200);
+    expect(plan.conversations[1]!.screenplay).toBe('PLAYER: Are you hurt? [if stage 100]\nEIRIK: Hesta needs to know.');
+  });
+
+  it('gives "kill them, then report back" a stage between, so the report is said', () => {
+    // As Qwen3.5 4B planned "The Apprentice's Road": clearing the bandits (20 → 30) completes the quest, and so does
+    // the line where the player tells Hesta, offered at 20.
+    const plan = exampleQuestPlan();
+    plan.encounters = [{ key: 'bandits', what: 'bandit', count: 4, locationKey: 'tavern', spot: null }];
+    plan.steps[2] = { from: 20, to: 100, kind: 'clear', targetKey: 'bandits', count: null, hours: null, note: 'All bandits are dead' };
+    plan.objectives[1] = { index: 20, text: 'Kill the bandits', shownAtStage: 20, completedAtStage: 100, targetKey: 'bandits' };
+    plan.conversations[0]!.screenplay = plan.conversations[0]!.screenplay.replace('[takes ring x1] ', '') + '\nGREETING:\nBRYNJA: They won\'t trouble us now. [if stage 100]';
+    const changes = [...repairPlan(plan), ...mendStages(plan)];
+    expect(changes).toContain('“All bandits are dead” now reaches a stage of its own (60), and the conversation that reaches stage 100 is offered from there, so the player reports back after it');
+    expect(plan.stages.map((x) => x.index)).toEqual([0, 10, 20, 60, 100]);
+    expect(plan.steps[2]).toMatchObject({ from: 20, to: 60, kind: 'clear' });
+    expect(plan.objectives[1]!.completedAtStage).toBe(60);
+    expect(plan.conversations[0]!.screenplay).toContain('PLAYER: I found your ring. [if stage 60]');
+    expect(plan.conversations[0]!.screenplay).toContain("BRYNJA: They won't trouble us now. [if stage 60]");
+    expect(validatePlan(plan).filter((i) => i.severity === 'error')).toEqual([]);
+  });
+
+  it('has the character a talk step names move the quest on, and lets a key be pickpocketed', () => {
+    // As Qwen3.5 4B planned "Business After Dark": "Hulda tells the player Varro keeps strange hours" (0 → 10), with
+    // nothing Hulda says tagged; Varro's key to be pickpocketed.
+    const plan = exampleQuestPlan();
+    plan.characters[1] = { ...plan.characters[1]!, key: 'hulda', name: 'Hulda' };
+    plan.characters.push({ ...plan.characters[1]!, key: 'varro', name: 'Varro Tullius' });
+    plan.steps[0] = { from: 0, to: 10, kind: 'talk', targetKey: null, count: null, hours: null, note: 'Hulda tells the player Varro keeps strange hours' };
+    plan.conversations[1] = { title: '✎ Hulda', screenplay: "PLAYER: I'm looking for an Imperial called Varro. [if day]\nHULDA: The Imperial? He keeps strange hours." };
+    plan.conversations.push({ title: '✎ Varro Tullius', screenplay: 'PLAYER: Who are you? [if night]\nVARRO: A collector.' });
+    plan.conversations[0]!.screenplay = plan.conversations[0]!.screenplay.replace(' [stage 10]', '');
+    plan.items.push({ key: 'key', name: "Varro's Strongbox Key", kind: 'key', existing: null, basedOn: null, value: null, startsWith: 'character', startsAtKey: 'varro', spot: null, copies: null, text: null, lockedWith: null });
+    plan.steps[1] = { ...plan.steps[1]!, targetKey: 'key', note: 'Player pickpockets the key from Varro' };
+    expect(mendStages(plan)).toContain('“Hulda tells the player Varro keeps strange hours”: what Hulda answers to “I\'m looking for an Imperial called Varro.” moves the quest to stage 10');
+    expect(plan.conversations[1]!.screenplay).toBe("PLAYER: I'm looking for an Imperial called Varro. [if day] [if stage 0]\nHULDA: The Imperial? He keeps strange hours. [stage 10]");
+    expect(validatePlan(plan).map((i) => i.message).filter((m) => /stage 10|pick up/.test(m))).toEqual([]);
+  });
+
+  it('has the plan\'s characters attack instead of spawning enemies, and lets the player walk back', () => {
+    // As Qwen3.5 4B planned "Settling Accounts".
+    const plan = exampleQuestPlan();
+    plan.characters.push({ ...plan.characters[1]!, key: 'gerda', name: 'Gerda Stone-Arm' });
+    plan.events = [
+      { atStage: 20, kind: 'spawn', targetKey: null, toKey: null, what: 'LvlSilverHandMelee1H', count: 1, note: 'Gerda and Eirik attack the player' },
+      { atStage: 100, kind: 'movePlayer', targetKey: null, toKey: 'tavern', what: null, count: null, note: 'The player moves to Brynja' },
+      { atStage: 20, kind: 'spawn', targetKey: null, toKey: null, what: 'wolf', count: 2, note: 'Wolves attack on the road' },
+    ];
+    expect(repairPlan(plan)).toEqual(expect.arrayContaining(['“Gerda and Eirik attack the player” makes Eirik and Gerda Stone-Arm attack, instead of spawning enemies', 'left out “The player moves to Brynja”: the player walks there themselves']));
+    expect(plan.events.map((e) => `${e.kind} ${e.targetKey ?? e.what}`)).toEqual(['hostile eirik', 'hostile gerda', 'spawn wolf']);
+  });
+
+  it('puts an item locked away with a key in a strongbox where its holder stays', () => {
+    // As Qwen3.5 4B planned "Business After Dark": the ledger locked with Varro's key, but carried by Varro.
+    const plan = exampleQuestPlan();
+    plan.items.push(
+      { key: 'strongboxKey', name: "Varro's Strongbox Key", kind: 'key', existing: null, basedOn: null, value: null, startsWith: 'character', startsAtKey: 'eirik', spot: null, copies: null, text: null, lockedWith: null },
+      { key: 'ledger', name: "Varro's Ledger", kind: 'book', existing: null, basedOn: null, value: null, startsWith: 'character', startsAtKey: 'eirik', spot: null, copies: null, text: 'Paid half.', lockedWith: 'strongboxKey' },
+    );
+    plan.characters[1]!.inventory = [{ item: 'StrongboxKey', count: 1 }, { item: 'Bottle of Mead', count: 2 }];
+    const changes = repairPlan(plan);
+    expect(changes).toContain("Varro's Ledger is locked away with strongboxKey, so it lies in a strongbox where Eirik stays");
+    // The key in Eirik's inventory is the plan's own key: it isn't looked for in the load order as well.
+    expect(changes).toContain("Eirik carries Varro's Strongbox Key, the plan's own item");
+    expect(plan.characters[1]!.inventory).toEqual([{ item: 'Bottle of Mead', count: 2 }]);
+    expect(plan.items.at(-1)).toMatchObject({ startsWith: 'location', startsAtKey: 'tavern', spot: 'in a locked strongbox' });
+    expect(validatePlan(plan).filter((i) => /locked|isn't put in a container/.test(i.message))).toEqual([]);
+  });
+
+  it('leaves alone items of one name in different places, an ambush away from the encounter, and gold no line pays', () => {
+    const plan = exampleQuestPlan();
+    plan.items.push({ ...plan.items[0]!, key: 'ring2', startsAtKey: 'cellar' });
+    plan.locations.push({ key: 'cellar', name: 'Cellar', existing: null, description: 'Under the tavern', layoutLike: 'DemoTavern', doorFrom: 'tavern' });
+    plan.encounters = [
+      { key: 'rats', what: 'skeever', count: 2, locationKey: 'cellar', spot: null },
+      { key: 'thugs', what: 'bandit', count: 2, locationKey: 'cellar', spot: null },
+    ];
+    // Bandits wait in the cellar; these come for the player wherever they are.
+    plan.events = [{ atStage: 20, kind: 'spawn', targetKey: null, toKey: null, what: 'LvlBanditMelee', count: 2, note: 'Thieves come for the ring on the road' }];
+    plan.rewards = [{ atStage: 20, gold: 25, itemKey: null, skill: null }];
+    const changes = [...repairPlan(plan), ...mendStages(plan)];
+    expect(changes.filter((c) => /copies|spawn|reward/.test(c))).toEqual([]);
+    expect(plan.items).toHaveLength(2);
+    expect(plan.events).toHaveLength(1);
+    expect(plan.rewards).toHaveLength(1);
   });
 
   it('mends a key used twice in an AI plan: an item listed as a character too', () => {
@@ -266,6 +445,10 @@ describe('plans that would play wrong', () => {
     plan.characters[1] = { ...plan.characters[1]!, name: 'Halvar', existing: 'DemoBlacksmith', basedOn: null };
     expect(newWhenRenamed(ws, plan, 'Halvar saw the ring fall.')).toEqual([]);
     expect(plan.characters[1]!.existing).toBe('DemoBlacksmith');
+    // The text names them, but as someone else: a character with a name of their own is new (Hesta Coldwater planned
+    // as Gerda, on Skyrim's data).
+    plan.characters[1] = { ...plan.characters[1]!, name: 'Eirik Coldwater', existing: 'Halvar the Smith', basedOn: null };
+    expect(newWhenRenamed(ws, plan, 'Eirik Coldwater, a traveller, argues with Halvar the Smith.')).toEqual(['Eirik Coldwater is a new character, copied from Halvar the Smith (DemoBlacksmith)']);
   });
 });
 
@@ -410,14 +593,14 @@ describe('quest builder', () => {
     plan.editorId = 'CellarQuest';
     plan.locations.push({ key: 'cellar', name: 'Old Cellar', existing: null, description: 'Under the tavern', layoutLike: null, doorFrom: null });
     plan.characters[1]!.locationKey = 'cellar';
-    plan.items.push({ key: 'note', name: 'Crumpled Note', kind: 'book', existing: null, basedOn: null, value: 1, startsWith: 'character', startsAtKey: 'eirik', spot: null });
-    plan.items.push({ key: 'charm', name: 'Lucky Charm', kind: 'misc', existing: null, basedOn: null, value: 10, startsWith: 'player', startsAtKey: null, spot: null });
+    plan.items.push({ key: 'note', name: 'Crumpled Note', kind: 'book', existing: null, basedOn: null, value: 1, startsWith: 'character', startsAtKey: 'eirik', spot: null, copies: null, text: null, lockedWith: null });
+    plan.items.push({ key: 'charm', name: 'Lucky Charm', kind: 'misc', existing: null, basedOn: null, value: 10, startsWith: 'player', startsAtKey: null, spot: null, copies: null, text: null, lockedWith: null });
     plan.rewards.push({ atStage: 100, gold: 25, itemKey: 'charm', skill: { skill: 'Archery', levels: 2 } });
-    plan.steps.push({ from: 10, to: 20, kind: 'read', targetKey: 'note', note: 'Read the note' });
-    plan.steps.push({ from: 0, to: 10, kind: 'talk', targetKey: null, note: 'duplicate' });
-    plan.steps.push({ from: 20, to: 20, kind: 'talk', targetKey: null, note: 'Nobody says this' });
+    plan.steps.push({ from: 10, to: 20, kind: 'read', targetKey: 'note', count: null, hours: null, note: 'Read the note' });
+    plan.steps.push({ from: 0, to: 10, kind: 'talk', targetKey: null, count: null, hours: null, note: 'duplicate' });
+    plan.steps.push({ from: 20, to: 20, kind: 'talk', targetKey: null, count: null, hours: null, note: 'Nobody says this' });
     plan.stages.push({ index: 50, journal: '', startsQuest: false, completesQuest: false, failsQuest: false });
-    plan.steps.push({ from: 20, to: 50, kind: 'talk', targetKey: null, note: 'Mention the cellar' });
+    plan.steps.push({ from: 20, to: 50, kind: 'talk', targetKey: null, count: null, hours: null, note: 'Mention the cellar' });
     const r = await builder.build(plan, { seed: 7 });
     const cell = ws.byEditorId('CellarQuestOldCellar')!;
     expect(world.references(cell).map((x) => ws.summary(x.base!)?.name)).toEqual(['Eirik']);
@@ -452,11 +635,21 @@ describe('quest builder', () => {
     expect(res.text).toBe('New, copied from Bowl (DemoBowl)');
   });
 
+  it('copies a key only from a key, so it can lock something', async () => {
+    const { builder, ws } = await setup();
+    ws.createRecord('KEYM', { editorId: 'DemoOldKey', name: 'Old Key', model: { file: 'clutter\\key01.nif' } });
+    const plan = exampleQuestPlan();
+    // As Qwen3.5 4B planned it: "Varro's Strongbox Key", based on Fine Clothes.
+    plan.items[0] = { ...plan.items[0]!, kind: 'key', name: "Varro's Strongbox Key", basedOn: 'Blue Fine Clothes' };
+    const res = builder.resolve(plan).find((r) => r.kind === 'item')!;
+    expect(ws.summary(res.template!)?.sig).toBe('KEYM');
+  });
+
   it('follows quest items characters carry: taken from their body, handed over, delivered', async () => {
     const { ws, builder, graphs, quests, scripts } = await setup();
     const plan = exampleQuestPlan();
     // Eirik has the ring; killing him and taking it moves the quest on, and Brynja takes it back.
-    plan.items[0] = { ...plan.items[0]!, startsWith: 'character', startsAtKey: 'eirik', spot: null };
+    plan.items[0] = { ...plan.items[0]!, startsWith: 'character', startsAtKey: 'eirik', spot: null, copies: null, text: null, lockedWith: null };
     plan.steps = plan.steps.map((st) => (st.kind === 'pickup' ? { ...st, note: 'Take the ring from Eirik' } : st));
     plan.conversations = [
       { title: 'Brynja', screenplay: "PLAYER: Got any work for me? [if stage 0]\nBRYNJA: Eirik stole my ring. Get it back. [stage 10] [goodbye]\nPLAYER: Here's your ring. [if stage 20] [if has ring x1]\nBRYNJA: Thank you! [takes ring x1] [gives gold x100] [stage 100] [goodbye]" },
@@ -698,13 +891,16 @@ describe('quest builder', () => {
     const two = exampleQuestPlan();
     two.title = 'The Ring, Part Two';
     two.editorId = 'RingPartTwo';
-    two.conversations = [];
+    // A line said whatever the stage: fine, since part one starts it.
+    two.conversations = [{ title: 'Brynja', screenplay: 'PLAYER: Is it over?\nBRYNJA: Not yet. [stage 10]' }];
     two.steps = two.steps.filter((x) => x.kind !== 'talk');
     two.startsWithGame = false;
     two.startsWhen = { kind: 'afterQuest', targetKey: null, quest: 'InnkeeperRingQuest', stage: null };
     const r2 = await builder.build(two);
     expect(await graphs.fragmentCode(r1.quest!, 100)).toContain(`${graphs.startLine(r2.quest!)}`);
-    expect((await graphs.graph(r2.quest!)).starts).toEqual([{ kind: 'afterQuest', label: expect.stringContaining('reaches stage 100'), quest: r1.quest!, stage: 100 }]);
+    const g2 = await graphs.graph(r2.quest!);
+    expect(g2.starts).toEqual([{ kind: 'afterQuest', label: expect.stringContaining('reaches stage 100'), quest: r1.quest!, stage: 100 }]);
+    expect(g2.problems.join(' ')).not.toContain('only appears while the quest is running');
 
     // A vanilla quest can't start it (its script would have to be rewritten).
     const three = { ...two, editorId: 'RingPartThree', startsWhen: { kind: 'afterQuest' as const, targetKey: null, quest: 'NoSuchQuest', stage: null } };
@@ -736,7 +932,7 @@ describe('quest builder', () => {
     plan.stages.push({ index: 200, journal: 'Brynja is dead. I will never return her ring now.', startsQuest: false, completesQuest: false, failsQuest: true });
     plan.stages.push({ index: 210, journal: 'I took too long. Brynja has given up on her ring.', startsQuest: false, completesQuest: false, failsQuest: true });
     plan.conversations[1]!.screenplay += `\nPLAYER: Keep quiet about the ring and I'll split it with you. [if stage 20]\nEIRIK: Deal. [remember bribed] [stage 110] [goodbye]\nPLAYER: Anything else? [if chose bribed]\nEIRIK: Not a word, friend. [goodbye]`;
-    plan.steps.push({ from: 20, to: 110, kind: 'talk', targetKey: null, note: 'Make a deal with Eirik' });
+    plan.steps.push({ from: 20, to: 110, kind: 'talk', targetKey: null, count: null, hours: null, note: 'Make a deal with Eirik' });
     plan.failures = [
       { kind: 'death', targetKey: 'brynja', days: null, fromStage: null, failStage: 200, note: 'Brynja dies' },
       { kind: 'timeLimit', targetKey: null, days: 3, fromStage: 10, failStage: 210, note: 'Three days' },
@@ -827,7 +1023,7 @@ describe('quest builder', () => {
     const plan = exampleQuestPlan();
     plan.encounters = [{ key: 'guards', what: 'Town Guard', count: 3, locationKey: 'tavern', spot: null }];
     plan.stages.push({ index: 30, journal: 'I fought off the guards.', startsQuest: false, completesQuest: false, failsQuest: false });
-    plan.steps.push({ from: 20, to: 30, kind: 'clear', targetKey: 'guards', note: 'Defeat the guards' });
+    plan.steps.push({ from: 20, to: 30, kind: 'clear', targetKey: 'guards', count: null, hours: null, note: 'Defeat the guards' });
     plan.objectives.push({ index: 25, text: 'Defeat the guards', shownAtStage: 20, completedAtStage: 30, targetKey: 'guards' });
     expect(validatePlan(plan)).toEqual([]);
     const r = await builder.build(plan);
@@ -1047,7 +1243,7 @@ BRYNJA: You found it! Take this, with my thanks. [takes ring x1] [gives gold x10
     // The plan says Eirik hands over a key at stage 15, but nobody says anything that sets it.
     const first = exampleQuestPlan();
     first.stages.push({ index: 15, journal: 'Eirik gave me a key.', startsQuest: false, completesQuest: false, failsQuest: false });
-    first.steps.push({ from: 10, to: 15, kind: 'talk', targetKey: null, note: 'Eirik gives the player a key' });
+    first.steps.push({ from: 10, to: 15, kind: 'talk', targetKey: null, count: null, hours: null, note: 'Eirik gives the player a key' });
     const lines = 'PLAYER: Do you know anything? [if stage 10]\nEIRIK: Take this key, it opens the cellar. [stage 15] [goodbye]';
     const sent: any[] = [];
     // The plan, the one round of fixing the whole plan (no better), then the lines on their own.

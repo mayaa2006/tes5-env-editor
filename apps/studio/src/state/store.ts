@@ -156,6 +156,8 @@ interface Store {
   log: LogEntry[];
   settings: Settings;
   busy?: string;
+  /** Stops what the busy message is about (planning with an AI), when it can be stopped. */
+  busyStop?: () => void;
   compile: CompileState;
   /** Set when an edit needs a plugin to go into; the edit is retried once one exists. */
   pluginPrompt?: { retry?: () => Promise<unknown> };
@@ -186,7 +188,8 @@ interface Store {
   dismiss(id: number): void;
   addLog(kind: LogEntry['kind'], text: string): void;
   updateSettings(p: Partial<Settings>): void;
-  setBusy(text?: string): void;
+  /** Show a busy message (with a Stop button when `stop` is given; a new message keeps the one before's). */
+  setBusy(text?: string, stop?: () => void): void;
   setPluginPrompt(p?: { retry?: () => Promise<unknown> }): void;
 }
 
@@ -249,7 +252,7 @@ export const useStore = create<Store>((set, get) => ({
     set({ settings });
   },
   compile: { running: false, done: 0, total: 0, report: [] },
-  setBusy: (busy) => set({ busy }),
+  setBusy: (busy, stop) => set({ busy, busyStop: busy ? (stop ?? get().busyStop) : undefined }),
   setPluginPrompt: (pluginPrompt) => set({ pluginPrompt }),
   askAi: (text) => set({ aiAsk: { text, n: (get().aiAsk?.n ?? 0) + 1 }, tab: 'ai' }),
   takeAiAsk: () => {
@@ -260,11 +263,11 @@ export const useStore = create<Store>((set, get) => ({
 }));
 
 /** Call the engine with error reporting; returns undefined on failure. */
-export async function engine<T>(fn: (c: EngineClient) => Promise<T>, opts: { busy?: string; success?: string; refreshSession?: boolean } = {}): Promise<T | undefined> {
+export async function engine<T>(fn: (c: EngineClient) => Promise<T>, opts: { busy?: string; success?: string; refreshSession?: boolean; stop?: () => void } = {}): Promise<T | undefined> {
   const s = useStore.getState();
   const c = s.client;
   if (!c) return undefined;
-  if (opts.busy) s.setBusy(opts.busy);
+  if (opts.busy) s.setBusy(opts.busy, opts.stop);
   try {
     const r = await fn(c);
     if (opts.success) s.toast('success', opts.success);

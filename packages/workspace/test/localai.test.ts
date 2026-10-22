@@ -5,12 +5,18 @@ import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { zipSync, strToU8 } from 'fflate';
-import { LocalAi, deviceOf, gpuFailed } from '../src/node';
-import { LOCAL_MODELS, type LocalAiStatus, type LocalModel } from '../src';
+import { LocalAi, deviceOf, gpuFailed, offloadOf, parseDevices } from '../src/node';
+import { LOCAL_MODELS, fitsGpu, localModel, recommendedModel, type LocalAiStatus, type LocalModel } from '../src';
 
 /** A stand-in for llama-server: says what it runs on, then answers /health (or fails like a server out of memory). */
 const FAKE_SERVER = `#!/usr/bin/env node
 const http = require('node:http');
+if (process.argv.includes('--list-devices')) {
+  console.log('Available devices:');
+  if (process.env.FAKE_GPU === 'none') console.log('  (none)');
+  else for (const d of ['Vulkan0: AMD Radeon RX 6600 (8176 MiB, 7600 MiB free)', 'Vulkan1: llvmpipe (LLVM 15.0.7, 256 bits) (32000 MiB, 32000 MiB free)']) console.log('  ' + d);
+  process.exit(0);
+}
 const port = Number(process.argv[process.argv.indexOf('--port') + 1]);
 if (process.env.FAKE_LLAMA === 'oom') { console.error('ggml_vulkan: failed to allocate buffer: ErrorOutOfDeviceMemory'); process.exit(1); }
 console.error('load_tensors: offloaded 0/29 layers to GPU');
@@ -53,7 +59,7 @@ async function files(): Promise<{ url: string; requests: string[] }> {
 
 function setup(base: string, model: Partial<LocalModel> = {}) {
   const dir = fs.mkdtempSync(join(tmpdir(), 'localai-'));
-  const m: LocalModel = { id: 'tiny', label: 'Tiny 1B', repo: 'x/y', file: 'tiny.gguf', size: MODEL_BYTES.length, sha256: sha(MODEL_BYTES), context: 4096, memoryGb: 1, about: '', license: 'apache-2.0', ...model };
+  const m: LocalModel = { id: 'tiny', label: 'Tiny 1B', repo: 'x/y', file: 'tiny.gguf', size: MODEL_BYTES.length, sha256: sha(MODEL_BYTES), context: 4096, memoryGb: 1, gpuGb: 1, jobsRight: 6, about: '', license: 'apache-2.0', ...model };
   const seen: LocalAiStatus[] = [];
   const pids: string[] = [];
   // Hugging Face's address for the model goes to the test server instead.
@@ -162,6 +168,41 @@ describe('the built-in AI', () => {
     await ai.stop();
   });
 
+  it("checks the graphics card once the runner is downloaded, and recommends the best model that fits on it", async () => {
+    const { url } = await files();
+    const { ai } = setup(url);
+    expect(ai.status().gpus).toBeUndefined();
+    await ai.install('tiny');
+    for (let i = 0; i < 100 && !ai.status().gpus; i++) await new Promise((r) => setTimeout(r, 50));
+    // The software renderer isn't a graphics card.
+    expect(ai.status().gpus).toEqual([{ name: 'AMD Radeon RX 6600', memoryMb: 8176, freeMb: 7600 }]);
+    const gpus = ai.status().gpus!;
+    // 7.6 GB free, 1.5 GB kept for the app's window: Qwen3.5 4B (4.8 GB) fits, Ministral 3 3B (6 GB) doesn't.
+    expect(recommendedModel(gpus)!.id).toBe('qwen3.5-4b');
+    expect(fitsGpu(localModel('ministral-3-3b')!, gpus)).toBe(false);
+    // A 6 GB card: the best that fits is Qwen3.5 2B. A 4 GB card fits none of the good ones entirely: the smallest of
+    // them (not LFM2.5, which fits but got most jobs wrong). With no card, the one that did best in the tests.
+    const six = [{ name: 'GeForce GTX 1660', memoryMb: 6144, freeMb: 5800 }];
+    expect(recommendedModel(six)!.id).toBe('qwen3.5-2b');
+    expect(fitsGpu(localModel('qwen3.5-4b')!, six)).toBe(false);
+    const four = [{ name: 'GeForce GTX 1650', memoryMb: 4096, freeMb: 3900 }];
+    expect(fitsGpu(localModel('qwen3.5-2b')!, four)).toBe(false);
+    expect(recommendedModel(four)!.id).toBe('qwen3.5-2b');
+    expect(recommendedModel([])!.id).toBe('qwen3.5-4b');
+    expect(fitsGpu(localModel('qwen3.5-2b')!, [])).toBe(false);
+    expect(fitsGpu(localModel('qwen3.5-2b')!, undefined)).toBeUndefined();
+  });
+
+  it('reads the graphics cards and how much of a model went on one', () => {
+    expect(parseDevices('Available devices:\n  (none)\n')).toEqual([]);
+    expect(parseDevices('Available devices:\n  Vulkan0: NVIDIA GeForce RTX 3060 (12288 MiB, 11520 MiB free)\n  Vulkan1: Intel(R) UHD Graphics 770 (16300 MiB, 16000 MiB free)\n')).toEqual([
+      { name: 'NVIDIA GeForce RTX 3060', memoryMb: 12288, freeMb: 11520 },
+      { name: 'Intel(R) UHD Graphics 770', memoryMb: 16300, freeMb: 16000 },
+    ]);
+    expect(offloadOf(['load_tensors: offloaded 20/33 layers to GPU'])).toEqual({ layers: 20, of: 33 });
+    expect(offloadOf([])).toBeUndefined();
+  });
+
   it('tells a graphics card failing from other trouble in the log', () => {
     expect(gpuFailed(['ggml_vulkan: vk::Queue::submit: ErrorDeviceLost'])).toBe(true);
     expect(gpuFailed(['ggml_vulkan: Device memory allocation of size 123 failed.', 'ErrorOutOfDeviceMemory'])).toBe(true);
@@ -183,6 +224,7 @@ describe('the built-in AI', () => {
       expect(m.file).toMatch(/\.gguf$/);
       expect(m.size).toBeGreaterThan(1e8);
       expect(m.memoryGb * 1e9).toBeGreaterThan(m.size);
+      expect(m.gpuGb * 1e9).toBeGreaterThan(m.size);
       expect(m.about).not.toMatch(/PROVISIONAL/);
     }
   });

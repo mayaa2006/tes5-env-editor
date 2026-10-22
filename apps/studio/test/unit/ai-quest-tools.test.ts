@@ -189,6 +189,55 @@ describe('the AI workspace quest tools', () => {
     expect(host.quest(quests[0]!.formKey).stages.find((x) => x.index === 10)!.logEntries[0]!.text).toBe('Brynja begged me to find her ring.');
   });
 
+  it('plans a written questline quest by quest and builds it as one undo step', async () => {
+    const host = await demo();
+    // The planner (faked): a plan for each quest, then tags for the author's lines.
+    const one = exampleQuestPlan();
+    one.conversations = [];
+    const two = exampleQuestPlan();
+    Object.assign(two, { title: 'Eirik Again', editorId: 'EirikAgain', items: [], animations: [], conversations: [] });
+    two.characters = [two.characters[1]!];
+    two.objectives = [];
+    two.stages = [
+      { index: 0, journal: '', startsQuest: true, completesQuest: false, failsQuest: false },
+      { index: 100, journal: 'Eirik thanked me.', startsQuest: false, completesQuest: true, failsQuest: false },
+    ];
+    two.steps = [{ from: 0, to: 100, kind: 'talk', targetKey: null, count: null, hours: null, note: 'Talk to Eirik' }];
+    const asked: string[] = [];
+    vi.stubGlobal('fetch', async (_url: string, init: { body: string }) => {
+      const body = JSON.parse(init.body);
+      const all = JSON.stringify(body.messages);
+      asked.push(all.includes('You add tags') ? 'tags' : 'plan');
+      const second = all.includes('This is quest 2 of 2');
+      const answer = all.includes('You add tags') ? (second ? { blocks: [], lines: [{ line: 2, tags: '[stage 100]' }] } : { blocks: [], lines: [{ line: 2, tags: '[stage 10]' }] }) : second ? two : one;
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: JSON.stringify(answer) }, finish_reason: 'stop' }] }), text: async () => '' };
+    });
+    const doc = `# Two Parts\n\n## Quest 1: The Ring\n\nBrynja lost her ring.\n\nPLAYER: Any work?\n  BRYNJA: Find my ring. (the player takes the job)\n\n## Quest 2: Eirik Again\n\nEirik wants thanks.\n\nPLAYER: Hello, Eirik.\n  EIRIK: You found it! (the quest is done)`;
+    host.aiModel = () =>
+      scripted([
+        { text: '', calls: [call('plan_quest', { text: doc }, 'p')], stop: 'tools' },
+        { text: '', calls: [call('build_questline', { questlineId: 'questline1' }, 'b')], stop: 'tools' },
+        { text: 'Built both.', calls: [], stop: 'end' },
+      ]);
+    const s = await host.aiNewSession();
+    const r = await host.aiSend(s.id, `Build this questline:\n${doc}`, { kind: 'openai', url: 'https://x.test/v1', model: 'm' });
+    expect(r.error).toBeNull();
+    // Each quest: its plan first, then the tags for the author's lines (and more requests for what's still missing).
+    expect(asked.slice(0, 2)).toEqual(['plan', 'tags']);
+    expect(asked.filter((x) => x === 'tags').length).toBeGreaterThanOrEqual(2);
+    const results = r.session.messages.filter((m) => m.role === 'tool').flatMap((m: any) => m.results);
+    expect(results.map((x: any) => `${x.name}:${x.status}`)).toEqual(['plan_quest:done', 'build_questline:done']);
+    expect(JSON.parse(results[0].content)).toMatchObject({ questlineId: 'questline1', title: 'Two Parts' });
+    expect(r.session.questlines).toEqual({ questline1: { title: 'Two Parts', planIds: ['plan1', 'plan2'] } });
+    const quests = host.ws!.search({ sigs: ['QUST'], plugin: host.ws!.activeName }).items.filter((q) => q.inActive).map((q) => q.editorId);
+    expect(quests.sort()).toEqual(['EirikAgain', 'InnkeeperRingQuest']);
+    // The author's lines, word for word, with the AI's tags.
+    const lines = host.dialogue!.graph(host.ws!.byEditorId('EirikAgain')!).infos.flatMap((i) => i.lines);
+    expect(lines).toContain('You found it!');
+    await host.aiUndoTurn(s.id, 0);
+    expect(host.ws!.byEditorId('EirikAgain')).toBeUndefined();
+  });
+
   it('stops revising after two revisions in a turn, and says when a revision changed nothing', async () => {
     const host = await demo();
     vi.stubGlobal('fetch', async () => ({ ok: true, status: 200, json: async () => ({ choices: [{ message: { content: JSON.stringify(exampleQuestPlan()) }, finish_reason: 'stop' }] }), text: async () => '' }));

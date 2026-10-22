@@ -45,7 +45,8 @@ export interface AgentTool<I = any> {
   /** What the call does, in a few plain words ("Add stage 20 to MyQuest"). */
   summary(input: I): string;
   /** `signal` is aborted when the author presses Stop: tools that wait on something slow (an AI request) pass it on. */
-  run(input: I, ctx?: { signal?: AbortSignal }): Promise<AgentToolOutput> | AgentToolOutput;
+  /** `ctx.progress` updates what the running call says it's doing (a long plan: "quest 2 of 4, tagging Hesta's lines"). */
+  run(input: I, ctx?: { signal?: AbortSignal; progress?: (text: string) => void }): Promise<AgentToolOutput> | AgentToolOutput;
 }
 
 /** What a tool hands back: data for the AI, and optionally a short line and a link for the author. */
@@ -106,6 +107,8 @@ export interface AgentSession {
   project?: AgentProject;
   /** Quest plans the AI made in this conversation, by id ("plan1"), kept so they can be revised and built later. */
   plans?: Record<string, { plan: unknown; source?: string; quest?: string }>;
+  /** Questlines the AI planned in this conversation, by id ("questline1"): their title and their quests' plan ids. */
+  questlines?: Record<string, { title: string; planIds: string[] }>;
 }
 
 export type AgentTaskStatus = 'todo' | 'doing' | 'done' | 'skipped';
@@ -186,7 +189,8 @@ How to work:
 - If a request is unclear and getting it wrong would waste the author's work, ask one short question first.
 
 Bigger jobs:
-- When the author asks for something too big for one go (a questline, several quests, a whole area or town, "a mod about…"), first make a project with set_project: a short brief of what they want and a to-do list of tasks in order, each one a piece you can finish and check in one go (plan and build quest 1; make the bandit camp; write the follow-up quest…). Show them the list and ask whether to start.
+- A questline the author has already written (a heading for each quest: "Quest 1: …", "Quest 2: …") is planned in one go: give the whole text to plan_quest, which plans every quest, then build them together with build_questline.
+- When the author asks for something too big for one go that isn't written yet (a questline to come up with, several quests, a whole area or town, "a mod about…"), first make a project with set_project: a short brief of what they want and a to-do list of tasks in order, each one a piece you can finish and check in one go (plan and build quest 1; make the bandit camp; write the follow-up quest…). Show them the list and ask whether to start.
 - Work on one task at a time: mark it doing, do it, check it, mark it done with a one-line note of what you made. Then stop and tell the author what's done and what's next, so they can look before you go on. Carry on when they say so.
 - Keep the brief up to date with decisions the author makes along the way (names, places, tone), so later tasks fit the earlier ones.
 - When every task is done, run review_mod and sum up what's left to fix.
@@ -510,7 +514,8 @@ async function runTool(call: AgentToolCall, tool: AgentTool | undefined, model: 
   }
   hooks.onEvent?.({ type: 'call', session: sid, id: call.id, name: call.name, summary, writes: tool.writes, status: 'running' });
   try {
-    const run = () => Promise.resolve(tool.run(parsed.data, { signal: hooks.signal }));
+    const progress = (text: string) => hooks.onEvent?.({ type: 'call', session: sid, id: call.id, name: call.name, summary: `${summary}: ${text}`, writes: tool.writes, status: 'running' });
+    const run = () => Promise.resolve(tool.run(parsed.data, { signal: hooks.signal, progress }));
     const out = tool.writes && hooks.transaction ? await hooks.transaction(`AI: ${summary}`, run) : await run();
     return { id: call.id, name: call.name, content: clip(stringify(out.data ?? 'Done.'), max), summary, writes: tool.writes, status: 'done', ...(out.note ? { note: out.note } : {}), ...(out.link ? { link: out.link } : {}) };
   } catch (e) {

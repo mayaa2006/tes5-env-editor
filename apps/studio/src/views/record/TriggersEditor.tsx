@@ -38,9 +38,18 @@ const ACTIONS: { kind: TriggerAction['kind']; label: string; make: () => Trigger
   { kind: 'custom', label: 'Papyrus code', make: () => ({ kind: 'custom', code: '' }) },
 ];
 
+/**
+ * The events a trigger can use. Quests also make two on the player's quest alias that aren't offered for new triggers
+ * (collecting items, time passing): they're listed so triggers made by a quest read properly.
+ */
 function useEvents() {
   const client = useStore((s) => s.client);
-  return useQuery(() => client?.call('triggerEvents'), [client], { revision: false }).data ?? [];
+  const list = useQuery(() => client?.call('triggerEvents'), [client], { revision: false }).data ?? [];
+  return [
+    ...list,
+    { kind: 'collect' as TriggerEventKind, label: 'Player has enough of an item', hint: 'Made by a quest for “collect N” (with a “player has” condition); on the player’s quest alias.', actorOnly: false, quest: true },
+    { kind: 'wait' as TriggerEventKind, label: 'Some in-game hours pass', hint: 'Made by a quest for “come back tomorrow”: the earlier stage’s script starts the clock.', actorOnly: false, quest: true },
+  ];
 }
 
 /** One-line description of a trigger, for the list. */
@@ -151,7 +160,7 @@ export function TriggersSection({ host, actor }: { host: TriggerHost; actor: boo
 function TriggerDialog({ host, actor, initial, onSave, onClose }: { host: TriggerHost; actor: boolean; initial: TriggerSpec; onSave: (s: TriggerSpec) => void; onClose: () => void }) {
   const [spec, setSpec] = useState<TriggerSpec>(initial);
   const [preview, setPreview] = useState<string | null>(null);
-  const events = useEvents().filter((e) => actor || !e.actorOnly);
+  const events = useEvents().filter((e) => (actor || !e.actorOnly) && (!('quest' in e) || e.kind === spec.event.kind));
   const client = useStore((s) => s.client);
   const showing = preview !== null;
   useEffect(() => {

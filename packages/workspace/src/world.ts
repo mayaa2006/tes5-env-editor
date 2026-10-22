@@ -57,6 +57,18 @@ export interface ExteriorArea {
   terrain: CellTerrain[];
 }
 
+export interface MapMarker {
+  name: string;
+  ref: FormKey;
+  /** The outdoor cell it stands in. */
+  cell: FormKey;
+  position: Vec3;
+}
+
+/** Skyrim.esm's MapMarker static, the base of every map marker. */
+const MAP_MARKER = '000010:Skyrim.esm' as FormKey;
+const MARKERS = new WeakMap<object, { revision: number; markers: MapMarker[] }>();
+
 export interface PlacedRef {
   formKey: FormKey;
   sig: string;
@@ -258,6 +270,69 @@ export class WorldService {
     return { origin: { x: info.grid.x * 4096, y: info.grid.y * 4096 }, heights, colors };
   }
 
+  /** The ground height at a point of an outdoor cell, from its terrain (undefined indoors or without terrain). */
+  groundHeight(cell: FormKey, x: number, y: number): number | undefined {
+    const t = this.terrain(cell);
+    if (!t) return undefined;
+    const fx = Math.max(0, Math.min(32, (x - t.origin.x) / 128));
+    const fy = Math.max(0, Math.min(32, (y - t.origin.y) / 128));
+    const c = Math.min(31, Math.floor(fx));
+    const r = Math.min(31, Math.floor(fy));
+    const h = (rr: number, cc: number) => t.heights[rr * 33 + cc]!;
+    const tx = fx - c;
+    const ty = fy - r;
+    return (h(r, c) * (1 - tx) + h(r, c + 1) * tx) * (1 - ty) + (h(r + 1, c) * (1 - tx) + h(r + 1, c + 1) * tx) * ty;
+  }
+
+  /** The water level of an outdoor cell (its own, or its worldspace's default), or undefined when it has no water. */
+  waterHeight(cell: FormKey): number | undefined {
+    const info = this.cells().find((c) => c.formKey === cell);
+    if (!info || info.interior) return undefined;
+    const d = this.ws.view(cell)?.data as { flags?: number; waterHeight?: number } | undefined;
+    if (!d || !((d.flags ?? 0) & 2)) return undefined;
+    if (typeof d.waterHeight === 'number' && Math.abs(d.waterHeight) < 1e7) return d.waterHeight;
+    const w = info.worldspace ? (this.ws.view(info.worldspace)?.data as { landData?: { defaultWaterHeight?: number } } | undefined) : undefined;
+    return w?.landData?.defaultWaterHeight;
+  }
+
+  /**
+   * Named places on the world map ("The Guardian Stones", "Embershard Mine"): each map marker with the outdoor cell it
+   * stands in, since wilderness cells have no names of their own. Read once per change to the plugins.
+   */
+  mapMarkers(): MapMarker[] {
+    const cached = MARKERS.get(this.ws);
+    if (cached && cached.revision === this.ws.revision) return cached.markers;
+    const markers: MapMarker[] = [];
+    const cells = this.cells();
+    for (const pc of cells.filter((c) => c.persistentCell && c.worldspace)) {
+      for (const r of this.references(pc.formKey)) {
+        if (r.base !== MAP_MARKER) continue;
+        const name = (this.ws.view(r.formKey)?.data as { mapMarker?: { name?: string } } | undefined)?.mapMarker?.name;
+        const pos = r.transform.position;
+        const cell = name ? this.cellAt(pc.worldspace, { x: Math.floor(pos.x / 4096), y: Math.floor(pos.y / 4096) }) : undefined;
+        if (name && cell) markers.push({ name, ref: r.formKey, cell, position: { ...pos } });
+      }
+    }
+    MARKERS.set(this.ws, { revision: this.ws.revision, markers });
+    return markers;
+  }
+
+  /** The map marker a place is called by ("Guardian Stones" finds "The Guardian Stones"), if just one is. */
+  mapMarker(name: string): MapMarker | undefined {
+    const norm = (t: string) => t.toLowerCase().replace(/['’]/g, '').replace(/^the\s+/, '').replace(/\s+/g, ' ').trim();
+    const want = norm(name);
+    if (!want) return undefined;
+    const hits = this.mapMarkers().filter((m) => norm(m.name) === want);
+    return hits.length === 1 ? hits[0] : undefined;
+  }
+
+  /** The persistent cell of an outdoor cell's worldspace, where the game keeps persistent references that stand outside. */
+  persistentCellFor(cell: FormKey): FormKey | undefined {
+    const info = this.cells().find((c) => c.formKey === cell);
+    if (!info || info.interior || info.persistentCell || !info.worldspace) return undefined;
+    return this.cells({ worldspace: info.worldspace }).find((c) => c.persistentCell)?.formKey;
+  }
+
   /** The winning LAND record of an outdoor cell (with heights), and the plugin it's in. */
   landRecord(cell: FormKey): { slot: PluginSlot; record: PluginRecord } | undefined {
     for (let i = this.ws.slots.length - 1; i >= 0; i--) {
@@ -360,9 +435,11 @@ export class WorldService {
     };
     if (opts.editorId) data.editorId = opts.editorId;
     if (Math.abs(t.scale - 1) > 1e-6) data.scale = t.scale;
-    // Actors and quest-referenced objects are persistent; the engine needs them loaded.
+    // Actors and quest-referenced objects are persistent; the engine needs them loaded. Outdoors the game keeps
+    // persistent references in the worldspace's persistent cell, wherever they stand.
     const persistent = opts.persistent ?? sig === 'ACHR';
-    return this.ws.createRecord(sig, data, { cell, persistent }, persistent ? RecordFlags.Persistent : 0);
+    const home = (persistent && this.persistentCellFor(cell)) || cell;
+    return this.ws.createRecord(sig, data, { cell: home, persistent }, persistent ? RecordFlags.Persistent : 0);
   }
 
   /** Move/rotate/scale references (one undo step). */

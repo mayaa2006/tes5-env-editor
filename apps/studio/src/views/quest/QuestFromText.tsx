@@ -4,15 +4,29 @@
  * built (characters, items, stages, journal, objectives, triggers,
  * dialogue) as one undo step.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { FormKey } from '@tes5/esp';
-import type { PlanIssue, PlanResolution, PlannerMode, QuestBuildReport, QuestPlan } from '@tes5/workspace';
+import { splitQuestline, type BeatQuestion, type BeatSheet, type PlanIssue, type PlanResolution, type PlannerMode, type QuestBuildReport, type QuestPlan, type QuestlineBuildReport, type QuestlineLink, type QuestlinePlan } from '@tes5/workspace';
 import { clearDraft, Field, Help, Icon, Modal, Select, TextInput, useDraft } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 import { AiPicker, useAi } from '../../components/AiPicker';
+import { BeatOutline } from './BeatOutline';
 
-type Review = { plan: QuestPlan; issues: PlanIssue[]; resolution: PlanResolution[] };
-type PlanSection = 'overview' | 'cast' | 'story' | 'events' | 'dialogue';
+/** A plan to check; when it was read beat by beat, the reading it was made from and what still doesn't fit together. */
+type Review = { plan: QuestPlan; issues: PlanIssue[]; resolution: PlanResolution[]; sheet?: BeatSheet; questions?: BeatQuestion[] };
+type LineReview = { line: QuestlinePlan; reviews: { issues: PlanIssue[]; resolution: PlanResolution[] }[]; links: QuestlineLink[]; questlineIssues: PlanIssue[] };
+
+/** While planning: what the engine says it's doing goes in the busy message, and Stop calls the request off. */
+async function planWithProgress<T>(fn: () => Promise<T | undefined>): Promise<T | undefined> {
+  const off = useStore.getState().client?.onEvent((e) => e.type === 'planProgress' && useStore.getState().setBusy(e.message));
+  try {
+    return await fn();
+  } finally {
+    off?.();
+  }
+}
+const stopPlanning = () => void useStore.getState().client?.call('stopPlanning');
+type PlanSection = 'outline' | 'overview' | 'cast' | 'story' | 'events' | 'dialogue';
 
 const MODES: { id: PlannerMode; title: string; text: string; placeholder: string }[] = [
   {
@@ -30,13 +44,15 @@ const MODES: { id: PlannerMode; title: string; text: string; placeholder: string
 ];
 
 export default function QuestFromText({ onClose, existing }: { onClose: () => void; existing?: FormKey }) {
-  const [step, setStep] = useState<'write' | 'review' | 'done'>(existing ? 'review' : 'write');
+  const [step, setStep] = useState<'write' | 'review' | 'done' | 'line' | 'lineDone'>(existing ? 'review' : 'write');
   const [fromRecord, setFromRecord] = useState(true);
   // What was written is remembered if the box is closed before the quest is built.
   const [mode, setMode] = useDraft<PlannerMode>(existing ? undefined : 'questFromText:mode', 'document');
   const [source, setSource] = useDraft(existing ? undefined : 'questFromText:source', '');
   const [review, setReview] = useState<Review>();
   const [report, setReport] = useState<QuestBuildReport>();
+  const [lineReview, setLineReview] = useState<LineReview>();
+  const [lineReport, setLineReport] = useState<QuestlineBuildReport>();
   // Changing an existing quest: start from it as a plan.
   useEffect(() => {
     if (!existing) return;
@@ -54,7 +70,7 @@ export default function QuestFromText({ onClose, existing }: { onClose: () => vo
         <span className="row" style={{ gap: 6 }}>
           <Icon name="wand" /> {existing ? 'Change the quest with a plan' : 'Quest from writing'}
           <span className="dim small" style={{ fontWeight: 400 }}>
-            {existing ? (step === 'review' ? 'Change the plan, then update' : 'Updated') : step === 'write' ? '1. Write' : step === 'review' ? '2. Check the plan' : '3. Built'}
+            {existing ? (step === 'review' ? 'Change the plan, then update' : 'Updated') : step === 'write' ? '1. Write' : step === 'review' ? '2. Check the plan' : step === 'line' ? '2. Check the questline' : '3. Built'}
           </span>
         </span>
       }
@@ -71,9 +87,26 @@ export default function QuestFromText({ onClose, existing }: { onClose: () => vo
             setReview(r);
             setStep('review');
           }}
+          onPlannedLine={(r) => {
+            setLineReview(r);
+            setStep('line');
+          }}
           onClose={onClose}
         />
       )}
+      {step === 'line' && lineReview && (
+        <ReviewQuestline
+          review={lineReview}
+          setReview={setLineReview}
+          onBack={() => setStep('write')}
+          onBuilt={(r) => {
+            clearDraft('questFromText:');
+            setLineReport(r);
+            setStep('lineDone');
+          }}
+        />
+      )}
+      {step === 'lineDone' && lineReport && <QuestlineResult report={lineReport} onClose={onClose} />}
       {step === 'review' && existing && !review && <div className="empty">Reading the quest…</div>}
       {step === 'review' && existing && review && !fromRecord && (
         <p className="small warn" style={{ marginTop: 0 }} data-testid="not-from-plan">
@@ -101,12 +134,28 @@ export default function QuestFromText({ onClose, existing }: { onClose: () => vo
 
 // ------------------------------------------------------------------ 1. write
 
-function Write({ mode, setMode, source, setSource, onPlanned, onClose }: { mode: PlannerMode; setMode: (m: PlannerMode) => void; source: string; setSource: (s: string) => void; onPlanned: (r: Review) => void; onClose: () => void }) {
+function Write({ mode, setMode, source, setSource, onPlanned, onPlannedLine, onClose }: { mode: PlannerMode; setMode: (m: PlannerMode) => void; source: string; setSource: (s: string) => void; onPlanned: (r: Review) => void; onPlannedLine: (r: LineReview) => void; onClose: () => void }) {
   const { ai, ready, name } = useAi();
   const m = MODES.find((x) => x.id === mode)!;
+  // Several "Quest 1: …" headings: a questline, planned quest by quest and built together.
+  const questline = useMemo(() => (mode === 'document' ? splitQuestline(source) : null), [mode, source]);
+  // How a document is read: beat by beat (small questions; what free AIs do best) or in one go (one big request).
+  const [howChosen, setHow] = useDraft<'beats' | 'whole' | ''>('questFromText:how', '');
+  const how = howChosen || (ai.kind === 'claude' ? 'whole' : 'beats');
 
   const plan = async () => {
-    const r = await engine((c) => c.call('planQuest', source, mode, ai), { busy: `${name} is planning the quest… this can take ${ai.kind === 'claude' ? 'a minute or two' : 'several minutes on a free model'}`, refreshSession: false });
+    if (questline) {
+      const r = await planWithProgress(() =>
+        engine((c) => c.call(how === 'beats' ? 'readQuestline' : 'planQuestline', source, ai), { busy: `${name} is reading the questline… each quest takes ${ai.kind === 'claude' ? 'a minute or two' : 'a while on a free model'}`, refreshSession: false, stop: stopPlanning }),
+      );
+      if (r) onPlannedLine(r);
+      return;
+    }
+    // A document is read beat by beat (small questions any AI answers well); a bare conversation is planned around.
+    const r =
+      mode === 'document' && how === 'beats'
+        ? await planWithProgress(() => engine((c) => c.call('readQuest', source, ai), { busy: `${name} is reading the quest… this can take ${ai.kind === 'claude' ? 'a minute or two' : 'several minutes on a free model'}`, refreshSession: false, stop: stopPlanning }))
+        : await engine((c) => c.call('planQuest', source, mode, ai), { busy: `${name} is planning the quest… this can take ${ai.kind === 'claude' ? 'a minute or two' : 'several minutes on a free model'}`, refreshSession: false, stop: stopPlanning });
     if (r) onPlanned(r);
   };
   const example = async () => {
@@ -133,6 +182,37 @@ function Write({ mode, setMode, source, setSource, onPlanned, onClose }: { mode:
         ))}
       </div>
       <textarea className="input mono" data-testid="plan-source" value={source} onChange={(e) => setSource(e.target.value)} placeholder={m.placeholder} rows={14} style={{ width: '100%', resize: 'vertical', fontSize: 12 }} autoFocus />
+      {mode === 'document' &&
+        (questline ? (
+          <div className="card" style={{ padding: 10 }} data-testid="questline-found">
+            <div className="row" style={{ gap: 6 }}>
+              <Icon name="quest" size={14} />
+              <b>A questline: {questline.parts.length} quests</b>
+              <span className="dim small">{questline.parts.map((p, i) => `${i + 1}. ${p.title.replace(/^(quest|part|chapter|act)\s+\S+\s*[:.)–—-]?\s*/i, '')}`).join(' · ')}</span>
+            </div>
+            <p className="dim small" style={{ margin: '4px 0 0' }}>
+              They're planned one after another, so each knows the characters, places and choices of the ones before, and each starts when the one before ends. Conversations you wrote out (NAME: line) are kept word for word. You check every quest before anything is built, and they're built together as one step you can undo.
+            </p>
+          </div>
+        ) : (
+          <p className="dim small" style={{ margin: 0 }}>
+            A questline? Give each quest its own heading (“Quest 1: …”, “Quest 2: …”) and they're planned together. Conversations written as NAME: line, with the player's choices indented under what they answer, are kept word for word.
+          </p>
+        ))}
+      {mode === 'document' && (
+        <Field label="Read it" title="Beat by beat: the AI answers many small questions (who's in it, what the player does next, which line does it) and the editor puts the quest together, so you see an outline of what was read and can fix it. In one go: one big request for the whole plan, which works well with Claude.">
+          <span data-testid="plan-how">
+            <Select
+              value={how}
+              options={[
+                { value: 'beats', label: 'Beat by beat (best for free AIs)' },
+                { value: 'whole', label: 'In one go' },
+              ]}
+              onChange={(v) => setHow(v)}
+            />
+          </span>
+        </Field>
+      )}
       <div className="card" style={{ padding: 10 }}>
         <AiPicker />
         <p className="dim small" style={{ margin: '6px 0 0' }}>
@@ -147,8 +227,14 @@ function Write({ mode, setMode, source, setSource, onPlanned, onClose }: { mode:
         <button className="btn" onClick={onClose}>
           Cancel
         </button>
-        <button className="btn primary" disabled={!source.trim() || !ready} onClick={() => void plan()} title={!ready ? 'Choose an AI first (above)' : !source.trim() ? 'Write something first' : `${name} reads your text and plans the whole quest; you check it before anything is built`} data-testid="plan-quest">
-          <Icon name="wand" size={13} /> Plan the quest
+        <button
+          className="btn primary"
+          disabled={!source.trim() || !ready}
+          onClick={() => void plan()}
+          title={!ready ? 'Choose an AI first (above)' : !source.trim() ? 'Write something first' : questline ? `${name} plans the ${questline.parts.length} quests one after another; you check them before anything is built` : `${name} reads your text and plans the whole quest; you check it before anything is built`}
+          data-testid="plan-quest"
+        >
+          <Icon name="wand" size={13} /> {questline ? `Plan the questline (${questline.parts.length} quests)` : 'Plan the quest'}
         </button>
       </div>
     </div>
@@ -157,7 +243,7 @@ function Write({ mode, setMode, source, setSource, onPlanned, onClose }: { mode:
 
 // ------------------------------------------------------------------ 2. review
 
-function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { review: Review; setReview: (r: Review) => void; source: string; onBack: () => void; onBuilt: (r: QuestBuildReport) => void; existing?: FormKey }) {
+function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing, inQuestline }: { review: Review; setReview: (r: Review) => void; source: string; onBack: () => void; onBuilt: (r: QuestBuildReport) => void; existing?: FormKey; inQuestline?: boolean }) {
   const [preview, setPreview] = useState<string[] | null>(null);
   const { ai, ready: aiOk, name: aiLabel } = useAi();
   const { plan, issues, resolution } = review;
@@ -170,7 +256,21 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
   const check = async (next: QuestPlan) => {
     setDraft(next);
     const r = await engine((c) => c.call('reviewQuestPlan', next), { refreshSession: false });
-    if (r) setReview({ plan: next, ...r });
+    if (r) setReview({ ...review, plan: next, ...r });
+  };
+  // The outline (what was read beat by beat): a change makes the plan again from it; each change can be undone.
+  const [sheets, setSheets] = useState<BeatSheet[]>([]);
+  const outline = async (next: BeatSheet, back = false) => {
+    const r = await engine((c) => c.call('recompileBeats', next, source), { refreshSession: false });
+    if (!r) return;
+    if (!back && review.sheet) setSheets((h) => [...h.slice(-49), review.sheet!]);
+    setReview(r);
+  };
+  const undoOutline = async () => {
+    const prev = sheets[sheets.length - 1];
+    if (!prev) return;
+    setSheets((h) => h.slice(0, -1));
+    await outline(prev, true);
   };
   const edit = async (fn: (p: QuestPlan) => void) => {
     const next = structuredClone(draft);
@@ -185,7 +285,7 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
     await check(prev);
   };
   const revise = async () => {
-    const r = await engine((c) => c.call('reviseQuestPlan', draft, feedback, ai, source), { busy: `${aiLabel} is changing the plan…`, refreshSession: false });
+    const r = await engine((c) => c.call('reviseQuestPlan', draft, feedback, ai, source), { busy: `${aiLabel} is changing the plan…`, refreshSession: false, stop: stopPlanning });
     if (r) {
       setReview(r);
       setFeedback('');
@@ -211,10 +311,12 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
   };
 
   const errors = issues.filter((i) => i.severity === 'error').length + resolution.filter((r) => r.error).length;
-  const [section, setSection] = useState<PlanSection>('overview');
+  const [section, setSection] = useState<PlanSection>(review.sheet ? 'outline' : 'overview');
   const quest = draft.stages.length > 0;
   const n = (k: number, one: string, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
+  const open = (review.questions ?? []).filter((q) => !q.unsaid).length;
   const sections: { id: PlanSection; label: string; hint: string; count?: number; summary: string }[] = [
+    ...(review.sheet ? [{ id: 'outline' as const, label: 'What was read', hint: 'What the player does, beat by beat, as read from your text; change it here and the plan is made again', count: open || undefined, summary: n(review.sheet.beats.length, 'beat') }] : []),
     { id: 'overview', label: 'Overview', hint: `Name, problems to fix, and what ${aiLabel} decided on its own`, count: errors || undefined, summary: '' },
     { id: 'cast', label: 'Cast & places', hint: 'Characters (with roles and fighting), places, items and enemy groups', count: draft.characters.length + draft.locations.length + draft.items.length + (draft.encounters?.length ?? 0), summary: [n(draft.characters.length, 'character'), n(draft.locations.length, 'place'), n(draft.items.length, 'item'), draft.encounters?.length ? n(draft.encounters.length, 'enemy group') : ''].filter(Boolean).join(', ') },
     ...(quest
@@ -273,6 +375,7 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
         ))}
       </div>
 
+      {section === 'outline' && review.sheet && <BeatOutline sheet={review.sheet} questions={review.questions ?? []} onChange={(next) => void outline(next)} onUndo={() => void undoOutline()} canUndo={sheets.length > 0} />}
       {section === 'overview' && (
         <>
       {(issues.length > 0 || resolution.some((r) => r.error)) && (
@@ -358,6 +461,7 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
                       {r.text}
                     </span>
                     {kind === 'location' && !r.existing && !r.error && <NewPlaceFields plan={draft} placeKey={r.key} edit={edit} />}
+                    {kind === 'item' && !r.error && <ItemFields plan={draft} itemKey={r.key} edit={edit} />}
                     {kind === 'character' && !r.error && <CharacterRoleFields plan={draft} charKey={r.key} edit={edit} />}
                     {r.changes?.map((c) => (
                       <span key={c} className="small" style={{ whiteSpace: 'normal' }} data-testid="character-change">
@@ -441,7 +545,7 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
               <li key={i}>
                 <Icon name="route" size={12} />
                 <span>
-                  {s.from === null ? 'Any time' : `Stage ${s.from}`} → {s.to}: {[STEP_VERBS[s.kind], nameOf(s.targetKey)].filter(Boolean).join(' ')} <span className="dim">({s.note})</span>
+                  {s.from === null ? 'Any time' : `Stage ${s.from}`} → {s.to}: {[STEP_VERBS[s.kind], s.kind === 'wait' ? `${s.hours ?? '?'} in-game hours` : s.count && s.count > 1 ? `${s.count} ×` : '', nameOf(s.targetKey)].filter(Boolean).join(' ')} <span className="dim">({s.note})</span>
                 </span>
               </li>
             ))}
@@ -499,13 +603,17 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
       </div>
 
       <div className="row" style={{ gap: 8 }}>
-        <button className="btn" onClick={onBack}>
-          Back
-        </button>
+        {!inQuestline && (
+          <button className="btn" onClick={onBack}>
+            Back
+          </button>
+        )}
         <button className="btn ghost" disabled={!history.length} onClick={() => void undoEdit()} title={history.length ? 'Take back your last change to the plan' : 'Nothing to undo yet'} data-testid="plan-undo">
           <Icon name="undo" size={13} /> Undo edit
         </button>
         <span className="grow" />
+        {inQuestline ? null : (
+        <>
         {errors > 0 && (
           <button className="link-button small err" onClick={() => setSection('overview')} title="Show the problems on the Overview tab" data-testid="plan-show-problems">
             Fix {errors} problem(s) first
@@ -514,7 +622,207 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing }: { 
         <button className="btn primary" disabled={errors > 0} onClick={() => void build()} data-testid="build-quest" title={existing ? 'Shows what will change before anything is changed' : 'Creates everything as one step you can undo'}>
           <Icon name="check" size={13} /> {existing ? 'See what will change' : draft.stages.length ? 'Build the quest' : 'Make the changes'}
         </button>
+        </>
+        )}
       </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A questline's plans: an overview (each quest, how it starts, what links them, problems across them) and each quest's
+ * own review. Edits to a quest are checked as they're made; the questline is built as one step.
+ */
+function ReviewQuestline({ review, setReview, onBack, onBuilt }: { review: LineReview; setReview: (r: LineReview) => void; onBack: () => void; onBuilt: (r: QuestlineBuildReport) => void }) {
+  const { line, reviews, links, questlineIssues } = review;
+  const [tab, setTab] = useState<number>(-1);
+  const errors = reviews.map((r) => r.issues.filter((i) => i.severity === 'error').length + r.resolution.filter((x) => x.error).length);
+  const total = errors.reduce((a, b) => a + b, 0);
+  // A quest's plan changed: its review is in hand; links and problems across the questline are worked out again.
+  const setQuest = async (i: number, r: Review) => {
+    const next: QuestlinePlan = { ...line, quests: line.quests.map((q, n) => (n === i ? { ...q, plan: r.plan, sheet: r.sheet ?? q.sheet, questions: r.questions ?? q.questions } : q)) };
+    const all = await engine((c) => c.call('reviewQuestline', next), { refreshSession: false });
+    setReview({ line: next, reviews: all?.reviews ?? reviews.map((x, n) => (n === i ? { issues: r.issues, resolution: r.resolution } : x)), links: all?.links ?? links, questlineIssues: all?.questlineIssues ?? questlineIssues });
+  };
+  const build = async () => {
+    const r = await engine((c) => c.call('buildQuestline', line), { busy: `Building ${line.quests.length} quests…`, success: `Built the questline ${line.title}` });
+    if (r) onBuilt(r);
+  };
+  const count = (k: number, one: string) => `${k} ${one}${k === 1 ? '' : 's'}`;
+  const short = (t: string) => t.replace(/^(quest|part|chapter|act)\s+\S+\s*[:.)–—-]?\s*/i, '') || t;
+  const starts = (p: QuestPlan, i: number) =>
+    p.startsWithGame ? 'with the game' : p.startsWhen?.kind === 'afterQuest' ? `when ${line.quests.find((q) => q.plan.editorId === p.startsWhen!.quest)?.plan.title ?? p.startsWhen.quest} ends` : p.startsWhen ? `when the player ${({ arrive: 'arrives at', read: 'reads', pickup: 'picks up', activate: 'uses', game: '' } as const)[p.startsWhen.kind]} ${p.startsWhen.targetKey ?? ''}` : i ? 'nothing yet' : 'nothing yet';
+  const kept = (p: QuestPlan) => p.assumptions.find((a) => a.startsWith('Kept word for word from your text: '))?.slice('Kept word for word from your text: '.length);
+  // Who and what one quest takes from another, grouped by where it was first made.
+  const shared = new Map<string, { name: string; kind: string; from: number; used: number[] }>();
+  for (const l of links) {
+    const id = `${l.kind}:${l.from}:${l.fromKey}`;
+    const e = shared.get(id) ?? { name: l.name, kind: l.kind, from: l.from, used: [] };
+    e.used.push(l.quest);
+    shared.set(id, e);
+  }
+  return (
+    <div className="col" style={{ gap: 12 }} data-testid="questline-review">
+      <Field label="Questline">
+        <TextInput value={line.title} onCommit={(v) => setReview({ ...review, line: { ...line, title: v } })} />
+      </Field>
+      <div className="panel-tabs plan-tabs" role="tablist" data-testid="questline-tabs">
+        <button role="tab" aria-selected={tab === -1} className={`panel-tab ${tab === -1 ? 'active' : ''}`} onClick={() => setTab(-1)} title="Every quest at a glance, what links them, and problems across them" data-testid="questline-tab-overview">
+          Overview
+          {total || questlineIssues.length ? <span className={`chip ${total ? 'err' : 'warn'}`} style={{ marginLeft: 6 }}>{total || questlineIssues.length}</span> : null}
+        </button>
+        {line.quests.map((q, i) => (
+          <button key={i} role="tab" aria-selected={tab === i} className={`panel-tab ${tab === i ? 'active' : ''}`} onClick={() => setTab(i)} title={`Check and change quest ${i + 1}: ${q.plan.title}`} data-testid={`questline-tab-${i}`}>
+            {i + 1}. {short(q.plan.title)}
+            {errors[i] ? <span className="chip err" style={{ marginLeft: 6 }}>{errors[i]}</span> : null}
+          </button>
+        ))}
+      </div>
+      {tab === -1 && (
+        <>
+          {questlineIssues.length > 0 && (
+            <ul className="list release-list" data-testid="questline-issues">
+              {questlineIssues.map((i) => (
+                <li key={i.message} className={`release-item ${i.severity}`}>
+                  <span className={`chip ${i.severity === 'error' ? 'err' : 'warn'}`} style={{ flex: 'none' }}>
+                    {i.severity === 'error' ? 'Must fix' : 'Check'}
+                  </span>
+                  <span className="grow">{i.message}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="card" data-testid="questline-quests">
+            <div className="card-title">
+              The quests
+              <Help text="In the order they're played. Open a quest's tab to check and change its plan; each one starts when the quest before it ends unless its plan says otherwise." />
+            </div>
+            <ul className="list">
+              {line.quests.map((q, i) => (
+                <li key={i} className="list-item" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
+                  <span className="row" style={{ gap: 6 }}>
+                    <button className="link-button" onClick={() => setTab(i)}>
+                      {i + 1}. {q.plan.title}
+                    </button>
+                    <span className="dim small mono">{q.plan.editorId}</span>
+                    {errors[i] ? <span className="chip err">{errors[i]} to fix</span> : <span className="chip dim">ready</span>}
+                  </span>
+                  <span className="dim small" style={{ whiteSpace: 'normal' }}>
+                    Starts {starts(q.plan, i)} · {count(q.plan.stages.length, 'stage')} · {count(q.plan.characters.length, 'character')} · {count(q.plan.conversations.length, 'conversation')}
+                    {kept(q.plan) ? ` · your dialogue: ${kept(q.plan)}` : ''}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+          {shared.size > 0 && (
+            <div className="card" data-testid="questline-links">
+              <div className="card-title">
+                Made once, used again
+                <Help text="Characters, places and items a later quest uses from an earlier one: they're made by the first quest that has them. A character who is somewhere else in a later quest is moved there when that quest starts." />
+              </div>
+              <ul className="always-list">
+                {[...shared.values()].map((e) => (
+                  <li key={`${e.kind}${e.from}${e.name}`}>
+                    <Icon name={e.kind === 'character' ? 'npc' : e.kind === 'location' ? 'cell' : 'item'} size={12} />
+                    <span>
+                      {e.name} <span className="dim">— made in quest {e.from + 1}, used in {e.used.map((u) => u + 1).join(', ')}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </>
+      )}
+      {tab >= 0 && line.quests[tab] && (
+        <ReviewPlan
+          key={tab}
+          inQuestline
+          review={{ plan: line.quests[tab]!.plan, sheet: line.quests[tab]!.sheet, questions: line.quests[tab]!.questions, ...reviews[tab]! }}
+          setReview={(r) => void setQuest(tab, r)}
+          source={line.quests[tab]!.source}
+          onBack={onBack}
+          onBuilt={() => undefined}
+        />
+      )}
+      <div className="row" style={{ gap: 8 }}>
+        <button className="btn" onClick={onBack} title="Back to your text (these plans are kept until you plan again)">
+          Back
+        </button>
+        <span className="grow" />
+        {total > 0 && <span className="small err">Fix {total} problem(s) first (see the quests' tabs)</span>}
+        <button className="btn primary" disabled={total > 0} onClick={() => void build()} title="Creates all the quests, their characters, places, items and dialogue as one step you can undo" data-testid="build-questline">
+          <Icon name="check" size={13} /> Build the questline ({line.quests.length} quests)
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** What building a questline made: each quest, and what linking them did. */
+function QuestlineResult({ report, onClose }: { report: QuestlineBuildReport; onClose: () => void }) {
+  const open = (quest: FormKey | null) => {
+    const s = useStore.getState();
+    s.setTab('quest');
+    if (quest) s.setQuest(quest);
+    onClose();
+  };
+  return (
+    <div className="col" style={{ gap: 12 }} data-testid="questline-result">
+      <div className="row" style={{ gap: 8 }}>
+        <Icon name="check" />
+        <span>
+          <b>{report.title}</b> is built: {report.quests.length} quests, {report.quests.reduce((n, q) => n + q.created.length, 0)} new record(s), {report.quests.reduce((n, q) => n + q.dialogue.responses, 0)} line(s) of dialogue. Undo takes it all back in one step.
+        </span>
+      </div>
+      <ul className="list">
+        {report.quests.map((q, i) => (
+          <li key={q.editorId} className="list-item" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
+            <span className="row" style={{ gap: 6 }}>
+              <button className="link-button" onClick={() => open(q.quest)} title="Open it in Quests">
+                {i + 1}. {q.editorId}
+              </button>
+              {q.problems.length ? <span className="chip err">{q.problems.length} problem(s)</span> : <span className="chip dim">no problems</span>}
+              {q.warnings.length ? <span className="chip warn">{q.warnings.length} to check</span> : null}
+            </span>
+            {[...q.problems, ...q.warnings].map((w) => (
+              <span key={w} className="small" style={{ whiteSpace: 'normal' }}>
+                • {w}
+              </span>
+            ))}
+          </li>
+        ))}
+      </ul>
+      {report.links.length > 0 && (
+        <div className="card">
+          <div className="card-title">Linked across the quests</div>
+          <ul className="always-list">
+            {report.links.map((l) => (
+              <li key={l}>
+                <Icon name="link" size={12} />
+                <span className="dim">{l}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <div className="row" style={{ gap: 8 }}>
+        <button
+          className="btn"
+          onClick={() => {
+            useStore.getState().setTab('release');
+            onClose();
+          }}
+          title="Run the pre-release check on the whole plugin"
+        >
+          Check for problems
+        </button>
+        <span className="grow" />
+        <button className="btn primary" onClick={() => open(report.quests[0]?.quest ?? null)} data-testid="open-built-questline">
+          Open the first quest
+        </button>
       </div>
     </div>
   );
@@ -614,7 +922,7 @@ function EncountersCard({ plan, edit, nameOf }: { plan: QuestPlan; edit: (fn: (p
                 onChange={(v) =>
                   void edit((p) => {
                     p.steps = p.steps.filter((st) => !(st.kind === 'clear' && st.targetKey === e.key));
-                    if (v >= 0) p.steps.push({ from: null, to: v, kind: 'clear', targetKey: e.key, note: `Defeat the ${e.what}` });
+                    if (v >= 0) p.steps.push({ from: null, to: v, kind: 'clear', targetKey: e.key, count: null, hours: null, note: `Defeat the ${e.what}` });
                   })
                 }
               />
@@ -675,6 +983,36 @@ function NewPlaceFields({ plan, placeKey, edit }: { plan: QuestPlan; placeKey: s
       </datalist>
       {input('layoutLike', 'Laid out like', 'An existing interior whose walls, furniture, lights and clutter are copied into this new place. Leave empty for an empty room.', 'Empty room (pick an interior to copy)')}
       {input('doorFrom', 'Door from', 'Where the player walks in from: a linked door is put against a wall there, and the way out of the copied layout leads back.', 'No door (pick a place)')}
+    </div>
+  );
+}
+
+/** An item's own settings: what a note or book says, how many there are, the key to a locked container it's in. */
+function ItemFields({ plan, itemKey, edit }: { plan: QuestPlan; itemKey: string; edit: (fn: (p: QuestPlan) => void) => Promise<void> }) {
+  const i = plan.items.find((x) => x.key === itemKey);
+  if (!i || i.existing) return null;
+  const set = (change: Partial<typeof i>) => void edit((p) => void Object.assign(p.items.find((x) => x.key === itemKey)!, change));
+  const keys = plan.items.filter((x) => x.kind === 'key' && x.key !== itemKey);
+  return (
+    <div className="col" style={{ gap: 4, width: '100%', marginTop: 4 }}>
+      {i.kind === 'book' && (
+        <label className="col small" style={{ gap: 2, width: '100%' }} title="What the player reads when they open it. Leave empty to write it later in the Objects tab.">
+          <span className="dim">What it says</span>
+          <TextInput value={i.text ?? ''} multiline placeholder="(empty: write it later in the Objects tab)" onCommit={(v) => set({ text: v.trim() || null })} />
+        </label>
+      )}
+      {i.startsWith === 'location' && (
+        <label className="row small" style={{ gap: 6 }} title="How many are put in the world: each in its own spot (spots separated by ; in the plan), or near each other">
+          <span className="dim">How many</span>
+          <input className="input" type="number" min={1} max={20} style={{ width: 70 }} defaultValue={i.copies ?? 1} key={`copies-${i.copies}`} onBlur={(e) => { const n = Math.max(1, Math.min(20, Math.round(Number(e.target.value)) || 1)); if (n !== (i.copies ?? 1)) set({ copies: n > 1 ? n : null }); }} data-testid="item-copies" />
+        </label>
+      )}
+      {i.startsWith === 'location' && /\b(in|inside)\b/i.test(i.spot ?? '') && (
+        <label className="row small" style={{ gap: 6 }} title="Lock the container it's in, so only this key opens it">
+          <span className="dim">Locked with</span>
+          <Select value={i.lockedWith ?? ''} options={[{ value: '', label: 'Not locked' }, ...keys.map((k) => ({ value: k.key, label: k.name }))]} onChange={(v) => set({ lockedWith: v || null })} />
+        </label>
+      )}
     </div>
   );
 }
@@ -941,6 +1279,7 @@ const STEP_VERBS: Record<QuestPlan['steps'][number]['kind'], string> = {
   drop: 'Drop',
   script: 'Right away',
   clear: 'Defeat',
+  wait: 'Wait',
 };
 
 // ------------------------------------------------------------------ 3. result
