@@ -420,9 +420,10 @@ HESTA: My maps were stolen.
             ],
           });
         // Both ways of taking the job are the job; the AI names it with the wrong number but the right person.
+        // Said to be offered after the job, which it does itself.
         if (user.includes('does saying it only talk'))
           return reply({
-            when: null,
+            when: 1,
             lines: [
               { line: 3, does: 'beat 7: talk Hesta Coldwater' },
               { line: 5, does: 'beat 1: talk Hesta Coldwater' },
@@ -441,6 +442,8 @@ HESTA: My maps were stolen.
     // Lines 3 and 5 both do the job: line 5 by its label, line 3 (a beat 7 there isn't) by the first unsaid talk with Hesta.
     expect(sheet.beats.map((b) => b.id)).toEqual(['b1', 'b2', 'b3']);
     expect(sheet.dialogue[0]!.lines.map((l) => `${l.line}:${l.beat}`)).toEqual(['3:b1', '5:b1']);
+    // So it's offered from the start (what the job follows), not only once the job is taken.
+    expect(sheet.dialogue[0]!.when).toBeNull();
     // Hundreds of septims is money, not 250 items.
     expect(sheet.items.map((i) => i.key)).toEqual(['tornMapPage']);
   });

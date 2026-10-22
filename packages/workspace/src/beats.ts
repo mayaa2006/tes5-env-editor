@@ -342,6 +342,7 @@ export function checkBeats(sheet: BeatSheet, opts: { earlierChoices?: string[]; 
     const n = linesIn(d.block);
     if (opts.blocks && n === undefined) ask(`block ${d.block}`, `There's no written conversation ${d.block}.`);
     if (d.when && !beatIds.has(d.when)) ask(`block ${d.block}`, `Conversation ${d.block} is offered after “${d.when}”, which isn't a beat.`);
+    else if (d.when && d.lines.some((x) => x.beat === d.when)) ask(`block ${d.block}`, `Conversation ${d.block} does “${d.when}”, so it can't be offered only after it.`);
     for (const x of d.lines) {
       const where = `Line ${x.line} of conversation ${d.block}`;
       if (n !== undefined && (x.line < 1 || x.line > n)) ask(`block ${d.block}`, `Conversation ${d.block} has no line ${x.line}.`);

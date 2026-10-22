@@ -623,7 +623,10 @@ export class BeatReader {
       moved.set(n, id);
       lines.push({ line: n, beat: id });
     }
-    sheet.dialogue.push({ block: block.id, when, lines });
+    // It can't be offered only after a beat it does itself: then it's offered after what that beat follows.
+    let offered = when;
+    for (let guard = 0; offered && lines.some((x) => x.beat === offered) && guard < 10; guard++) offered = sheet.beats.find((b) => b.id === offered)?.after[0] ?? null;
+    sheet.dialogue.push({ block: block.id, when: offered, lines });
   }
 
 
