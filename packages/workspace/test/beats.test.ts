@@ -342,6 +342,8 @@ describe('beat sheets', () => {
           return reply({ lines: [{ line: 3, words: 'Would you? Sabjorn', if: [{ kind: 'chose', value: 'I can fetch it for you.' }], gold: null, gives: [{ item: 'the job', count: 1 }], takes: [], remembers: null, attacks: [], leaves: [], follows: [], stopsFollowing: [], appears: [], moves: [], instead: [] }] });
         if (user.includes('For each line with a direction')) return reply({ lines: [] });
         if (user.includes('What kind of thing is “the job”')) return reply({ kind: 'not a thing' });
+        // Which beat ends the quest is its own question, asked once everything is read.
+        if (user.includes('No beat completes the quest')) return reply({ beat: 6 });
         if (user.includes('leads nowhere')) return reply({ next: [6], ends: 'no' });
         if (user.includes('their journal entry')) return reply({ beats: [] });
         throw new Error(`unexpected: ${user.slice(-200)}`);

@@ -196,7 +196,6 @@ const conversationSchema = (beats: number[], lines: number[]) =>
           line: z.number().int().describe(`{enum: ${JSON.stringify(lines)}}`),
           words: z.string().describe('Its first three words'),
           beat: z.number().int().nullable().describe(`A beat already listed that this line does (the author described it before writing it out); null when it is a new one {enum: ${JSON.stringify(beats)}}`),
-          ends: z.enum(['complete', 'fail', 'no']).describe('Whether saying it finishes the quest (complete) or fails it'),
         }),
       )
       .describe('The lines whose saying moves the quest on: someone gives the player a job, agrees to something, hands something over, or the quest ends. Usually one or two; most lines are only talk, and a failed persuasion moves nothing'),
@@ -553,8 +552,9 @@ export class BeatReader {
         }
         const who = byName(sheet.people, l.speaker);
         id = `b${sheet.beats.length + 1}`;
-        sheet.beats.push({ id, does: 'talk', target: who?.key ?? l.speaker, after: above ? [above] : when ? [when] : [], quote: l.text, journal: null, objective: null, ends: m.ends === 'no' ? null : m.ends, effects: {} });
-      } else if (m.ends !== 'no') sheet.beats.find((b) => b.id === id)!.ends = m.ends;
+        // (Which beat ends the quest is asked once all of it is read.)
+        sheet.beats.push({ id, does: 'talk', target: who?.key ?? l.speaker, after: above ? [above] : when ? [when] : [], quote: l.text, journal: null, objective: null, ends: null, effects: {} });
+      }
       moved.set(n, id);
       lines.push({ line: n, beat: id });
     }
@@ -613,7 +613,7 @@ export class BeatReader {
       if (i >= 0) {
         // Closed questions first: which reading fits, what comes next.
         let open = qs;
-        for (const q of qs.filter((x) => x.choose || x.next)) if (await this.closed(sheet, sheet.beats[i]!, q, text)) open = open.filter((x) => x !== q);
+        for (const q of qs.filter((x) => x.choose || x.next || x.endsEarly)) if (await this.closed(sheet, sheet.beats[i]!, q, text)) open = open.filter((x) => x !== q);
         if (!open.length) continue;
         // Otherwise the AI gives the beat again, corrected.
         const b = sheet.beats[i]!;
@@ -701,6 +701,16 @@ export class BeatReader {
         if (!c) return false;
         b.does = c.does;
         b.target = c.target;
+        return true;
+      }
+      if (q.endsEarly) {
+        const a = await this.ai.ask(
+          READ_RULES,
+          `The quest:\n<quest>\n${text.trim()}\n</quest>\n\nBeats, in order:\n${this.outline(sheet, b.id)}\n\n${q.message}`,
+          z.object({ ends: z.enum(['complete', 'fail', 'no']).describe(`Whether beat ${n} finishes the quest (complete), fails it, or the quest goes on (no)`) }),
+          60,
+        );
+        b.ends = a.ends === 'no' ? null : a.ends;
         return true;
       }
       if (q.next) {

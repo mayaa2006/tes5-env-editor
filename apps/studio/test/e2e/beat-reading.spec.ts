@@ -39,6 +39,8 @@ const person = (name: string, where: string | null, description: string) => ({ n
 /** The free AI's answer to each of the reader's questions, by what the question is about. */
 function answer(user: string): unknown {
   const two = user.includes('Earlier quests already have') || user.includes('Brynja says you saw');
+  // Which beat ends the quest (its own question, once everything is read).
+  if (user.includes('No beat completes the quest')) return { beat: two ? 1 : 3 };
   if (user.includes('List the people'))
     return two
       ? { summary: 'Sigrun wants coin.', start: { how: 'previous quest', what: null }, people: [person('Sigrun', null, 'A traveller')], places: [], items: [], enemies: [] }

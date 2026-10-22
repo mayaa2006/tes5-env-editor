@@ -38,7 +38,9 @@ export function scoreBeats(sheet: BeatSheet, want: ExpectedQuest, text: string):
   // Each expected beat to one beat read, in order; a beat read is used once.
   const used = new Set<string>();
   const match: (string | undefined)[] = want.beats.map((w) => {
-    const hit = sheet.beats.find((b) => !used.has(b.id) && w.as.some((a) => a.does === b.does && (a.target === null ? true : !!nameOf(b.target) && sameName(nameOf(b.target)!, a.target))));
+    const fits = sheet.beats.filter((b) => !used.has(b.id) && w.as.some((a) => a.does === b.does && (a.target === null ? true : !!nameOf(b.target) && sameName(nameOf(b.target)!, a.target))));
+    // Of several that fit (talking to Hesta twice), the one that ends the quest the same way.
+    const hit = fits.find((b) => (b.ends ?? undefined) === w.ends) ?? fits[0];
     if (hit) used.add(hit.id);
     return hit?.id;
   });

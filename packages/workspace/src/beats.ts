@@ -210,6 +210,8 @@ export interface BeatQuestion {
   next?: true;
   /** No beat ends the quest: answered by saying which one does. */
   ending?: true;
+  /** A beat that ends the quest with beats after it: answered by saying whether it really ends it. */
+  endsEarly?: true;
 }
 
 // ------------------------------------------------------------------ checks
@@ -291,7 +293,12 @@ export function checkBeats(sheet: BeatSheet, opts: { earlierChoices?: string[]; 
   if (sheet.beats.length > 1 && sheet.beats.some((b) => b.ends === 'complete')) for (const b of sheet.beats) if (!b.ends && !followed.has(b.id)) q.push({ about: b.id, message: `“${b.quote}” leads nowhere: no beat comes after it, and it doesn't end the quest. What comes next?`, next: true });
   // Every beat can happen: nothing it waits for ends the quest first.
   const ending = new Set(sheet.beats.filter((b) => b.ends).map((b) => b.id));
-  for (const b of sheet.beats) if (b.after.length && b.after.every((a) => ending.has(a))) ask(b.id, `“${b.quote}” only comes after the quest has already ended.`);
+  for (const b of sheet.beats)
+    if (b.after.length && b.after.every((a) => ending.has(a)))
+      for (const a of b.after) {
+        const e = sheet.beats.find((x) => x.id === a)!;
+        if (!q.some((x) => x.about === a && x.endsEarly)) q.push({ about: a, message: `“${e.quote}” ${e.ends === 'fail' ? 'fails' : 'ends'} the quest, but “${b.quote}” comes after it. Does the quest end there?`, endsEarly: true });
+      }
 
   // What's picked up or read has to be somewhere; what's used up in dialogue has to be given first.
   for (const i of sheet.items) {
