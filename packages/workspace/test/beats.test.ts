@@ -330,13 +330,18 @@ describe('beat sheets', () => {
           return reply({
             when: 1,
             moves: [
-              { line: 4, words: 'You will? Then', beat: null, ends: 'no' },
+              // Pointed at the job (Hulda's): not this speaker's, so a beat of its own.
+              { line: 4, words: 'You will? Then', beat: 1, ends: 'no' },
               { line: 6, words: 'Fine, fine. Here.', beat: null, ends: 'no' },
             ],
           });
         if (user.includes('Block 3 —')) return reply({ when: 4, moves: [{ line: 2, words: "Shor's bones. Take", beat: null, ends: 'no' }] });
         if (user.includes('Block 4 —')) return reply({ when: 5, moves: [{ line: 2, words: 'Finally! Here, for', beat: null, ends: 'complete' }] });
+        // Small-model slips: the branch it answers read as a choice, and "takes the job" as an item handed over.
+        if (user.includes('For each line with a direction') && user.includes('Block 1 —'))
+          return reply({ lines: [{ line: 3, words: 'Would you? Sabjorn', if: [{ kind: 'chose', value: 'I can fetch it for you.' }], gold: null, gives: [{ item: 'the job', count: 1 }], takes: [], remembers: null, attacks: [], leaves: [], follows: [], stopsFollowing: [], appears: [], moves: [], instead: [] }] });
         if (user.includes('For each line with a direction')) return reply({ lines: [] });
+        if (user.includes('What kind of thing is “the job”')) return reply({ kind: 'not a thing' });
         if (user.includes('leads nowhere')) return reply({ next: [6], ends: 'no' });
         if (user.includes('their journal entry')) return reply({ beats: [] });
         throw new Error(`unexpected: ${user.slice(-200)}`);
@@ -359,5 +364,7 @@ describe('beat sheets', () => {
       [4, 'b5', '2:b6'],
     ]);
     expect(questions).toEqual([]);
+    expect(sheet.dialogue[0]!.lines.map((l) => [l.line, l.beat, l.if ?? null, l.effects?.gives?.length ?? 0])).toEqual([[3, 'b1', null, 0]]);
+    expect(sheet.items.map((i) => i.key)).toEqual(['cask']);
   });
 });

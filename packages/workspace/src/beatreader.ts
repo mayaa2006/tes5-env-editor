@@ -306,6 +306,16 @@ export class BeatReader {
       step(`reading the directions in the conversation with ${b.speaker}`);
       await this.directions(sheet, b, opts);
     }
+    // A choice a line is said under that nothing in this quest or an earlier one remembers is a misreading of the
+    // conversation's own branching (answering a player line): it's dropped.
+    const remembered = new Set([...earlierChoices(opts), ...rememberedIn(sheet)]);
+    for (const d of sheet.dialogue)
+      for (const l of d.lines) {
+        const keep = (c: BeatCondition) => c.kind !== 'choice' || remembered.has(c.name);
+        if (l.if) l.if = l.if.filter(keep);
+        if (l.if && !l.if.length) delete l.if;
+        if (l.variants) l.variants = l.variants.filter((v) => v.if.every(keep));
+      }
     // What else happens, read before the checks so they see it (and items handed over that weren't listed).
     const happenings = async () => {
       if (!this.unread.size) return;
@@ -347,6 +357,12 @@ export class BeatReader {
       EntitiesSchema,
       3000,
     );
+    // A name written as "null" or "none" is an empty answer.
+    const named = (n: string | null | undefined) => !!n?.trim() && !/^(null|none|n\/a|unknown|nobody|nothing)$/i.test(n.trim());
+    a.people = a.people.filter((x) => named(x.name));
+    a.places = a.places.filter((x) => named(x.name));
+    a.items = a.items.filter((x) => named(x.name));
+    a.enemies = a.enemies.filter((x) => named(x.what));
     const taken = new Set<string>();
     const earlier = opts.earlier ?? [];
     const lookup = opts.lookup;
@@ -521,7 +537,11 @@ export class BeatReader {
       const n = lineFor(numbered, m.line, m.words);
       const l = n ? numbered.lines[n - 1] : undefined;
       if (!n || !l || l.player || moved.has(n)) continue;
-      let id = m.beat ? sheet.beats[m.beat - 1]?.id : undefined;
+      // An earlier beat only when it's talking to this line's speaker and no line says it yet; a new beat otherwise.
+      const speaker = byName(sheet.people, l.speaker)?.key;
+      const earlier = m.beat ? sheet.beats[m.beat - 1] : undefined;
+      const free = earlier && earlier.does === 'talk' && earlier.target === speaker && ![...sheet.dialogue.flatMap((d) => d.lines), ...lines].some((x) => x.beat === earlier.id);
+      let id = free ? earlier.id : undefined;
       if (!id) {
         let above: string | undefined;
         for (let k = n - 1, level = l.level; k >= 1 && !above; k--) {
@@ -743,7 +763,15 @@ export class BeatReader {
     for (const name of names) {
       let kind: BeatItem['kind'] = 'misc';
       try {
-        const a = await this.ai.ask(READ_RULES, `The quest:\n<quest>\n${text.trim()}\n</quest>\n\nWhat kind of thing is “${name}”?`, z.object({ kind: z.enum(ITEM_KINDS) }), 60);
+        const a = await this.ai.ask(READ_RULES, `The quest:\n<quest>\n${text.trim()}\n</quest>\n\nWhat kind of thing is “${name}”, handed to or taken from the player?`, z.object({ kind: z.enum([...ITEM_KINDS, 'not a thing']).describe('"not a thing" when it is not something the player can carry (a job, a promise, a favour)') }), 60);
+        if (a.kind === 'not a thing') {
+          // Handed over in words only: no item.
+          for (const e of effects) {
+            if (e?.gives) e.gives = e.gives.filter((g) => g.item !== name);
+            if (e?.takes) e.takes = e.takes.filter((g) => g.item !== name);
+          }
+          continue;
+        }
         kind = a.kind;
       } catch {
         // A misc item, then.
