@@ -390,4 +390,52 @@ describe('beat sheets', () => {
     expect(sheet.dialogue[0]!.lines.map((l) => [l.line, l.beat, l.if ?? null, l.effects?.gives?.length ?? 0])).toEqual([[3, 'b1', null, 0]]);
     expect(sheet.items.map((i) => i.key)).toEqual(['caskOfHonningbrew']);
   });
+
+  it('link written lines to the beats the prose described, however the AI numbers them', async () => {
+    const doc = `Hesta wants her map pages back. The player takes the job, finds the pages and brings them to her.
+
+HESTA: My maps were stolen.
+  PLAYER: I'll get them back.
+    HESTA: Good. Bring me all three. (the player takes the job)
+  PLAYER: (Persuade) Pay me more.
+    HESTA: (success) Fine, 250. (the player takes the job)
+    HESTA: (failure) No.
+`;
+    const reply = (o: unknown): PlannerReply => ({ content: [{ type: 'text', text: JSON.stringify(o) }], stop_reason: 'end_turn' });
+    const planner = new QuestPlanner({
+      send: async (p) => {
+        const user = String(p.messages.at(-1)!.content);
+        if (user.includes('List the people'))
+          return reply({ summary: '', start: { how: 'talking', what: null }, people: [{ name: 'Hesta Coldwater', description: '', sex: 'unknown', race: null, where: null, spot: null, canDie: 'maybe', hostile: false, quote: '' }], places: [], items: [{ name: 'Torn Map Page', kind: 'misc', where: null, carriedBy: 'Hesta Coldwater', spot: null, count: 3, text: null, lockedWith: null, quote: '' }], enemies: [] });
+        if (user.includes('<passage>'))
+          return reply({
+            beats: [
+              { n: 1, does: 'talk', target: 'Hesta', count: null, hours: null, after: [], quote: 'The player takes the job', ends: 'no', then: null },
+              { n: 2, does: 'pickup', target: 'Torn Map Page', count: 3, hours: null, after: [1], quote: 'finds the pages', ends: 'no', then: null },
+              { n: 3, does: 'talk', target: 'Hesta', count: null, hours: null, after: [2], quote: 'brings them to her', ends: 'complete', then: null },
+            ],
+          });
+        // Both ways of taking the job are the job; the AI names it with the wrong number but the right person.
+        if (user.includes('does saying it only talk'))
+          return reply({
+            when: null,
+            lines: [
+              { line: 3, does: 'beat 7: talk Hesta Coldwater' },
+              { line: 5, does: 'beat 1: talk Hesta Coldwater' },
+              { line: 6, does: 'only talk' },
+            ],
+          });
+        if (user.includes('For each line with a direction')) return reply({ lines: [] });
+        if (user.includes('their journal entry')) return reply({ beats: [] });
+        if (user.includes('what the player says to')) return reply({ player: 'Here.', answer: 'Thanks.' });
+        throw new Error(`unexpected: ${user.slice(-200)}`);
+      },
+    });
+    const { sheet } = await new BeatReader(planner).read(doc, { title: 'Lines on a Map', editorId: 'LinesOnAMap' });
+    // An unexpected word for sex or "can die" is "not said", not a lost quest.
+    expect(sheet.people.map((p) => [p.key, p.sex, p.essential])).toEqual([['hesta', null, null]]);
+    // Lines 3 and 5 both do the job: line 5 by its label, line 3 (a beat 7 there isn't) by the first unsaid talk with Hesta.
+    expect(sheet.beats.map((b) => b.id)).toEqual(['b1', 'b2', 'b3']);
+    expect(sheet.dialogue[0]!.lines.map((l) => `${l.line}:${l.beat}`)).toEqual(['3:b1', '5:b1']);
+  });
 });

@@ -87,11 +87,12 @@ const EntitiesSchema = z.object({
     z.object({
       name: z.string().describe('As the author writes it'),
       description: z.string().describe('Who they are, in a few words'),
-      sex: z.enum(['male', 'female']).nullable(),
+      // Strings read leniently (an unexpected word is "not said"), so one slip doesn't lose the whole quest.
+      sex: z.string().nullable().describe('{enum: ["male", "female"]} null if not said'),
       race: z.string().nullable().describe('e.g. "Nord", "Imperial"; null if not said'),
       where: z.string().nullable().describe('The name of the place they are when the quest begins; null if not said'),
       spot: z.string().nullable().describe('Where in that place, e.g. "by the fire"'),
-      canDie: z.enum(['yes', 'no', 'not said']),
+      canDie: z.string().nullable().describe('{enum: ["yes", "no", "not said"]}'),
       hostile: z.boolean().describe('Attacks the player on sight'),
       quote: z.string(),
     }),
@@ -193,14 +194,14 @@ const conversationSchema = (beats: number[], lines: number[], choices: string[])
     when: z.number().int().nullable().describe(`The beat after which the player can have this conversation; null when they can have it from the start of the quest {enum: ${JSON.stringify(beats)}}`),
     lines: z
       .array(z.object({ line: z.number().int().describe(`{enum: ${JSON.stringify(lines)}}`), does: z.string().describe(`{enum: ${JSON.stringify(choices)}}`) }))
-      .describe(`One entry for each of lines ${lines.join(', ')}: "only talk" when saying it moves nothing on (an answer, directions, a failed persuasion); a beat listed above that saying it does; or "a new step" when saying it moves the quest on and no beat above is it`),
+      .describe(`One entry for each of lines ${lines.join(', ')}: a beat listed above that saying it does (several lines can do the same beat, as different ways of taking a job); "a new step" when saying it moves the quest on (the player takes a job, agrees, gets something, or the quest ends) and no beat above is it; "only talk" when it moves nothing on (an answer, a failed persuasion, the end of the conversation)`),
   });
 
 /** The author's prose, paragraph by paragraph: which paragraphs tell what happens. */
 const paragraphsSchema = (n: number) =>
   z.object({
     paragraphs: z
-      .array(z.object({ n: z.number().int(), is: z.enum(['what happens', 'journal', 'objectives', 'greetings or idle lines', 'a heading', 'notes']) }))
+      .array(z.object({ n: z.number().int(), is: z.string().describe('{enum: ["what happens", "journal", "objectives", "greetings or idle lines", "a heading", "notes"]} "what happens" includes how it starts, a walkthrough and a summary of the story') }))
       .describe(`One entry for each paragraph, 1 to ${n}`),
   });
 
@@ -381,7 +382,7 @@ export class BeatReader {
       const key = was?.key ?? keyFor(p.name, taken, 1);
       taken.add(key);
       const existing = was?.existing ?? lookup?.person(p.name) ?? null;
-      return { key, name: p.name, existing, description: p.description, sex: p.sex, race: p.race, place: placeKey(p.where), spot: p.spot, essential: p.canDie === 'no' ? true : p.canDie === 'yes' ? false : null, hostile: p.hostile, quote: p.quote };
+      return { key, name: p.name, existing, description: p.description, sex: p.sex === 'male' || p.sex === 'female' ? p.sex : null, race: p.race, place: placeKey(p.where), spot: p.spot, essential: p.canDie === 'no' ? true : p.canDie === 'yes' ? false : null, hostile: p.hostile, quote: p.quote };
     });
     // The same item named twice (singular and plural, or numbered) is one item.
     const items: BeatItem[] = [];
@@ -522,11 +523,14 @@ export class BeatReader {
       try {
         const a = await this.ai.ask(
           READ_RULES,
-          `The author's text, paragraph by paragraph (written conversations left out):\n${all.map((x, i) => `[${i + 1}] ${x}`).join('\n\n')}\n\nWhich paragraphs tell what happens in the quest, and which are a journal, objectives, greetings or idle lines, a heading, or notes?`,
+          `The author's text, paragraph by paragraph (written conversations left out):\n${all.map((x, i) => `[${i + 1}] ${x}`).join('\n\n')}\n\nWhich paragraphs tell what happens in the quest (the story, how it starts, a walkthrough), and which are a journal, objectives, greetings or idle lines, a heading, or notes?`,
           paragraphsSchema(all.length),
           60 + all.length * 25,
         );
-        for (const x of a.paragraphs) if (x.is !== 'what happens' && all[x.n - 1]) keep.delete(all[x.n - 1]!);
+        const story = new Set(a.paragraphs.filter((x) => x.is.trim().toLowerCase() === 'what happens').map((x) => x.n));
+        const heading = new Set(a.paragraphs.filter((x) => x.is.trim().toLowerCase() === 'a heading').map((x) => x.n));
+        // Nothing called what happens: every paragraph but the headings is read (a beat too many beats none).
+        all.forEach((x, i) => (story.size ? !story.has(i + 1) : heading.has(i + 1)) && keep.delete(x));
       } catch {
         // Read them all, then.
       }
@@ -556,7 +560,7 @@ export class BeatReader {
     const speakers = new Set(others.map((l) => byName(sheet.people, l.speaker)?.key));
     const talks = sheet.beats.map((b, i) => [b, i + 1] as const).filter(([b]) => b.does === 'talk' && !sayers.has(b.id) && speakers.has(b.target ?? undefined));
     const label = (b: Beat, n: number) => `beat ${n}: talk ${this.nameOf(sheet, b.target!)}`;
-    const choices = ['only talk', 'a new step', ...talks.map(([b, n]) => label(b, n))];
+    const choices = [...talks.map(([b, n]) => label(b, n)), 'a new step', 'only talk'];
     const r = await this.ai.ask(
       READ_RULES,
       `${this.context(sheet)}\n\nA conversation the author wrote out (numbered lines; the author's directions after "—"):\n${describeBlocks([numbered])}\n\nAfter which beat can the player have this conversation? And for each of lines ${said.join(', ')}: does saying it only talk, do one of the beats above, or move the quest on in a new step?`,
@@ -567,8 +571,13 @@ export class BeatReader {
       moves: r.lines.flatMap((x) => {
         const c = x.does.trim().toLowerCase();
         if (c === 'a new step') return [{ line: x.line, words: '', beat: null as number | null }];
-        const hit = talks.find(([b, n]) => label(b, n).toLowerCase() === c || c === `beat ${n}`);
-        return hit ? [{ line: x.line, words: '', beat: hit[1] as number | null }] : [];
+        // A listed beat by its label or number; or by who it's talking to (the first such beat nothing says yet: a later
+        // conversation can't take one an earlier one did).
+        const who = /talk\s+(.+)$/.exec(c)?.[1];
+        const byWho = who ? talks.filter(([b]) => !!byName([{ key: b.target!, name: this.nameOf(sheet, b.target!) }], who)) : [];
+        const hit = talks.find(([b, n]) => label(b, n).toLowerCase() === c || c === `beat ${n}`) ?? byWho[0];
+        if (hit) return [{ line: x.line, words: '', beat: hit[1] as number | null }];
+        return c.startsWith('beat') ? [{ line: x.line, words: '', beat: null as number | null }] : [];
       }),
     };
     const when = a.when ? (sheet.beats[a.when - 1]?.id ?? null) : null;
@@ -583,7 +592,8 @@ export class BeatReader {
       // An earlier beat only when it's talking to this line's speaker and no line says it yet; a new beat otherwise.
       const speaker = byName(sheet.people, l.speaker)?.key;
       const earlier = m.beat ? sheet.beats[m.beat - 1] : undefined;
-      const free = earlier && earlier.does === 'talk' && earlier.target === speaker && ![...sheet.dialogue.flatMap((d) => d.lines), ...lines].some((x) => x.beat === earlier.id);
+      // (Several lines of this conversation can do it: different ways of saying yes.)
+      const free = earlier && earlier.does === 'talk' && earlier.target === speaker && !sheet.dialogue.flatMap((d) => d.lines).some((x) => x.beat === earlier.id);
       let id = free ? earlier.id : undefined;
       if (!id) {
         let above: string | undefined;
