@@ -123,7 +123,7 @@ for (const size of [
     await review.getByTestId('questline-tab-0').click();
     const outline = review.getByTestId('beat-outline');
     await expect(outline).toBeVisible();
-    await expect(outline.getByTestId('beat-1')).toContainText('“Then find my ledger. It\'s somewhere in this tavern.”');
+    await expect(outline.getByTestId('beat-1')).toContainText('“Then find my ledger. It\'s somewhere in this tavern. (the player takes the job)”');
     await expect(outline.getByTestId('beat-2').locator('select').first()).toHaveValue('pickup');
     await expect(outline.getByTestId('beat-3').locator('select').nth(2)).toHaveValue('complete');
     await expect(outline.getByTestId('beat-questions')).toHaveCount(0);

@@ -553,7 +553,9 @@ export class BeatReader {
         const who = byName(sheet.people, l.speaker);
         id = `b${sheet.beats.length + 1}`;
         // (Which beat ends the quest is asked once all of it is read.)
-        sheet.beats.push({ id, does: 'talk', target: who?.key ?? l.speaker, after: above ? [above] : when ? [when] : [], quote: l.text, journal: null, objective: null, ends: null, effects: {} });
+        // Its quote carries the author's direction ("the player agrees to clear the cellar"): what later beats follow.
+        const quote = `${l.text}${l.notes.length ? ` (${l.notes.join('; ')})` : ''}`;
+        sheet.beats.push({ id, does: 'talk', target: who?.key ?? l.speaker, after: above ? [above] : when ? [when] : [], quote, journal: null, objective: null, ends: null, effects: {} });
       }
       moved.set(n, id);
       lines.push({ line: n, beat: id });
