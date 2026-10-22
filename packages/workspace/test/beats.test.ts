@@ -365,6 +365,6 @@ describe('beat sheets', () => {
     ]);
     expect(questions).toEqual([]);
     expect(sheet.dialogue[0]!.lines.map((l) => [l.line, l.beat, l.if ?? null, l.effects?.gives?.length ?? 0])).toEqual([[3, 'b1', null, 0]]);
-    expect(sheet.items.map((i) => i.key)).toEqual(['cask']);
+    expect(sheet.items.map((i) => i.key)).toEqual(['caskOfHonningbrew']);
   });
 });
