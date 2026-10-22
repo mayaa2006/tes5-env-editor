@@ -120,13 +120,18 @@ The quest list on the left shows only quests that have a name by default (the hi
 **Read it beat by beat** (the default with a free AI; pick it under **Read it**). Instead of one big request for the whole plan, the AI answers many small questions, each with the sentence it comes from:
 
 1. who and what the quest involves (people, places, items, enemy groups), and how it starts;
-2. passage by passage, what the player does that moves the quest on (talk to someone, pick up or read something, go somewhere, kill someone, clear out a group, wait), and after what;
-3. for each conversation you wrote out, after which beat it's offered and which of its lines move the quest on (each one is talking to whoever says it, in the order your indenting gives);
-4. what your directions on those lines do (gold, items, a choice remembered, someone leaving or attacking), and what else happens along with each beat ("she pays 200 gold, or only 100 if he was let go");
-5. what doesn't fit together yet, asked again as a closed question: "kill bandit" when the bandits are a group (clear them, or kill whom?), a beat that leads nowhere (what comes next?), no beat that ends the quest (which one does?), a place nobody named (which of these?);
-6. the objectives and journal entries, and a line of dialogue for each talk beat you only described.
+2. which of your paragraphs tell what happens (the story, how it starts, a walkthrough), as opposed to a journal, objectives, greetings or notes;
+3. passage by passage, what the player does that moves the quest on (talk to someone, pick up or read something, go somewhere, kill someone, clear out a group, wait), and after what;
+4. for each conversation you wrote out, when it's offered, and for each line with a direction, one line at a time: does the direction say something happens in the quest, and is saying it a beat the story already described? (Each line that moves the quest on is talking to whoever says it, in the order your indenting gives; lines with the same direction are the same beat.)
+5. what your directions on those lines do (gold, items, a choice remembered, someone leaving or attacking), and what else happens along with each beat ("she pays 200 gold, or only 100 if he was let go");
+6. what doesn't fit together yet, asked again as a closed question: "kill bandit" when the bandits are a group (clear them, or kill whom?), a beat that leads nowhere (what comes next?), no beat that ends the quest (which one does?), the same talk read twice (one moment?), something picked up that isn't anywhere (who hands it over?), hundreds of something (gold?), a place nobody named (which of these?);
+7. the objectives and journal entries, and a line of dialogue for each talk beat you only described.
 
 The editor does the bookkeeping: names to keys, who and what is already in your load order (by exact name, places also by their map marker), stage numbers from the order of the beats, the steps, objectives and tags. Then the plan is made from the beats, so the stages, objectives and dialogue tags can't disagree with each other. The review opens on **What was read**: the beats in order, each with its sentence. Change one (what the player does, to whom, after what, whether it ends the quest), or remove one, and the plan is made again; **Undo** puts it back. Anything still unclear is listed there. **In one go** asks for the whole plan in one request instead; it works well with Claude.
+
+Small models answer yes-or-no questions far more reliably than a choice between descriptions (asked to choose, the built-in Qwen3.5 4B nearly always took the last choice), so the questions that matter most are asked as yes or no, and each wording was tried on the test documents first.
+
+**How it did, with the built-in AI on Skyrim's own data.** `apps/studio/test/models/beat-trial.ts` reads five test documents (a bulleted synopsis, a story in prose, a Nexus mod page, a screenplay, and the four-quest Cartographer questline) and scores each reading against the expected one; `questline-trial.ts --rebuild` then builds the questline in Skyrim.esm's load order and checks it. With Qwen3.5 4B on a 4-core processor and no graphics card: all 37 expected beats read, 26 of 29 in the right order, 7 of 8 endings, 10 of 15 written lines linked to the right beat, every person and place found, in about an hour for all five. The questline's four quests built with no problems on the quest map, no script or release-check errors, 79 of 79 of the author's lines kept word for word, and the plugin read back exactly (227 records). It still reads extra beats the author didn't mean (a mention read as a step), which show up in **What was read** to remove.
 
 The plan covers:
 
