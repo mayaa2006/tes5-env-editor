@@ -414,7 +414,8 @@ HESTA: My maps were stolen.
           });
         if (user.includes('Does the note say something happens')) return reply({ happens: !user.includes('“No.”') });
         // Both ways of taking the job are the job: asked beat by beat, the first talk with Hesta is it.
-        if (user.includes('Does the line do what that sentence of the story describes')) return reply({ same: user.includes('“The player takes the job”') });
+        // (Asked about the persuaded line, the AI says no: the same direction as the first line makes it the job anyway.)
+        if (user.includes('Does the line do what that sentence of the story describes')) return reply({ same: user.includes('“The player takes the job”') && user.includes('Good. Bring me all three.') });
         // Said to be offered after the job, which it does itself.
         if (user.includes('After which beat can the player have this conversation')) return reply({ when: 1 });
         if (user.includes('For each line with a direction')) return reply({ lines: [] });

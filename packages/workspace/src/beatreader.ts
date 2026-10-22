@@ -634,10 +634,20 @@ export class BeatReader {
     // conversation that also moved the quest on (the author's indenting), or after the beat the conversation follows.
     const moved = new Map<number, string>();
     const lines: BeatDialogueLine[] = [];
+    // Lines of this conversation with the same direction, word for word ("the player agrees"), are the same beat said
+    // different ways; a lone word ("success") doesn't count.
+    const directions = (l: { notes: string[] }) => l.notes.flatMap((x) => x.split(';')).map((x) => x.trim().toLowerCase()).filter((x) => x.split(/\s+/).length > 1);
+    const byDirection = new Map<string, string>();
     for (const m of [...a.moves].sort((x, y) => x.line - y.line)) {
       const n = lineFor(numbered, m.line, m.words);
       const l = n ? numbered.lines[n - 1] : undefined;
       if (!n || !l || l.player || moved.has(n) || !said.includes(n)) continue;
+      const same = directions(l).map((x) => byDirection.get(x)).find(Boolean);
+      if (same) {
+        moved.set(n, same);
+        lines.push({ line: n, beat: same });
+        continue;
+      }
       // An earlier beat only when it's talking to this line's speaker and no line says it yet; a new beat otherwise.
       const speaker = byName(sheet.people, l.speaker)?.key;
       const earlier = m.beat ? sheet.beats[m.beat - 1] : undefined;
@@ -661,6 +671,7 @@ export class BeatReader {
         sheet.beats.push({ id, does: 'talk', target: who?.key ?? l.speaker, after: above ? [above] : when ? [when] : [], quote, journal: null, objective: null, ends: null, effects: {} });
       }
       moved.set(n, id);
+      for (const x of directions(l)) if (!byDirection.has(x)) byDirection.set(x, id);
       lines.push({ line: n, beat: id });
     }
     // It can't be offered only after a beat it does itself (or anything that comes after that beat): then it's offered

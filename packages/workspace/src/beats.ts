@@ -319,8 +319,10 @@ export function checkBeats(sheet: BeatSheet, opts: { earlierChoices?: string[]; 
     if (i.lockedWith && !is(i.lockedWith, 'item')) pick(i.key, `${i.name} is locked with “${i.lockedWith}”, which isn't an item in the sheet.`, 'lockedWith', 'item');
     const needed = sheet.beats.some((b) => (b.does === 'pickup' || b.does === 'read') && b.target === i.key);
     const given = sheet.beats.some((b) => (b.effects?.gives ?? []).some((g) => g.item === i.key));
-    if (needed && !i.place && !i.carriedBy && !given) {
-      const b = sheet.beats.find((x) => (x.does === 'pickup' || x.does === 'read') && x.target === i.key)!;
+    // (Picking up something that isn't lying anywhere can't be noticed in the game, even if someone hands it over.)
+    const pickedFromNowhere = sheet.beats.find((x) => x.does === 'pickup' && x.target === i.key);
+    if (needed && !i.place && !i.carriedBy && (!given || pickedFromNowhere)) {
+      const b = pickedFromNowhere ?? sheet.beats.find((x) => (x.does === 'pickup' || x.does === 'read') && x.target === i.key)!;
       q.push({ about: b.id, message: `The player has to find ${i.name}, but it isn't anywhere: does someone hand it over, or where is it?`, nowhere: i.key });
     }
   }
