@@ -570,25 +570,59 @@ export class BeatReader {
     const talks = sheet.beats.map((b, i) => [b, i + 1] as const).filter(([b]) => b.does === 'talk' && !sayers.has(b.id) && speakers.has(b.target ?? undefined));
     const label = (b: Beat, n: number) => `beat ${n}: talk ${this.nameOf(sheet, b.target!)}`;
     const choices = [...talks.map(([b, n]) => label(b, n)), 'a new step', 'only talk'];
-    const r = await this.ai.ask(
-      READ_RULES,
-      `${this.context(sheet)}\n\nA conversation the author wrote out (numbered lines; the author's directions after "—"):\n${describeBlocks([numbered])}\n\nAfter which beat can the player have this conversation? And for each of lines ${said.join(', ')}: does saying it only talk, do one of the beats above, or move the quest on in a new step?`,
-      conversationSchema(beats, said, choices),
-    );
-    const a = {
-      when: r.when,
-      moves: r.lines.flatMap((x) => {
-        const c = x.does.trim().toLowerCase();
-        if (c === 'a new step') return [{ line: x.line, words: '', beat: null as number | null }];
-        // A listed beat by its label or number; or by who it's talking to (the first such beat nothing says yet: a later
-        // conversation can't take one an earlier one did).
-        const who = /talk\s+(.+)$/.exec(c)?.[1];
-        const byWho = who ? talks.filter(([b]) => !!byName([{ key: b.target!, name: this.nameOf(sheet, b.target!) }], who)) : [];
-        const hit = talks.find(([b, n]) => label(b, n).toLowerCase() === c || c === `beat ${n}`) ?? byWho[0];
-        if (hit) return [{ line: x.line, words: '', beat: hit[1] as number | null }];
-        return c.startsWith('beat') ? [{ line: x.line, words: '', beat: null as number | null }] : [];
-      }),
+    const pick = (c: string): number | null | undefined => {
+      // A listed beat by its label or number; or by who it's talking to (the first such beat nothing says yet: a later
+      // conversation can't take one an earlier one did). Null: a new step; undefined: only talk.
+      c = c.trim().toLowerCase();
+      if (c === 'a new step') return null;
+      const who = /talk\s+(.+)$/.exec(c)?.[1];
+      const byWho = who ? talks.filter(([b]) => !!byName([{ key: b.target!, name: this.nameOf(sheet, b.target!) }], who)) : [];
+      const hit = talks.find(([b, n]) => label(b, n).toLowerCase() === c || c === `beat ${n}`) ?? byWho[0];
+      return hit ? hit[1] : c.startsWith('beat') ? null : undefined;
     };
+    let a: { when: number | null; moves: { line: number; words: string; beat: number | null }[] };
+    const directed = others.filter((l) => l.notes.length);
+    if (directed.length) {
+      // The author's directions say which lines move the quest on: each asked about on its own, in a few words, and
+      // only then which beat it is (when there's more than one way to read it).
+      const moves: typeof a.moves = [];
+      for (const l of directed) {
+        const m = await this.ai.ask(
+          READ_RULES,
+          `In a conversation of a Skyrim quest, ${l.speaker} says: “${l.text}”\nThe author's direction on it: “${l.notes.join('; ')}”\n\nDoes the direction say the quest moves on when it's said (the player takes a job or agrees to something, is given or hands over something, someone joins, leaves or attacks, or the quest is done)? Or does it only say how or when the line is said (a persuasion's success or failure, the end of the conversation, a tone)?`,
+          z.object({ direction: z.enum(['moves the quest on', 'only how or when it is said']) }),
+          40,
+        );
+        if (m.direction !== 'moves the quest on') continue;
+        const mine = talks.filter(([b]) => b.target === byName(sheet.people, l.speaker)?.key);
+        let beat: number | null = null;
+        if (mine.length) {
+          const options = [...mine.map(([b, n]) => label(b, n)), 'a new step'];
+          const w = await this.ai.ask(
+            READ_RULES,
+            `${this.context(sheet)}\n\n${l.speaker} says: “${l.text}” (${l.notes.join('; ')})\n\nIs saying it one of the beats listed, or a new step?`,
+            z.object({ beat: z.string().describe(`{enum: ${JSON.stringify(options)}}`) }),
+            40,
+          );
+          beat = pick(w.beat) ?? null;
+        }
+        moves.push({ line: l.n, words: '', beat });
+      }
+      const w = await this.ai.ask(
+        READ_RULES,
+        `${this.context(sheet)}\n\nA conversation the author wrote out:\n${describeBlocks([numbered])}\n\nAfter which beat can the player have this conversation?`,
+        z.object({ when: z.number().int().nullable().describe(`The beat after which the player can have it; null when they can have it from the start of the quest {enum: ${JSON.stringify(beats)}}`) }),
+        40,
+      );
+      a = { when: w.when, moves };
+    } else {
+      const r = await this.ai.ask(
+        READ_RULES,
+        `${this.context(sheet)}\n\nA conversation the author wrote out (numbered lines; the author's directions after "—"):\n${describeBlocks([numbered])}\n\nAfter which beat can the player have this conversation? And for each of lines ${said.join(', ')}: does saying it only talk, do one of the beats above, or move the quest on in a new step?`,
+        conversationSchema(beats, said, choices),
+      );
+      a = { when: r.when, moves: r.lines.flatMap((x) => { const b = pick(x.does); return b === undefined ? [] : [{ line: x.line, words: '', beat: b }]; }) };
+    }
     const when = a.when ? (sheet.beats[a.when - 1]?.id ?? null) : null;
     // Each line that moves the quest on is talking to whoever says it. It comes after the nearest line above it in the
     // conversation that also moved the quest on (the author's indenting), or after the beat the conversation follows.
@@ -681,7 +715,7 @@ export class BeatReader {
       if (i >= 0) {
         // Closed questions first: which reading fits, what comes next.
         let open = qs;
-        for (const q of qs.filter((x) => x.choose || x.next || x.endsEarly || x.same)) if (await this.closed(sheet, sheet.beats[i]!, q, text)) open = open.filter((x) => x !== q);
+        for (const q of qs.filter((x) => x.choose || x.next || x.endsEarly || x.same || x.nowhere)) if (await this.closed(sheet, sheet.beats[i]!, q, text)) open = open.filter((x) => x !== q);
         if (!open.length) continue;
         // Otherwise the AI gives the beat again, corrected.
         const b = sheet.beats[i]!;
@@ -770,6 +804,30 @@ export class BeatReader {
         b.does = c.does;
         b.target = c.target;
         return true;
+      }
+      if (q.nowhere) {
+        const item = sheet.items.find((x) => x.key === q.nowhere);
+        if (!item) return false;
+        const options = [...sheet.people.map((p) => `${p.name} hands it over`), ...sheet.people.map((p) => `${p.name} carries it`), ...sheet.places.map((p) => `it lies in ${p.name}`)];
+        const a = await this.ai.ask(
+          READ_RULES,
+          `The quest:\n<quest>\n${text.trim()}\n</quest>\n\nBeats, in order:\n${this.outline(sheet, b.id)}\n\n${q.message}`,
+          z.object({ answer: z.string().describe(`{enum: ${JSON.stringify(options)}}`) }),
+          60,
+        );
+        const c = a.answer.trim().toLowerCase();
+        const who = sheet.people.find((p) => c.startsWith(p.name.toLowerCase()));
+        if (who && c.endsWith('hands it over')) {
+          // Handed over: this beat is talking to them, and they give it.
+          b.does = 'talk';
+          b.target = who.key;
+          b.effects = { ...b.effects, gives: [...(b.effects.gives ?? []), { item: item.key, count: item.count }] };
+          return true;
+        }
+        if (who && c.endsWith('carries it')) return void (item.carriedBy = who.key), true;
+        const at = sheet.places.find((p) => c === `it lies in ${p.name.toLowerCase()}`);
+        if (at) return void (item.place = at.key), true;
+        return false;
       }
       if (q.same) {
         const a = await this.ai.ask(

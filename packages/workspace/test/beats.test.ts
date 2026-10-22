@@ -348,20 +348,13 @@ describe('beat sheets', () => {
         if (user.includes('For each line with a direction')) return reply({ lines: [] });
         if (user.includes('<passage>\nSCENE 3')) return reply({ beats: [{ n: 4, does: 'clear', target: 'skeever', count: null, hours: null, after: [2], quote: 'When the skeevers are dead:', ends: 'no', then: null }] });
         if (user.includes('<passage>')) throw new Error('the heading was read for beats');
-        // Each line that could move the quest on (the ones with directions), one answer each.
-        if (user.includes('Block 1 —')) return reply({ when: null, lines: [{ line: 3, does: 'a new step' }] });
-        // The agreement and the persuasion's success, both answers to the first line: both come after the job.
-        if (user.includes('Block 2 —'))
-          return reply({
-            when: 1,
-            lines: [
-              { line: 4, does: 'a new step' },
-              { line: 6, does: 'a new step' },
-              { line: 7, does: 'only talk' },
-            ],
-          });
-        if (user.includes('Block 3 —')) return reply({ when: 4, lines: [{ line: 2, does: 'a new step' }] });
-        if (user.includes('Block 4 —')) return reply({ when: 5, lines: [{ line: 2, does: 'a new step' }] });
+        // Each line with a direction, on its own: does its direction move the quest on? (A failed persuasion doesn't.)
+        if (user.includes('Does the direction say the quest moves on')) return reply({ direction: user.includes('Not with those things') ? 'only how or when it is said' : 'moves the quest on' });
+        // When each conversation is offered. The agreement and the persuasion's success both come after the job.
+        if (user.includes('Block 1 —')) return reply({ when: null });
+        if (user.includes('Block 2 —')) return reply({ when: 1 });
+        if (user.includes('Block 3 —')) return reply({ when: 4 });
+        if (user.includes('Block 4 —')) return reply({ when: 5 });
         if (user.includes('What kind of thing is “the job”')) return reply({ kind: 'not a thing' });
         // Which beat ends the quest is its own question, asked once everything is read.
         if (user.includes('No beat completes the quest')) return reply({ beat: 6 });
@@ -419,17 +412,11 @@ HESTA: My maps were stolen.
               { n: 3, does: 'talk', target: 'Hesta', count: null, hours: null, after: [2], quote: 'brings them to her', ends: 'complete', then: null },
             ],
           });
+        if (user.includes('Does the direction say the quest moves on')) return reply({ direction: user.includes('“No.”') ? 'only how or when it is said' : 'moves the quest on' });
         // Both ways of taking the job are the job; the AI names it with the wrong number but the right person.
+        if (user.includes('Is saying it one of the beats listed')) return reply({ beat: user.includes('Good. Bring me all three.') ? 'beat 7: talk Hesta Coldwater' : 'beat 1: talk Hesta Coldwater' });
         // Said to be offered after the job, which it does itself.
-        if (user.includes('does saying it only talk'))
-          return reply({
-            when: 1,
-            lines: [
-              { line: 3, does: 'beat 7: talk Hesta Coldwater' },
-              { line: 5, does: 'beat 1: talk Hesta Coldwater' },
-              { line: 6, does: 'only talk' },
-            ],
-          });
+        if (user.includes('After which beat can the player have this conversation')) return reply({ when: 1 });
         if (user.includes('For each line with a direction')) return reply({ lines: [] });
         if (user.includes('their journal entry')) return reply({ beats: [] });
         if (user.includes('what the player says to')) return reply({ player: 'Here.', answer: 'Thanks.' });
@@ -446,5 +433,26 @@ HESTA: My maps were stolen.
     expect(sheet.dialogue[0]!.when).toBeNull();
     // Hundreds of septims is money, not 250 items.
     expect(sheet.items.map((i) => i.key)).toEqual(['tornMapPage']);
+  });
+
+  it('ask who hands over an item the player was read as picking up from nowhere', async () => {
+    const doc = 'Varro is dealt with. Hesta pays the player and gives them the Coldwater Survey of the Rift.';
+    const reply = (o: unknown): PlannerReply => ({ content: [{ type: 'text', text: JSON.stringify(o) }], stop_reason: 'end_turn' });
+    const planner = new QuestPlanner({
+      send: async (p) => {
+        const user = String(p.messages.at(-1)!.content);
+        if (user.includes('List the people'))
+          return reply({ summary: '', start: { how: 'talking', what: null }, people: [{ name: 'Hesta Coldwater', description: '', sex: 'female', race: null, where: null, spot: null, canDie: 'not said', hostile: false, quote: '' }], places: [], items: [{ name: 'Coldwater Survey of the Rift', kind: 'book', where: null, carriedBy: null, spot: null, count: 1, text: null, lockedWith: null, quote: '' }], enemies: [] });
+        if (user.includes('<passage>')) return reply({ beats: [{ n: 1, does: 'pickup', target: 'Coldwater Survey of the Rift', count: 1, hours: null, after: [], quote: 'gives them the Coldwater Survey of the Rift', ends: 'complete', then: null }] });
+        if (user.includes("isn't anywhere")) return reply({ answer: 'Hesta Coldwater hands it over' });
+        if (user.includes('their journal entry')) return reply({ beats: [] });
+        if (user.includes('what the player says to')) return reply({ player: 'It is done.', answer: 'Take the survey.' });
+        throw new Error(`unexpected: ${user.slice(-200)}`);
+      },
+    });
+    const { sheet, questions } = await new BeatReader(planner).read(doc, { title: 'Settling Accounts', editorId: 'SettlingAccounts' });
+    // Handed over: talking to Hesta, who gives it.
+    expect(sheet.beats.map((b) => [b.does, b.target, b.effects.gives])).toEqual([['talk', 'hesta', [{ item: 'coldwaterSurveyOf', count: 1 }]]]);
+    expect(questions).toEqual([]);
   });
 });

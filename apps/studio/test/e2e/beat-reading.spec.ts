@@ -61,9 +61,10 @@ function answer(user: string): unknown {
     };
   if (user.includes('<passage>\nWhen the player comes back')) return { beats: [{ n: 2, does: 'pickup', target: "Brynja's Ledger", count: 1, hours: null, after: [1], quote: 'The player finds the ledger on a table', ends: 'no', then: null }] };
   if (user.includes('<passage>')) return { beats: [] };
-  if (user.includes('Can you read?')) return user.includes('For each line with a direction') ? { lines: [] } : { when: null, lines: [{ line: 3, does: 'a new step' }] };
-  if (user.includes("Here's your ledger.")) return user.includes('For each line with a direction') ? { lines: [{ line: 2, words: 'My ledger! Thank', if: [], ...none, takes: [{ item: "Brynja's Ledger", count: 1 }], instead: [] }] } : { when: 2, lines: [{ line: 2, does: 'a new step' }] };
-  if (user.includes('Brynja says you saw')) return user.includes('For each line with a direction') ? { lines: [] } : { when: null, lines: [{ line: 2, does: 'a new step' }] };
+  if (user.includes('Does the direction say the quest moves on')) return { direction: 'moves the quest on' };
+  if (user.includes('Can you read?')) return user.includes('For each line with a direction') ? { lines: [] } : { when: null };
+  if (user.includes("Here's your ledger.")) return user.includes('For each line with a direction') ? { lines: [{ line: 2, words: 'My ledger! Thank', if: [], ...none, takes: [{ item: "Brynja's Ledger", count: 1 }], instead: [] }] } : { when: 2 };
+  if (user.includes('Brynja says you saw')) return user.includes('For each line with a direction') ? { lines: [] } : { when: null };
   if (user.includes('their journal entry'))
     return two
       ? { beats: [{ n: 1, objective: 'Ask Sigrun who took the ledger', journal: 'Sigrun wants coin before she says more.' }] }
@@ -122,7 +123,7 @@ for (const size of [
     await expect(review).toBeVisible();
     expect(errors).toEqual([]);
     // Small questions, each about one thing.
-    expect(asked.some((q) => q.includes('does saying it only talk'))).toBe(true);
+    expect(asked.some((q) => q.includes('Does the direction say the quest moves on'))).toBe(true);
     await expect(review.getByTestId('questline-quests')).toContainText('Starts when The Ledger ends');
     await expect(review.getByTestId('questline-links')).toContainText('Sigrun — made in quest 1, used in 2');
 

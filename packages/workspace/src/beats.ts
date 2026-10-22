@@ -214,6 +214,8 @@ export interface BeatQuestion {
   endsEarly?: true;
   /** Talking to the same person twice, one right after the other: answered by saying whether it's one moment (merged). */
   same?: string;
+  /** An item the player picks up that isn't anywhere: answered by saying who hands it over, or where it is. */
+  nowhere?: string;
 }
 
 // ------------------------------------------------------------------ checks
@@ -317,7 +319,10 @@ export function checkBeats(sheet: BeatSheet, opts: { earlierChoices?: string[]; 
     if (i.lockedWith && !is(i.lockedWith, 'item')) pick(i.key, `${i.name} is locked with “${i.lockedWith}”, which isn't an item in the sheet.`, 'lockedWith', 'item');
     const needed = sheet.beats.some((b) => (b.does === 'pickup' || b.does === 'read') && b.target === i.key);
     const given = sheet.beats.some((b) => (b.effects?.gives ?? []).some((g) => g.item === i.key));
-    if (needed && !i.place && !i.carriedBy && !given) ask(i.key, `The player has to find ${i.name}, but it isn't anywhere: where is it, or who has it?`);
+    if (needed && !i.place && !i.carriedBy && !given) {
+      const b = sheet.beats.find((x) => (x.does === 'pickup' || x.does === 'read') && x.target === i.key)!;
+      q.push({ about: b.id, message: `The player has to find ${i.name}, but it isn't anywhere: does someone hand it over, or where is it?`, nowhere: i.key });
+    }
   }
   for (const p of sheet.people) if (p.place && !is(p.place, 'place')) pick(p.key, `${p.name} is at “${p.place}”, which isn't a place in the sheet.`, 'place', 'place');
   for (const g of sheet.groups) {
