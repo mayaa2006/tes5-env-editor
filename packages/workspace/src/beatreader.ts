@@ -657,9 +657,23 @@ export class BeatReader {
       moved.set(n, id);
       lines.push({ line: n, beat: id });
     }
-    // It can't be offered only after a beat it does itself: then it's offered after what that beat follows.
+    // It can't be offered only after a beat it does itself (or anything that comes after that beat): then it's offered
+    // after what that beat follows.
+    const before = (id: string) => {
+      const seen = new Set<string>([id]);
+      for (let grew = true; grew; ) {
+        grew = false;
+        for (const b of sheet.beats) if (seen.has(b.id)) for (const a of b.after) if (!seen.has(a)) (seen.add(a), (grew = true));
+      }
+      return seen;
+    };
     let offered = when;
-    for (let guard = 0; offered && lines.some((x) => x.beat === offered) && guard < 10; guard++) offered = sheet.beats.find((b) => b.id === offered)?.after[0] ?? null;
+    for (let guard = 0; offered && guard < 10; guard++) {
+      const earlier = before(offered);
+      const done = lines.find((x) => x.beat && earlier.has(x.beat));
+      if (!done) break;
+      offered = sheet.beats.find((b) => b.id === done.beat)?.after[0] ?? null;
+    }
     sheet.dialogue.push({ block: block.id, when: offered, lines });
   }
 
