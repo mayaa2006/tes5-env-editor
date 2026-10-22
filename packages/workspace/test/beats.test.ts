@@ -349,7 +349,7 @@ describe('beat sheets', () => {
         if (user.includes('<passage>\nSCENE 3')) return reply({ beats: [{ n: 4, does: 'clear', target: 'skeever', count: null, hours: null, after: [2], quote: 'When the skeevers are dead:', ends: 'no', then: null }] });
         if (user.includes('<passage>')) throw new Error('the heading was read for beats');
         // Each line with a direction, on its own: does its direction move the quest on? (A failed persuasion doesn't.)
-        if (user.includes('Does the direction say the quest moves on')) return reply({ direction: user.includes('Not with those things') ? 'only how or when it is said' : 'moves the quest on' });
+        if (user.includes('Does the note say something happens')) return reply({ happens: !user.includes('Not with those things') });
         // When each conversation is offered. The agreement and the persuasion's success both come after the job.
         if (user.includes('Block 1 —')) return reply({ when: null });
         if (user.includes('Block 2 —')) return reply({ when: 1 });
@@ -412,7 +412,7 @@ HESTA: My maps were stolen.
               { n: 3, does: 'talk', target: 'Hesta', count: null, hours: null, after: [2], quote: 'brings them to her', ends: 'complete', then: null },
             ],
           });
-        if (user.includes('Does the direction say the quest moves on')) return reply({ direction: user.includes('“No.”') ? 'only how or when it is said' : 'moves the quest on' });
+        if (user.includes('Does the note say something happens')) return reply({ happens: !user.includes('“No.”') });
         // Both ways of taking the job are the job; the AI names it with the wrong number but the right person.
         if (user.includes('Is saying it one of the beats listed')) return reply({ beat: user.includes('Good. Bring me all three.') ? 'beat 7: talk Hesta Coldwater' : 'beat 1: talk Hesta Coldwater' });
         // Said to be offered after the job, which it does itself.

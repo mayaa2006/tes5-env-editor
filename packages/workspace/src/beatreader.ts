@@ -587,13 +587,15 @@ export class BeatReader {
       // only then which beat it is (when there's more than one way to read it).
       const moves: typeof a.moves = [];
       for (const l of directed) {
+        // (Asked as yes or no, with what counts listed: tried on the built-in model, this wording read 10 of 10 of the
+        // Cartographer's and the screenplay's directions right, where a choice between two descriptions read none.)
         const m = await this.ai.ask(
           READ_RULES,
-          `In a conversation of a Skyrim quest, ${l.speaker} says: “${l.text}”\nThe author's direction on it: “${l.notes.join('; ')}”\n\nDoes the direction say the quest moves on when it's said (the player takes a job or agrees to something, is given or hands over something, someone joins, leaves or attacks, or the quest is done)? Or does it only say how or when the line is said (a persuasion's success or failure, the end of the conversation, a tone)?`,
-          z.object({ direction: z.enum(['moves the quest on', 'only how or when it is said']) }),
+          `A line of dialogue in a Skyrim quest: “${l.text}”\nThe author's note on it: “${l.notes.join('; ')}”\n\nDoes the note say something happens in the quest (a job taken, an agreement, a promise, something given, taken or paid, someone following, attacking or leaving, the quest done)?`,
+          z.object({ happens: z.boolean() }),
           40,
         );
-        if (m.direction !== 'moves the quest on') continue;
+        if (!m.happens) continue;
         const mine = talks.filter(([b]) => b.target === byName(sheet.people, l.speaker)?.key);
         let beat: number | null = null;
         if (mine.length) {
