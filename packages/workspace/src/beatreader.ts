@@ -596,17 +596,21 @@ export class BeatReader {
           40,
         );
         if (!m.happens) continue;
-        const mine = talks.filter(([b]) => b.target === byName(sheet.people, l.speaker)?.key);
+        // Which beat it is: each talk with this speaker nothing says yet, in order, asked as yes or no (a list to pick
+        // from was always answered with its last choice); none of them, a new step.
+        const mine = talks.filter(([b]) => b.target === byName(sheet.people, l.speaker)?.key).slice(0, 4);
         let beat: number | null = null;
-        if (mine.length) {
-          const options = [...mine.map(([b, n]) => label(b, n)), 'a new step'];
+        for (const [b, n] of mine) {
           const w = await this.ai.ask(
             READ_RULES,
-            `${this.context(sheet)}\n\n${l.speaker} says: “${l.text}” (${l.notes.join('; ')})\n\nIs saying it one of the beats listed, or a new step?`,
-            z.object({ beat: z.string().describe(`{enum: ${JSON.stringify(options)}}`) }),
+            `The quest's story says: “${b.quote}”\nIn the written dialogue, ${l.speaker} says: “${l.text}” (${l.notes.join('; ')})\n\nDoes the line do what that sentence of the story describes?`,
+            z.object({ same: z.boolean() }),
             40,
           );
-          beat = pick(w.beat) ?? null;
+          if (w.same) {
+            beat = n;
+            break;
+          }
         }
         moves.push({ line: l.n, words: '', beat });
       }

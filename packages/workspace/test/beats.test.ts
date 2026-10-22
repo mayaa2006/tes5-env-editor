@@ -384,7 +384,7 @@ describe('beat sheets', () => {
     expect(sheet.items.map((i) => i.key)).toEqual(['caskOfHonningbrew']);
   });
 
-  it('link written lines to the beats the prose described, however the AI numbers them', async () => {
+  it('link written lines to the beats the prose described', async () => {
     const doc = `Hesta wants her map pages back. The player takes the job, finds the pages and brings them to her.
 
 HESTA: My maps were stolen.
@@ -413,8 +413,8 @@ HESTA: My maps were stolen.
             ],
           });
         if (user.includes('Does the note say something happens')) return reply({ happens: !user.includes('“No.”') });
-        // Both ways of taking the job are the job; the AI names it with the wrong number but the right person.
-        if (user.includes('Is saying it one of the beats listed')) return reply({ beat: user.includes('Good. Bring me all three.') ? 'beat 7: talk Hesta Coldwater' : 'beat 1: talk Hesta Coldwater' });
+        // Both ways of taking the job are the job: asked beat by beat, the first talk with Hesta is it.
+        if (user.includes('Does the line do what that sentence of the story describes')) return reply({ same: user.includes('“The player takes the job”') });
         // Said to be offered after the job, which it does itself.
         if (user.includes('After which beat can the player have this conversation')) return reply({ when: 1 });
         if (user.includes('For each line with a direction')) return reply({ lines: [] });
@@ -426,7 +426,7 @@ HESTA: My maps were stolen.
     const { sheet } = await new BeatReader(planner).read(doc, { title: 'Lines on a Map', editorId: 'LinesOnAMap' });
     // An unexpected word for sex or "can die" is "not said", not a lost quest.
     expect(sheet.people.map((p) => [p.key, p.sex, p.essential])).toEqual([['hesta', null, null]]);
-    // Lines 3 and 5 both do the job: line 5 by its label, line 3 (a beat 7 there isn't) by the first unsaid talk with Hesta.
+    // Lines 3 and 5 both do the job.
     expect(sheet.beats.map((b) => b.id)).toEqual(['b1', 'b2', 'b3']);
     expect(sheet.dialogue[0]!.lines.map((l) => `${l.line}:${l.beat}`)).toEqual(['3:b1', '5:b1']);
     // So it's offered from the start (what the job follows), not only once the job is taken.
