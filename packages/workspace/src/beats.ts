@@ -212,6 +212,8 @@ export interface BeatQuestion {
   ending?: true;
   /** A beat that ends the quest with beats after it: answered by saying whether it really ends it. */
   endsEarly?: true;
+  /** Talking to the same person twice, one right after the other: answered by saying whether it's one moment (merged). */
+  same?: string;
 }
 
 // ------------------------------------------------------------------ checks
@@ -287,6 +289,14 @@ export function checkBeats(sheet: BeatSheet, opts: { earlierChoices?: string[]; 
   const order = beatOrder(sheet.beats);
   if (!order) ask('beats', 'The beats loop: some beat comes, through others, after itself.');
   if (sheet.beats.length && !sheet.beats.some((b) => b.ends === 'complete')) q.push({ about: 'beats', message: 'No beat completes the quest: which one finishes it?', ending: true });
+  // Talking to someone, then straight away to them again with nothing else in between, may be one moment read twice.
+  const saidIn = new Set(sheet.dialogue.flatMap((d) => d.lines.map((l) => l.beat)));
+  for (const b of sheet.beats) {
+    const a = b.after.length === 1 ? sheet.beats.find((x) => x.id === b.after[0]) : undefined;
+    if (!a || a.does !== 'talk' || b.does !== 'talk' || a.target !== b.target || (saidIn.has(a.id) && saidIn.has(b.id))) continue;
+    if (sheet.beats.some((x) => x !== b && x.after.includes(a.id))) continue;
+    q.push({ about: b.id, message: `“${a.quote}”, then right after it “${b.quote}”: both talking to ${nameOf(sheet, b.target!)}. Is that one moment (the same beat)?`, same: a.id });
+  }
   // Every beat leads somewhere: to another beat, or to the quest's end.
   const followed = new Set(sheet.beats.flatMap((b) => b.after));
   // (Asked once some beat ends the quest; before that, which one does is the question.)

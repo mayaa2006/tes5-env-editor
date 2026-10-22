@@ -187,7 +187,7 @@ const PassageSchema = z.object({
 });
 
 /** A written conversation: when it's offered, and which of its lines move the quest on (each one is talking to its speaker). */
-const conversationSchema = (beats: number[], lines: number[]) =>
+const conversationSchema = (beats: number[], lines: number[], talks: number[]) =>
   z.object({
     when: z.number().int().nullable().describe(`The beat after which the player can have this conversation; null when they can have it from the start of the quest {enum: ${JSON.stringify(beats)}}`),
     moves: z
@@ -195,10 +195,10 @@ const conversationSchema = (beats: number[], lines: number[]) =>
         z.object({
           line: z.number().int().describe(`{enum: ${JSON.stringify(lines)}}`),
           words: z.string().describe('Its first three words'),
-          beat: z.number().int().nullable().describe(`A beat already listed that this line does (the author described it before writing it out); null when it is a new one {enum: ${JSON.stringify(beats)}}`),
+          beat: z.number().int().nullable().describe(`A talk beat already listed that this line does (the author described it before writing it out); null when it is a new one {enum: ${JSON.stringify(talks)}}`),
         }),
       )
-      .describe('The lines whose saying moves the quest on: someone gives the player a job, agrees to something, hands something over, or the quest ends. Usually one or two; most lines are only talk, and a failed persuasion moves nothing'),
+      .describe('The lines whose saying moves the quest on: someone gives the player a job, agrees to something, hands something over, or the quest ends. Usually one or two, often none: most lines only talk (answers, directions, a failed persuasion move nothing)'),
   });
 
 const ConditionShape = z.object({
@@ -511,7 +511,7 @@ export class BeatReader {
   private async prose(sheet: BeatSheet, text: string): Promise<void> {
     const a = await this.ai.ask(
       READ_RULES,
-      `${this.context(sheet)}\n\nThe next part of the quest:\n<passage>\n${text}\n</passage>\n\nWhat does the player do in this part that moves the quest on? Give each as a new beat (numbered after the beats so far), or none if it adds none (a description, or something already listed). A beat is something the player does: talking to someone (being asked for help, taking a job, talking someone down, bringing something back), picking up or reading something, going somewhere, killing. What others do in answer (someone pays, hands something over, leaves) goes in “then” of that beat. Where the player can do one thing or another (“kill them, or talk him down”), give each way as its own beat, both after the same beat. The last thing the player does completes the quest.`,
+      `${this.context(sheet)}\n\nThe next part of the quest:\n<passage>\n${text}\n</passage>\n\nWhat does the player do in this part that moves the quest on? Give each as a new beat (numbered after the beats so far), or none if it adds none (a description, or something already listed). A beat is something the player does: talking to someone (being asked for help, taking a job, talking someone down, bringing something back), picking up or reading something, going somewhere, killing. What others do in answer (someone pays, hands something over, leaves) goes in “then” of that beat. Where the player can do one thing or another (“kill them, or talk him down”), give each way as its own beat, both after the same beat. The last thing the player does completes the quest. Journal entries, objectives, rewards and summaries the author lists describe beats already there: they add none.`,
       PassageSchema,
     );
     this.addBeats(sheet, a.beats);
@@ -521,11 +521,16 @@ export class BeatReader {
     const numbered = structuredClone(block);
     numbered.lines.forEach((l, i) => (l.n = i + 1));
     const beats = sheet.beats.map((_, i) => i + 1);
-    const said = numbered.lines.filter((l) => !l.player).map((l) => l.n);
+    // Lines that can move the quest on: what the others say; where the author put directions on some lines, only those.
+    const others = numbered.lines.filter((l) => !l.player);
+    const said = (others.some((l) => l.notes.length) ? others.filter((l) => l.notes.length) : others).map((l) => l.n);
+    // Talk beats nothing says yet: the ones a line can turn out to be.
+    const sayers = new Set(sheet.dialogue.flatMap((d) => d.lines.map((x) => x.beat)));
+    const talks = sheet.beats.map((b, i) => [b, i + 1] as const).filter(([b]) => b.does === 'talk' && !sayers.has(b.id)).map(([, i]) => i);
     const a = await this.ai.ask(
       READ_RULES,
       `${this.context(sheet)}\n\nA conversation the author wrote out (numbered lines; the author's directions after "—"):\n${describeBlocks([numbered])}\n\nAfter which beat can the player have this conversation, and which of its lines move the quest on?`,
-      conversationSchema(beats, said),
+      conversationSchema(beats, said, talks),
     );
     const when = a.when ? (sheet.beats[a.when - 1]?.id ?? null) : null;
     // Each line that moves the quest on is talking to whoever says it. It comes after the nearest line above it in the
@@ -535,7 +540,7 @@ export class BeatReader {
     for (const m of [...a.moves].sort((x, y) => x.line - y.line)) {
       const n = lineFor(numbered, m.line, m.words);
       const l = n ? numbered.lines[n - 1] : undefined;
-      if (!n || !l || l.player || moved.has(n)) continue;
+      if (!n || !l || l.player || moved.has(n) || !said.includes(n)) continue;
       // An earlier beat only when it's talking to this line's speaker and no line says it yet; a new beat otherwise.
       const speaker = byName(sheet.people, l.speaker)?.key;
       const earlier = m.beat ? sheet.beats[m.beat - 1] : undefined;
@@ -615,7 +620,7 @@ export class BeatReader {
       if (i >= 0) {
         // Closed questions first: which reading fits, what comes next.
         let open = qs;
-        for (const q of qs.filter((x) => x.choose || x.next || x.endsEarly)) if (await this.closed(sheet, sheet.beats[i]!, q, text)) open = open.filter((x) => x !== q);
+        for (const q of qs.filter((x) => x.choose || x.next || x.endsEarly || x.same)) if (await this.closed(sheet, sheet.beats[i]!, q, text)) open = open.filter((x) => x !== q);
         if (!open.length) continue;
         // Otherwise the AI gives the beat again, corrected.
         const b = sheet.beats[i]!;
@@ -703,6 +708,16 @@ export class BeatReader {
         if (!c) return false;
         b.does = c.does;
         b.target = c.target;
+        return true;
+      }
+      if (q.same) {
+        const a = await this.ai.ask(
+          READ_RULES,
+          `The quest:\n<quest>\n${text.trim()}\n</quest>\n\nBeats, in order:\n${this.outline(sheet, b.id)}\n\n${q.message}`,
+          z.object({ same: z.boolean().describe(`True when beat ${n} is the same moment as the beat before it, read twice`) }),
+          40,
+        );
+        if (a.same) mergeBeat(sheet, b.id, q.same, this.then);
         return true;
       }
       if (q.endsEarly) {
@@ -839,6 +854,27 @@ export class BeatReader {
       // Left without; the review shows the question.
     }
   }
+}
+
+/** One beat folded into another (the same moment read twice): what follows it, says it or ends with it moves over. */
+function mergeBeat(sheet: BeatSheet, from: string, into: string, then: Map<string, string>): void {
+  const a = sheet.beats.find((x) => x.id === into);
+  const b = sheet.beats.find((x) => x.id === from);
+  if (!a || !b) return;
+  a.ends ??= b.ends;
+  a.effects = { ...b.effects, ...a.effects };
+  if (b.variants?.length) a.variants ??= b.variants;
+  const words = [then.get(into), then.get(from)].filter(Boolean).join(' ');
+  if (words) then.set(into, words);
+  then.delete(from);
+  sheet.beats = sheet.beats.filter((x) => x !== b);
+  for (const x of sheet.beats) x.after = [...new Set(x.after.map((y) => (y === from ? into : y)))].filter((y) => y !== x.id);
+  for (const d of sheet.dialogue) {
+    if (d.when === from) d.when = into;
+    for (const l of d.lines) if (l.beat === from) l.beat = into;
+  }
+  sheet.lines = sheet.lines.filter((l) => l.beat !== from || !sheet.lines.some((x) => x.beat === into));
+  for (const l of sheet.lines) if (l.beat === from) l.beat = into;
 }
 
 /** The line the AI meant: by number, unless its first words say another line nearby. */

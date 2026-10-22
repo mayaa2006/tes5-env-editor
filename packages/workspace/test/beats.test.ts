@@ -248,7 +248,9 @@ describe('beat sheets', () => {
               { n: 1, does: 'talk', target: 'Tilda', count: null, hours: null, after: [], quote: 'she tells them about Arn and begs them to find out what happened to him', ends: 'no', then: null },
               // Misread: killing a letter, and the return to Tilda after nothing.
               { n: 2, does: 'kill', target: 'letter', count: null, hours: null, after: [1], quote: 'on him a letter he never sent', ends: 'no', then: null },
-              { n: 3, does: 'talk', target: 'Tilda Grey-Hand', count: null, hours: null, after: [], quote: 'When the player brings the letter back', ends: 'complete', then: "she takes the letter and gives the player her late husband's axe" },
+              { n: 3, does: 'talk', target: 'Tilda Grey-Hand', count: null, hours: null, after: [], quote: 'When the player brings the letter back', ends: 'no', then: null },
+              // The same moment read twice: asked, and merged into beat 3.
+              { n: 4, does: 'talk', target: 'Tilda', count: null, hours: null, after: [3], quote: 'Tilda reads it and weeps', ends: 'complete', then: "she takes the letter and gives the player her late husband's axe" },
             ],
           });
         // The checks' closed questions: which reading fits, and what comes after the letter.
@@ -257,7 +259,8 @@ describe('beat sheets', () => {
           return reply({ answer: "pickup Arn's Letter" });
         }
         if (user.includes('leads nowhere')) return reply({ next: [3], ends: 'no' });
-        if (user.includes('What else happens')) return reply({ beats: [{ n: 3, ...none, takes: [{ item: 'letter', count: 1 }], gives: [{ item: 'axe', count: 1 }, { item: "Arn's Ring", count: 1 }], instead: [] }] });
+        if (user.includes('Is that one moment')) return reply({ same: true });
+        if (user.includes('What else happens')) return reply({ beats: [{ n: 4, ...none, takes: [{ item: 'letter', count: 1 }], gives: [{ item: 'axe', count: 1 }, { item: "Arn's Ring", count: 1 }], instead: [] }] });
         if (user.includes('What kind of thing is “Arn\'s Ring”')) return reply({ kind: 'clothing' });
         if (user.includes('their journal entry'))
           return reply({
