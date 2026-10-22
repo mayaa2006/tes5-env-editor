@@ -891,13 +891,16 @@ describe('quest builder', () => {
     const two = exampleQuestPlan();
     two.title = 'The Ring, Part Two';
     two.editorId = 'RingPartTwo';
-    two.conversations = [];
+    // A line said whatever the stage: fine, since part one starts it.
+    two.conversations = [{ title: 'Brynja', screenplay: 'PLAYER: Is it over?\nBRYNJA: Not yet. [stage 10]' }];
     two.steps = two.steps.filter((x) => x.kind !== 'talk');
     two.startsWithGame = false;
     two.startsWhen = { kind: 'afterQuest', targetKey: null, quest: 'InnkeeperRingQuest', stage: null };
     const r2 = await builder.build(two);
     expect(await graphs.fragmentCode(r1.quest!, 100)).toContain(`${graphs.startLine(r2.quest!)}`);
-    expect((await graphs.graph(r2.quest!)).starts).toEqual([{ kind: 'afterQuest', label: expect.stringContaining('reaches stage 100'), quest: r1.quest!, stage: 100 }]);
+    const g2 = await graphs.graph(r2.quest!);
+    expect(g2.starts).toEqual([{ kind: 'afterQuest', label: expect.stringContaining('reaches stage 100'), quest: r1.quest!, stage: 100 }]);
+    expect(g2.problems.join(' ')).not.toContain('only appears while the quest is running');
 
     // A vanilla quest can't start it (its script would have to be rewritten).
     const three = { ...two, editorId: 'RingPartThree', startsWhen: { kind: 'afterQuest' as const, targetKey: null, quest: 'NoSuchQuest', stage: null } };

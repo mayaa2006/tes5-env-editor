@@ -257,7 +257,7 @@ export class QuestGraphService {
 
     const problems: string[] = [];
     const sge = (q.flags & QuestFlag.StartGameEnabled) !== 0;
-    if (!sge && edges.some((e) => e.kind === 'talk' && e.from === null)) problems.push('Dialogue only appears while the quest is running. Turn on “Starts with the game” or start it from another quest.');
+    if (!sge && !starts.length && edges.some((e) => e.kind === 'talk' && e.from === null)) problems.push('Dialogue only appears while the quest is running. Turn on “Starts with the game” or start it from another quest.');
     for (const e of edges) if (!q.stages.some((s) => s.index === e.to)) problems.push(`Something sets stage ${e.to}, which doesn't exist.`);
     const reachable = new Set<number>();
     const start = nodes.filter((n) => n.startUp).map((n) => n.stage);
