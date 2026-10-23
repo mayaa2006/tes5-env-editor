@@ -197,8 +197,12 @@ function Creator({ npc }: { npc: FormKey }) {
   const previewEl = useRef<HTMLDivElement>(null);
   const preview = useRef<HeadPreview | null>(null);
   const [missing, setMissing] = useState<string[]>([]);
-  useEffect(() => setA(saved), [saved]);
-  useEffect(() => setSculpt(savedSculpt ?? emptySculpt()), [savedSculpt]);
+  useEffect(() => {
+    setA(saved);
+  }, [saved]);
+  useEffect(() => {
+    setSculpt(savedSculpt ?? emptySculpt());
+  }, [savedSculpt]);
 
   const commit = async (p: Partial<NpcAppearance>) => {
     setA((cur) => (cur ? { ...cur, ...p } : cur));
@@ -244,7 +248,9 @@ function Creator({ npc }: { npc: FormKey }) {
   useEffect(() => {
     void preview.current?.setBody(bodyModels, a?.weight ?? 50).then(() => preview.current?.view(tabRef.current === 'body' ? 'body' : 'head'));
   }, [bodyModels.join('|'), a?.weight]);
-  useEffect(() => preview.current?.view(tab === 'body' ? 'body' : 'head'), [tab]);
+  useEffect(() => {
+    preview.current?.view(tab === 'body' ? 'body' : 'head');
+  }, [tab]);
   const lookKey = a ? JSON.stringify([a.morphs, a.weight, a.faceParts, sculpt, race]) : '';
   useEffect(() => {
     // The same look the face files are baked from: race shape, weight, presets, vampire morph, sliders and sculpt.
@@ -253,9 +259,13 @@ function Creator({ npc }: { npc: FormKey }) {
   // The head as the game colours it: its texture times the baked face tint (skin tone and paint).
   const faceTexKey = a ? JSON.stringify([a.tints, a.skinTone, a.race, a.female, faceParts?.map((p) => p.formKey)]) : '';
   const { data: faceTex } = useQuery(() => (a && faceParts ? client?.call('previewFaceTexture', npc, a) : undefined), [faceTexKey], { revision: false });
-  useEffect(() => preview.current?.setFaceTexture(faceTex ?? null), [faceTex, previewParts]);
+  useEffect(() => {
+    preview.current?.setFaceTexture(faceTex ?? null);
+  }, [faceTex, previewParts]);
   const hair = colors?.find((c) => c.formKey === a?.hairColor)?.color ?? null;
-  useEffect(() => preview.current?.setColors(hair, a?.skinTone ?? null), [hair?.r, hair?.g, hair?.b, a?.skinTone.r, a?.skinTone.g, a?.skinTone.b, previewParts]);
+  useEffect(() => {
+    preview.current?.setColors(hair, a?.skinTone ?? null);
+  }, [hair?.r, hair?.g, hair?.b, a?.skinTone.r, a?.skinTone.g, a?.skinTone.b, previewParts]);
 
   const generate = async () => {
     const r = await engine((c) => c.call('generateFaces', [npc]), { busy: 'Generating face files…' });

@@ -249,7 +249,9 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing, inQu
   const { plan, issues, resolution } = review;
   const [feedback, setFeedback] = useState('');
   const [draft, setDraft] = useState(plan);
-  useEffect(() => setDraft({ ...plan, events: plan.events ?? [] }), [plan]);
+  useEffect(() => {
+    setDraft({ ...plan, events: plan.events ?? [] });
+  }, [plan]);
   const [history, setHistory] = useState<QuestPlan[]>([]);
 
   // Re-check after hand edits (each one can be undone).

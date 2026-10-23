@@ -22,7 +22,9 @@ export function Inspector() {
   const { data: view } = useQuery(() => (selected ? client?.call('view', selected) : undefined), [selected]);
   const { data: schema } = useQuery(() => (view ? client?.call('uiSchema', view.sig) : undefined), [view?.sig], { revision: false });
   const [draft, setDraft] = useState<Record<string, unknown> | undefined>(view?.data);
-  useEffect(() => setDraft(view?.data), [view]);
+  useEffect(() => {
+    setDraft(view?.data);
+  }, [view]);
 
   if (!selected) return <div className="empty">Select something to see its properties.</div>;
   if (!view) return <div className="empty">Loading…</div>;
@@ -89,7 +91,9 @@ async function duplicate(view: RecordView, onSelect: (k: FormKey) => void) {
 export function RecordActions({ view, onSelect }: { view: RecordView; onSelect: (k: FormKey | undefined) => void }) {
   const session = useStore((s) => s.session);
   const [refs, setRefs] = useState<RecordSummary[] | null>(null);
-  useEffect(() => setRefs(null), [view.formKey]);
+  useEffect(() => {
+    setRefs(null);
+  }, [view.formKey]);
   const isRef = REF_SIGS.has(view.sig);
   const newHere = view.owner === session.activePlugin;
   const category = categoryLink(view);

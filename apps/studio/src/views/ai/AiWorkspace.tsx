@@ -247,7 +247,9 @@ function Conversation({
       input.current?.setSelectionRange(t.length, t.length);
     });
   }, [asked]);
-  useEffect(() => end.current?.scrollIntoView({ block: 'end' }), [messages.length, live?.text, live?.calls.length]);
+  useEffect(() => {
+    end.current?.scrollIntoView({ block: 'end' });
+  }, [messages.length, live?.text, live?.calls.length]);
 
   const turnEnds = useTurnEnds(session);
   // Tool results by call id, to show each call with its outcome.

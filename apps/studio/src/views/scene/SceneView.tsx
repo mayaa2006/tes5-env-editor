@@ -168,7 +168,9 @@ export default function SceneView() {
 
   // Feed data into the viewport.
   // Terrain first: framing a cell with nothing placed in it yet uses its ground.
-  useEffect(() => vpRef.current?.setTerrain(terrain ?? []), [terrain]);
+  useEffect(() => {
+    vpRef.current?.setTerrain(terrain ?? []);
+  }, [terrain]);
   useEffect(() => {
     const vp = vpRef.current;
     if (!vp) return;
@@ -182,13 +184,27 @@ export default function SceneView() {
   useEffect(() => {
     if (info) vpRef.current?.setCellContext(info);
   }, [info?.formKey]);
-  useEffect(() => vpRef.current?.setNavmeshes((navmeshes ?? []).map((n) => ({ key: n.formKey, nav: n.geometry, mine: n.source === session.activePlugin }))), [navmeshes, session.activePlugin]);
-  useEffect(() => vpRef.current?.setSelection(sceneSelection), [sceneSelection, refs]);
-  useEffect(() => vpRef.current?.setTool(tool), [tool]);
-  useEffect(() => vpRef.current?.setSnapping(snap), [snap]);
-  useEffect(() => vpRef.current?.setKitSnap(settings.kitSnap), [settings.kitSnap]);
-  useEffect(() => vpRef.current?.setNavVisible(showNav), [showNav]);
-  useEffect(() => vpRef.current?.setShowActors(settings.actorModels ?? true), [settings.actorModels]);
+  useEffect(() => {
+    vpRef.current?.setNavmeshes((navmeshes ?? []).map((n) => ({ key: n.formKey, nav: n.geometry, mine: n.source === session.activePlugin })));
+  }, [navmeshes, session.activePlugin]);
+  useEffect(() => {
+    vpRef.current?.setSelection(sceneSelection);
+  }, [sceneSelection, refs]);
+  useEffect(() => {
+    vpRef.current?.setTool(tool);
+  }, [tool]);
+  useEffect(() => {
+    vpRef.current?.setSnapping(snap);
+  }, [snap]);
+  useEffect(() => {
+    vpRef.current?.setKitSnap(settings.kitSnap);
+  }, [settings.kitSnap]);
+  useEffect(() => {
+    vpRef.current?.setNavVisible(showNav);
+  }, [showNav]);
+  useEffect(() => {
+    vpRef.current?.setShowActors(settings.actorModels ?? true);
+  }, [settings.actorModels]);
   useEffect(() => {
     vpRef.current?.setOptions({
       showMarkers: settings.showMarkers,

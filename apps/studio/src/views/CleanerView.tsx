@@ -16,7 +16,9 @@ export default function CleanerView() {
   const [undelete, setUndelete] = useState(true);
   const [fixNav, setFixNav] = useState(false);
   const [report, setReport] = useState<CleanReport | null>(null);
-  useEffect(() => sessionStorage.removeItem('tes5.cleanTarget'), []);
+  useEffect(() => {
+    sessionStorage.removeItem('tes5.cleanTarget');
+  }, []);
   const isOfficial = /^(skyrim|update|dawnguard|hearthfires|dragonborn)\.esm$/i.test(target) || /^cc\w+\.es[lm]$/i.test(target);
   const opts = (dryRun: boolean): CleanOptions => ({ itmMode: mode, removeItms, undeleteReferences: undelete, fixDeletedNavmeshes: fixNav, dryRun });
   const isActive = target === session.activePlugin;

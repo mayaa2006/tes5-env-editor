@@ -190,7 +190,9 @@ export function Section({ title, children, actions }: { title?: ReactNode; child
 /** Text input that commits on blur / Enter (so each keystroke isn't an undo step). */
 export function TextInput({ value, onCommit, placeholder, multiline, mono, disabled, autoFocus }: { value: string; onCommit: (v: string) => void; placeholder?: string; multiline?: boolean; mono?: boolean; disabled?: boolean; autoFocus?: boolean }) {
   const [v, setV] = useState(value);
-  useEffect(() => setV(value), [value]);
+  useEffect(() => {
+    setV(value);
+  }, [value]);
   const commit = () => {
     if (v !== value) onCommit(v);
   };
@@ -225,7 +227,9 @@ export function ExpandableText({ value, onCommit, multiline, placeholder, title 
   // What was just saved, until the new value comes back from the engine: reopening the box straight away shows it,
   // and closing the box again doesn't save the old text over it.
   const [saved, setSaved] = useState<string | null>(null);
-  useEffect(() => setSaved(null), [value]);
+  useEffect(() => {
+    setSaved(null);
+  }, [value]);
   const current = saved ?? value;
   const finish = () => {
     setOpen(false);
@@ -367,7 +371,9 @@ export function Checkbox({ checked, onChange, label, disabled, help }: { checked
 
 export function Slider({ value, onChange, onCommit, min, max, step = 0.01 }: { value: number; onChange?: (v: number) => void; onCommit: (v: number) => void; min: number; max: number; step?: number }) {
   const [v, setV] = useState(value);
-  useEffect(() => setV(value), [value]);
+  useEffect(() => {
+    setV(value);
+  }, [value]);
   return (
     <div className="slider">
       <input

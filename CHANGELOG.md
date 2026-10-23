@@ -2,6 +2,10 @@
 
 Each version here is published as a Windows installer and portable exe on the [releases page](https://github.com/mayaa2006/tes5-env-editor/releases).
 
+## 0.37.1
+
+- **Fixed:** the AI tab crashed ("couldn't show the AI tab: l is not a function") in the Windows app, so you couldn't use it or choose its AI model. The Windows app's newer browser engine returns a promise from scrolling, and the chat's scroll-to-the-end handed that back to React as if it were a cleanup function. Leaving the AI tab for another tab crashed the same way. The same pattern was removed everywhere in the app, and a test keeps it out.
+
 ## 0.37.0
 
 - **Quests read beat by beat, so any free AI can make them from what you wrote.** A small model asked for a whole plan in one go invents its structure and then tags your dialogue against it separately, and the two often disagree. Now, with a free AI, **Quests → From text** reads a document or questline in small questions instead: who and what it involves; passage by passage, what the player does next; for each written conversation, which of its lines move the quest on; what your directions do; and, as closed questions, whatever doesn't fit together (an action that doesn't fit its target, a beat that leads nowhere, no ending). Every answer comes with the sentence it was read from. The editor turns the beats into the plan, so stages, objectives and dialogue tags come from the same place and agree. The review opens on **What was read**, an outline of the beats you can change (each change makes the plan again, and can be undone). **Read it: In one go** keeps the old way, the default with Claude. With the built-in Qwen3.5 4B on Skyrim's own data, the four-quest Cartographer questline read this way built with no problems on the quest map, every author's line kept word for word; across five test documents it read all 37 expected beats (the README has the numbers).
