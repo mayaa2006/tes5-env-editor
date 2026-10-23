@@ -66,7 +66,9 @@ function List({ tab, category, current, onPick }: { tab: CatalogTab; category: s
   const activePlugin = useStore((s) => s.session.activePlugin);
   const [q, setQ] = useState('');
   const dq = useDebounced(q);
-  useEffect(() => setQ(''), [category]);
+  useEffect(() => {
+    setQ('');
+  }, [category]);
   const { data: counts } = useQuery(() => client?.call('catalogCounts', tab), [tab]);
   const cat = counts?.find((c) => c.id === category);
   const { data, loading } = useQuery(() => client?.call('catalogList', category, dq, 300), [category, dq]);
@@ -129,7 +131,9 @@ function Editor({ formKey, onSelect }: { formKey: FormKey; onSelect: (k: FormKey
   const { data: schema } = useQuery(() => (view ? client?.call('uiSchema', view.sig) : undefined), [view?.sig], { revision: false });
   const [draft, setDraft] = useState<Record<string, unknown> | undefined>(view?.data);
   const [all, setAll] = useState(false);
-  useEffect(() => setDraft(view?.data), [view]);
+  useEffect(() => {
+    setDraft(view?.data);
+  }, [view]);
   if (view === null) return <div className="empty">This record no longer exists (it was deleted or undone).</div>;
   if (!view || !draft) return <div className="empty">Loading…</div>;
   const commit = async (data: Record<string, unknown>) => {

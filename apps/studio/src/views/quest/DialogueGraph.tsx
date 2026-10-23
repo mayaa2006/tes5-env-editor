@@ -158,7 +158,9 @@ function Inner({ quest, questEditorId, focus, onListView, onOpenStage }: { quest
   const [checking, setChecking] = useState(false);
   const [availability, setAvailability] = useState(false);
   const { data: lint } = useQuery(() => client?.call('lintDialogue', quest), [quest]);
-  useEffect(() => setSelected(focus ?? null), [focus]);
+  useEffect(() => {
+    setSelected(focus ?? null);
+  }, [focus]);
   const flow = useReactFlow();
   const { onChanges, withSize } = useMeasured();
   const size = (g?.topics.length ?? 0) + (g?.infos.length ?? 0);

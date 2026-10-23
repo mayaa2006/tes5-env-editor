@@ -59,7 +59,9 @@ export function InfoWhen({ info, quest }: { info: { formKey: FormKey }; quest: F
   const { when, others } = readWhen(items, quest);
   // "Another quest" has no condition until a quest is chosen, so the choice is remembered here meanwhile.
   const [kind, setKind] = useState<WhenKind>(when.kind);
-  useEffect(() => setKind(when.kind), [when.kind, info.formKey]);
+  useEffect(() => {
+    setKind(when.kind);
+  }, [when.kind, info.formKey]);
   const [advanced, setAdvanced] = useState(false);
   if (!view) return null;
 

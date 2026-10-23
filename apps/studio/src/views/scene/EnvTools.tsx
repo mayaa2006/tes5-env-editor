@@ -219,7 +219,9 @@ function TerrainTab({ cell, interior, viewport, handlers, refs }: { cell: FormKe
       handlers.current.cancelled = undefined;
     };
   }, [cell, handlers]);
-  useEffect(() => viewport.current?.setBrushRadius(radius), [radius, viewport]);
+  useEffect(() => {
+    viewport.current?.setBrushRadius(radius);
+  }, [radius, viewport]);
   useEffect(() => {
     if (mode !== 'paint') viewport.current?.setSculpt({ mode, strength });
   }, [mode, strength, viewport]);
@@ -329,7 +331,9 @@ function PaintTab({ cell, viewport, handlers }: { cell: FormKey; viewport: React
       handlers.current.cancelled = undefined;
     };
   }, [cell, handlers]);
-  useEffect(() => viewport.current?.setBrushRadius(radius), [radius, viewport]);
+  useEffect(() => {
+    viewport.current?.setBrushRadius(radius);
+  }, [radius, viewport]);
 
   const toggle = () => {
     const on = !painting;
