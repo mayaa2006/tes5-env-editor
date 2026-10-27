@@ -87,11 +87,6 @@ const TWO_WAY_CASES: { q: keyof typeof TWO_WAY; args: (string | number)[]; answe
   { q: 'goldNow', args: ['Varro Tullius', 'Sensible. Two hundred now, the rest when I have the pages.', 'he gives the player 200 gold and remembers the deal', 200], answer: 0 },
   { q: 'goldNow', args: ['Hesta Coldwater', 'A hundred septims, and Rulnik\'s eternal gratitude, which is worth considerably less.', '', 100], answer: 1 },
   { q: 'goldNow', args: ['Hesta Coldwater', "Thank you. Here's your hundred. Keep your eyes open.", 'she pays 100 gold; the quest is done', 100], answer: 0 },
-  // Who gets it.
-  { q: 'goldTo', args: ['Hesta Coldwater', 'Here, as agreed.', 'she takes the three pages and pays 150 gold, or 250 if persuaded; the quest is done', 150], answer: 1 },
-  { q: 'goldTo', args: ['Varro Tullius', 'Sensible. Two hundred now, the rest when I have the pages.', 'he gives the player 200 gold and remembers the deal', 200], answer: 1 },
-  { q: 'goldTo', args: ['Gerda Stone-Arm', "More than Varro? He's tight with coin. Three hundred and I was never here.", 'the player pays her 300 gold; she leaves for good', 300], answer: 0 },
-  { q: 'goldTo', args: ['Hesta Coldwater', "Thank you. Here's your hundred. Keep your eyes open.", 'she pays 100 gold; the quest is done', 100], answer: 1 },
 ];
 
 /**

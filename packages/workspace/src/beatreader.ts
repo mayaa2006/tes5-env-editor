@@ -116,11 +116,6 @@ export const TWO_WAY = {
     question: `In the written dialogue, ${who} says: “${line}”${note ? ` (the author's note: ${note})` : ''}\n\nIs ${amount} gold handed over when this line is said, or only promised for later?`,
     answers: ['handed over now', 'only promised for later'] as const,
   }),
-  /** Gold handed over on a line: who gets it? */
-  goldTo: (who: string, line: string, note: string, amount: number) => ({
-    question: `In the written dialogue, ${who} says: “${line}”${note ? ` (the author's note: ${note})` : ''}\n\nWho gets the ${amount} gold when this line is said?`,
-    answers: [who, 'the player'] as const,
-  }),
   /** After a line read as handing an item over, who has it? */
   whoHas: (who: string, line: string, note: string, item: string) => ({
     question: `In the written dialogue, ${who} says: “${line}”${note ? ` (the author's note: ${note})` : ''}\n\nAfter this line, who has the ${item}?`,
@@ -895,8 +890,10 @@ export class BeatReader {
 
   /**
    * Gold a line was read as paying: asked both ways round (TWO_WAY) whether it changes hands when the line is said or
-   * is only promised for later ("Bring me all three, and you'll have 150 septims"), and who gets it ("she pays 150
-   * gold" read as the player paying). Each answer is used only when both ways of asking agree.
+   * is only promised for later ("Bring me all three, and you'll have 150 septims"), and dropped only when both ways
+   * agree it's promised. On the probe's cases no model's agreed answer dropped gold that is paid (the 4B and 9B read 4
+   * of 6 right). Asking who gets it was tried too and left out: models agreed on wrong answers both ways ("she pays 150
+   * gold" given to Hesta by the 9B, "the player pays her 300" to the player by the 2B and 4B).
    */
   private async checkGold(sheet: BeatSheet, blocks: WrittenBlock[]): Promise<void> {
     for (const d of sheet.dialogue) {
@@ -909,13 +906,7 @@ export class BeatReader {
         for (const e of [entry.effects, ...(entry.variants ?? []).map((v) => v.effects)]) {
           if (!e?.gold) continue;
           const amount = Math.abs(e.gold);
-          if ((await this.agreed(TWO_WAY.goldNow(who, l.text, note, amount))) === 'only promised for later') {
-            delete e.gold;
-            continue;
-          }
-          const to = await this.agreed(TWO_WAY.goldTo(who, l.text, note, amount));
-          if (to === who) e.gold = -amount;
-          else if (to === 'the player') e.gold = amount;
+          if ((await this.agreed(TWO_WAY.goldNow(who, l.text, note, amount))) === 'only promised for later') delete e.gold;
         }
       }
     }
@@ -1178,8 +1169,8 @@ export class BeatReader {
   /**
    * A line that gives the player something they picked up along the way is asked once whether it takes it instead
    * (bringing back what was found reads easily as "gives"). Asked as who has it after the line, both ways round
-   * (TWO_WAY): on the probe's cases the 9B read 5 of 6 right, the 4B 3 (2 left as read), and the 2B, which always takes
-   * the second answer, changed none; asked as yes or no, every model got some wrong both ways.
+   * (TWO_WAY): on the probe's cases the 9B read 5 of 6 right; the 2B and 4B, when they agree wrongly, mostly say the
+   * player has it, which leaves the line as read. Asked as yes or no, every model got some wrong both ways.
    */
   private async handovers(sheet: BeatSheet, blocks: WrittenBlock[]): Promise<void> {
     const found = new Set(sheet.beats.filter((b) => b.does === 'pickup' && b.target).map((b) => b.target!));
