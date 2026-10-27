@@ -330,6 +330,8 @@ export function checkBeats(sheet: BeatSheet, opts: { earlierChoices?: string[]; 
     const given = sheet.beats.some((b) => (b.effects?.gives ?? []).some((g) => g.item === i.key));
     // (Picking up something that isn't lying anywhere can't be noticed in the game, even if someone hands it over.)
     const pickedFromNowhere = sheet.beats.find((x) => x.does === 'pickup' && x.target === i.key);
+    // What starts the quest when it's read or picked up has to lie somewhere the player finds it.
+    if ((sheet.start.kind === 'read' || sheet.start.kind === 'pickup') && sheet.start.target === i.key && !i.place && !i.carriedBy) pick(i.key, `${i.name} starts the quest, but it isn't anywhere: where does the player find it?`, 'place', 'place');
     if (needed && !i.place && !i.carriedBy && (!given || pickedFromNowhere)) {
       const b = pickedFromNowhere ?? sheet.beats.find((x) => (x.does === 'pickup' || x.does === 'read') && x.target === i.key)!;
       q.push({ about: b.id, message: `The player has to find ${i.name}, but it isn't anywhere: does someone hand it over, or where is it?`, nowhere: i.key });

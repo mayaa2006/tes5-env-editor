@@ -916,7 +916,12 @@ export class BeatReader {
             `${this.context(sheet)}\n\nThe quest:\n<quest>\n${text.trim()}\n</quest>\n\nBeat ${i + 1} (“${b.quote}”) doesn't fit yet:\n${open.map((q) => `- ${q.message}`).join('\n')}\n\nGive beat ${i + 1} again, corrected. If its action isn't what the quote describes, choose the one it does.`,
             BeatShape,
           );
-          sheet.beats[i] = this.toBeat(sheet, a, b.id, new Map(sheet.beats.map((x, n) => [n + 1, x.id] as const)));
+          const again = this.toBeat(sheet, a, b.id, new Map(sheet.beats.map((x, n) => [n + 1, x.id] as const)));
+          // Nothing comes after the quest has ended: a beat put after one that ends it keeps what it followed before
+          // (asked what came next for a line that led nowhere, the 9B hung it after the ending, which then lost it).
+          const ending = new Set(sheet.beats.filter((x) => x.ends && x.id !== b.id).map((x) => x.id));
+          if (again.after.some((x) => ending.has(x))) again.after = again.after.filter((x) => !ending.has(x)).length ? again.after.filter((x) => !ending.has(x)) : b.after;
+          sheet.beats[i] = again;
           if (a.then?.trim() && a.then.trim() !== this.then.get(b.id)) (this.then.set(b.id, a.then.trim()), this.unread.add(b.id));
           else if (!a.then?.trim()) this.then.delete(b.id);
         } catch {

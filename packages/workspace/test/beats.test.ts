@@ -515,7 +515,7 @@ ULFGAR: You found it?
       send: async (p) => {
         const user = String(p.messages.at(-1)!.content);
         if (user.includes('List the people'))
-          return reply({ summary: '', start: { how: 'reading', what: 'notice' }, people: [{ name: 'Hesta Coldwater', description: '', sex: 'female', race: null, where: null, spot: null, canDie: 'not said', hostile: false, quote: '' }], places: [], items: [{ name: 'Torn Map Page', kind: 'misc', where: null, carriedBy: null, spot: null, count: 3, text: null, lockedWith: null, quote: '' }], enemies: [] });
+          return reply({ summary: '', start: { how: 'reading', what: 'notice' }, people: [{ name: 'Hesta Coldwater', description: '', sex: 'female', race: null, where: null, spot: null, canDie: 'not said', hostile: false, quote: '' }], places: [{ name: 'Sleeping Giant Inn', description: '', quote: '' }], items: [{ name: 'Torn Map Page', kind: 'misc', where: null, carriedBy: null, spot: null, count: 3, text: null, lockedWith: null, quote: '' }], enemies: [] });
         // What the 9B read: the notice's words (which name Hesta) as a target the list doesn't have, and a beat for each page.
         if (user.includes('<passage>'))
           return reply({
@@ -527,12 +527,15 @@ ULFGAR: You found it?
             ],
           });
         if (user.includes('someone other than the player')) return reply({ yes: false });
+        // Where the notice is (it starts the quest, so it has to be somewhere): picked from the places.
+        if (user.includes('Notice starts the quest, but it isn')) return reply({ answer: 'Sleeping Giant Inn' });
         if (user.includes('their journal entry')) return reply({ beats: [] });
         if (user.includes('what the player says to')) return reply({ player: 'Here.', answer: 'Thanks.' });
         throw new Error(`unexpected: ${user.slice(-200)}`);
       },
     });
     const { sheet, questions } = await new BeatReader(planner).read(doc, { title: 'Pages', editorId: 'Pages' });
+    expect(sheet.items.find((i) => i.key === 'notice')?.place).toBe('sleepingGiantInn');
     // The notice is what the quest starts with (named as the AI named the start): the start, not a beat.
     expect(sheet.items.map((i) => [i.key, i.kind])).toEqual([['tornMapPage', 'misc'], ['notice', 'book']]);
     expect(sheet.start).toEqual({ kind: 'read', target: 'notice' });
