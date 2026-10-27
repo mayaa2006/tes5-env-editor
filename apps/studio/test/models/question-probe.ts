@@ -73,13 +73,25 @@ const CASES: Case[] = [
 ];
 
 /** Two-way questions (TWO_WAY): their arguments and the answer they should get (0 the first, 1 the second). */
-const TWO_WAY_CASES: { q: keyof typeof TWO_WAY; args: [string, string, string, string]; answer: 0 | 1 }[] = [
+const TWO_WAY_CASES: { q: keyof typeof TWO_WAY; args: (string | number)[]; answer: 0 | 1 }[] = [
   { q: 'whoHas', args: ['Hesta Coldwater', 'Here, as agreed.', 'she takes the three pages and pays 150 gold, or 250 if persuaded; the quest is done', 'Torn Map Page'], answer: 0 },
   { q: 'whoHas', args: ['Varro Tullius', 'Sensible. Two hundred now, the rest when I have the pages.', 'he gives the player 200 gold and remembers the deal', 'Torn Map Page'], answer: 1 },
   { q: 'whoHas', args: ['Hesta Coldwater', "Give it here. Gods. He paid them in coin and wrote it down like a grocer's bill.", 'she takes the ledger', "Varro's Ledger"], answer: 0 },
   { q: 'whoHas', args: ['Tilda', 'Take this. It was his.', "she gives the player her late husband's axe", "Tilda's Axe"], answer: 1 },
   { q: 'whoHas', args: ['Gerdur', 'My ledger! Thank you.', 'she takes the ledger and pays 50 gold', "Gerdur's Ledger"], answer: 0 },
   { q: 'whoHas', args: ['Brynja', 'Here, keep it safe.', 'she gives the player the ring', "Brynja's Ring"], answer: 1 },
+  // Gold read on a line: paid as it's said, or promised (the Cartographer's job and its payment).
+  { q: 'goldNow', args: ['Hesta Coldwater', "The case will be ruined, but it's the pages that matter. There were three of them. Bring me all three, and you'll have 150 septims.", 'the player takes the job', 150], answer: 1 },
+  { q: 'goldNow', args: ['Hesta Coldwater', 'Ha. Fine. 250, and not a coin more. Now go, before I change my mind.', 'success; the player takes the job, for 250', 250], answer: 1 },
+  { q: 'goldNow', args: ['Hesta Coldwater', 'Here, as agreed.', 'she takes the three pages and pays 150 gold, or 250 if persuaded; the quest is done', 150], answer: 0 },
+  { q: 'goldNow', args: ['Varro Tullius', 'Sensible. Two hundred now, the rest when I have the pages.', 'he gives the player 200 gold and remembers the deal', 200], answer: 0 },
+  { q: 'goldNow', args: ['Hesta Coldwater', 'A hundred septims, and Rulnik\'s eternal gratitude, which is worth considerably less.', '', 100], answer: 1 },
+  { q: 'goldNow', args: ['Hesta Coldwater', "Thank you. Here's your hundred. Keep your eyes open.", 'she pays 100 gold; the quest is done', 100], answer: 0 },
+  // Who gets it.
+  { q: 'goldTo', args: ['Hesta Coldwater', 'Here, as agreed.', 'she takes the three pages and pays 150 gold, or 250 if persuaded; the quest is done', 150], answer: 1 },
+  { q: 'goldTo', args: ['Varro Tullius', 'Sensible. Two hundred now, the rest when I have the pages.', 'he gives the player 200 gold and remembers the deal', 200], answer: 1 },
+  { q: 'goldTo', args: ['Gerda Stone-Arm', "More than Varro? He's tight with coin. Three hundred and I was never here.", 'the player pays her 300 gold; she leaves for good', 300], answer: 0 },
+  { q: 'goldTo', args: ['Hesta Coldwater', "Thank you. Here's your hundred. Keep your eyes open.", 'she pays 100 gold; the quest is done', 100], answer: 1 },
 ];
 
 /**
@@ -116,7 +128,7 @@ for (const c of CASES) {
 // Two-way questions: asked both ways round, as the reader does; an answer only when both agree.
 for (const c of TWO_WAY_CASES) {
   if (only && !only.includes(c.q)) continue;
-  const { question, answers } = TWO_WAY[c.q](...c.args);
+  const { question, answers } = (TWO_WAY[c.q] as (...a: (string | number)[]) => { question: string; answers: readonly [string, string] })(...c.args);
   const ask = async (a: [string, string]) => (await planner.ask(READ_RULES, question, z.object({ answer: z.enum(a) }), 40, { exact: true })).answer;
   let got: string | undefined;
   try {

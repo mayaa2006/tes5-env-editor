@@ -111,6 +111,16 @@ const YesSchema = z.object({ yes: z.boolean() });
  * probed like YES_NO.
  */
 export const TWO_WAY = {
+  /** Gold read on a line: handed over as it's said, or only promised? */
+  goldNow: (who: string, line: string, note: string, amount: number) => ({
+    question: `In the written dialogue, ${who} says: “${line}”${note ? ` (the author's note: ${note})` : ''}\n\nIs ${amount} gold handed over when this line is said, or only promised for later?`,
+    answers: ['handed over now', 'only promised for later'] as const,
+  }),
+  /** Gold handed over on a line: who gets it? */
+  goldTo: (who: string, line: string, note: string, amount: number) => ({
+    question: `In the written dialogue, ${who} says: “${line}”${note ? ` (the author's note: ${note})` : ''}\n\nWho gets the ${amount} gold when this line is said?`,
+    answers: [who, 'the player'] as const,
+  }),
   /** After a line read as handing an item over, who has it? */
   whoHas: (who: string, line: string, note: string, item: string) => ({
     question: `In the written dialogue, ${who} says: “${line}”${note ? ` (the author's note: ${note})` : ''}\n\nAfter this line, who has the ${item}?`,
@@ -374,6 +384,7 @@ export class BeatReader {
     }
     this.dropSelfChoices(sheet, opts);
     await this.checkConditions(sheet, blocks);
+    await this.checkGold(sheet, blocks);
     this.dropUnremembered(sheet, opts);
     // What else happens, read before the checks so they see it (and items handed over that weren't listed).
     const happenings = async () => {
@@ -874,8 +885,38 @@ export class BeatReader {
         sheet.beats.some((b) => b.effects?.remembers === c && !d.lines.some((l) => l.line >= n && l.beat === b.id));
       for (const entry of d.lines) {
         if (!entry.if) continue;
-        entry.if = entry.if.filter((c) => c.kind !== 'choice' || made(c.name, entry.line));
+        // (Likewise a line that waits for its own beat, or one after it: it would never be said.)
+        const own = entry.beat ? new Set([entry.beat, ...laterThan(sheet, entry.beat)]) : new Set<string>();
+        entry.if = entry.if.filter((c) => (c.kind !== 'choice' || made(c.name, entry.line)) && (c.kind !== 'done' || !own.has(c.beat)));
         if (!entry.if.length) delete entry.if;
+      }
+    }
+  }
+
+  /**
+   * Gold a line was read as paying: asked both ways round (TWO_WAY) whether it changes hands when the line is said or
+   * is only promised for later ("Bring me all three, and you'll have 150 septims"), and who gets it ("she pays 150
+   * gold" read as the player paying). Each answer is used only when both ways of asking agree.
+   */
+  private async checkGold(sheet: BeatSheet, blocks: WrittenBlock[]): Promise<void> {
+    for (const d of sheet.dialogue) {
+      const block = blocks.find((b) => b.id === d.block);
+      for (const entry of d.lines) {
+        const l = block?.lines[entry.line - 1];
+        if (!l || l.player) continue;
+        const who = byName(sheet.people, l.speaker)?.name ?? l.speaker;
+        const note = l.notes.join('; ');
+        for (const e of [entry.effects, ...(entry.variants ?? []).map((v) => v.effects)]) {
+          if (!e?.gold) continue;
+          const amount = Math.abs(e.gold);
+          if ((await this.agreed(TWO_WAY.goldNow(who, l.text, note, amount))) === 'only promised for later') {
+            delete e.gold;
+            continue;
+          }
+          const to = await this.agreed(TWO_WAY.goldTo(who, l.text, note, amount));
+          if (to === who) e.gold = -amount;
+          else if (to === 'the player') e.gold = amount;
+        }
       }
     }
   }
@@ -1295,6 +1336,16 @@ function lineFor(block: WrittenBlock, n: number, words: string | undefined): num
   if (starts(n)) return n;
   for (const d of [1, -1, 2, -2]) if (starts(n + d)) return n + d;
   return block.lines[n - 1] ? n : undefined;
+}
+
+/** Every beat that comes, through others, after this one. */
+function laterThan(sheet: BeatSheet, id: string): string[] {
+  const out = new Set<string>();
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const b of sheet.beats) if (!out.has(b.id) && b.after.some((a) => a === id || out.has(a))) (out.add(b.id), (grew = true));
+  }
+  return [...out];
 }
 
 /** The number for a new beat's id: one past the highest so far. */
