@@ -488,7 +488,7 @@ ULFGAR: You found it?
           });
         // Hrothmar walking off is his own doing: it goes with the beat before it.
         if (q.includes('someone other than the player')) return reply({ yes: user.includes('walks to Whiterun') });
-        if (q.includes('something the story says the player does')) return reply({ yes: false });
+        if (q.includes('Is it the player who')) return reply({ yes: false });
         if (q.includes('After which beat')) return reply({ when: 2 });
         if (q.includes('Does the note say something happens')) return reply({ happens: true });
         if (q.includes('Does the line do what')) return reply({ same: true });

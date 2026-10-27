@@ -561,8 +561,9 @@ export class BeatReader {
   /**
    * Beats read from the story that someone else does on their own ("he walks to Whiterun and turns himself in"): not a
    * step for the player, but what happens with the beat before. Asked as two yes-or-no questions, and dropped only when
-   * both say so: tried on the built-in model, the pair dropped 2 of the 4 such sentences in the test documents and none
-   * of the 12 the player does (either question alone dropped some of those).
+   * both say so: tried on the built-in model, the pair dropped 3 of the 4 such sentences in the test documents and none
+   * of the ones the player does, the ambush at the stones and getting Varro's key among them (an earlier second
+   * question, "is that something the story says the player does?", dropped both of those in a full run).
    */
   private async notPlayers(sheet: BeatSheet, beats: Beat[]): Promise<void> {
     const VERB: Partial<Record<BeatAction, string>> = { arrive: 'goes to', use: 'uses', pickup: 'picks up', read: 'reads', wait: 'waits' };
@@ -573,7 +574,7 @@ export class BeatReader {
       try {
         const other = await this.ai.ask(READ_RULES, `A sentence from a Skyrim quest: “${b.quote}”\n\nIs this sentence about someone other than the player doing something on their own?`, z.object({ yes: z.boolean() }), 40);
         if (!other.yes) continue;
-        const player = await this.ai.ask(READ_RULES, `The quest's story says: “${b.quote}”\n\nRead as a step of the quest: the player ${act}.\n\nIs that something the story says the player does?`, z.object({ yes: z.boolean() }), 40);
+        const player = await this.ai.ask(READ_RULES, `A sentence from a Skyrim quest: “${b.quote}”\n\nIs it the player who ${act} in this sentence, rather than someone else?`, z.object({ yes: z.boolean() }), 40);
         if (player.yes) continue;
       } catch {
         continue;
