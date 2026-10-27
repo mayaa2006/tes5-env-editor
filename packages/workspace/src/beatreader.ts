@@ -436,7 +436,17 @@ export class BeatReader {
     const earlier = opts.earlier ?? [];
     const lookup = opts.lookup;
     // Someone or something an earlier quest has keeps its key; anything else is looked up in the game by exact name.
-    const reuse = <T extends { key: string; name: string }>(pick: (s: BeatSheet) => T[], name: string) => earlier.map((s) => byName(pick(s), name)).find(Boolean);
+    // The same one as an earlier quest's: people by name as loosely as anywhere ("Hesta" is Hesta Coldwater); places and
+    // items only by their whole name ("Riverwood" isn't the Riverwood Trader). A key this quest already gave out isn't
+    // given again.
+    const bare = (n: string) => norm(n).replace(/^(the|a|an) /, '');
+    const used = new Set<string>();
+    const reuse = <T extends { key: string; name: string }>(pick: (s: BeatSheet) => T[], name: string, loose = false) => {
+      const hit = earlier.map((s) => (loose ? byName(pick(s), name) : pick(s).find((x) => bare(x.name) === bare(name)))).find(Boolean);
+      if (!hit || used.has(hit.key)) return undefined;
+      used.add(hit.key);
+      return hit;
+    };
     const places: BeatPlace[] = a.places.map((p) => {
       const was = reuse((s) => s.places, p.name);
       const key = was?.key ?? keyFor(p.name, taken);
@@ -446,7 +456,7 @@ export class BeatReader {
     });
     const placeKey = (name: string | null) => (name ? (byName(places, name)?.key ?? null) : null);
     const people: BeatPerson[] = a.people.map((p) => {
-      const was = reuse((s) => s.people, p.name);
+      const was = reuse((s) => s.people, p.name, true);
       // People by their first name, as their lines are written ("HESTA:").
       const key = was?.key ?? keyFor(p.name, taken, 1);
       taken.add(key);
@@ -727,9 +737,12 @@ export class BeatReader {
       z.object({ when: z.number().int().nullable().describe(`The beat after which the player can have it; null when they can have it from the start of the quest {enum: ${JSON.stringify(beats)}}`) }),
       40,
     );
+    // (Or the beat it was said to come after: a model often says that of the beat a conversation does itself, and when
+    // it's offered is put right below.)
     const next = (b: Beat) => {
-      const now = [at.when ? sheet.beats[at.when - 1]?.id : undefined, ...moves.map((m) => (m.beat ? sheet.beats[m.beat - 1]?.id : undefined))];
-      return at.when ? b.after.some((x) => now.includes(x)) : !b.after.length || b.after.some((x) => now.includes(x));
+      const whenId = at.when ? sheet.beats[at.when - 1]?.id : undefined;
+      const now = [whenId, ...moves.map((m) => (m.beat ? sheet.beats[m.beat - 1]?.id : undefined))];
+      return b.id === whenId || (at.when ? b.after.some((x) => now.includes(x)) : !b.after.length || b.after.some((x) => now.includes(x)));
     };
     const directed = others.some((l) => l.notes.length);
     for (const l of others.filter((x) => said.includes(x.n))) {
@@ -741,8 +754,9 @@ export class BeatReader {
       if (!(await this.yes(directed ? YES_NO.noteHappens(l.text, l.notes.join('; ')) : YES_NO.lineMoves(asked?.text, l.speaker, l.text)))) continue;
       // Which beat it is: each talk with this speaker nothing says yet that can come next, in order, asked as yes or no
       // (a list to pick from was always answered with its last choice); none of them, a new step.
-      const withSpeaker = talks.filter(([b]) => b.target === byName(sheet.people, l.speaker)?.key);
-      const mine = (withSpeaker.some(([b]) => next(b)) ? withSpeaker.filter(([b]) => next(b)) : withSpeaker).slice(0, 4);
+      // (Only those: a line can't do a beat that can't come next, so with none it's a step of its own. Matching it to any
+      // of the speaker's beats tied Hesta's offer of a job to her thanks at the end.)
+      const mine = talks.filter(([b]) => b.target === byName(sheet.people, l.speaker)?.key && next(b)).slice(0, 4);
       let beat: number | null = null;
       for (const [b, n] of mine) {
         if (await this.yes(YES_NO.sameAsStory(b.quote, l.speaker, l.text, l.notes.join('; ')))) {
