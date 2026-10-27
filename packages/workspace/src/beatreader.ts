@@ -97,6 +97,8 @@ export const YES_NO = {
     `The quest's story says: “${story}”\nIn the written dialogue, ${speaker} says: “${line}”${note ? ` (${note})` : ''}\n\nDoes the line do what that sentence of the story describes?`,
   /** Does the note on a line say when it's said (so conditions read onto it are the author's)? */
   noteCondition: (note: string) => `The author's note on a line of dialogue: “${note}”\n\nDoes the note give a condition for when the line is said (“only if…”, “if…”)?`,
+  /** A story passage read as adding no beats: does the player do anything in it? */
+  passageActs: (passage: string) => `A part of a Skyrim quest:\n<passage>\n${passage}\n</passage>\n\nDoes this part say something the player does (talk to someone, pick up or read something, go somewhere, fight or kill, wait, bring something back)?`,
   /** Is a story sentence about someone else acting on their own? */
   someoneElse: (sentence: string) => `A sentence from a Skyrim quest: “${sentence}”\n\nIs this sentence about someone other than the player doing something on their own?`,
   /** Is it the player who does this in the sentence? */
@@ -638,6 +640,22 @@ export class BeatReader {
       PassageSchema,
       3500,
     );
+    // None, from a part that tells what happens: asked whether the player does anything in it, and if so, for the beats
+    // again without "none" to fall back on (the 9B answered none for whole story paragraphs: the ledger, the synopsis).
+    if (!a.beats.length && (await this.yes(YES_NO.passageActs(text)))) {
+      try {
+        const again = await this.ai.ask(
+          READ_RULES,
+          `${this.context(sheet)}\n\nThe next part of the quest:\n<passage>\n${text}\n</passage>\n\nThis part says what the player does. Give each thing the player does that moves the quest on as a new beat (numbered after the beats so far): talking to someone, picking up or reading something, going somewhere, killing, waiting. What others do in answer goes in “then” of that beat. Where the player can do one thing or another, give each way as its own beat, both after the same beat.`,
+          PassageSchema,
+          3500,
+        );
+        this.addBeats(sheet, again.beats);
+        return;
+      } catch {
+        // None, then.
+      }
+    }
     this.addBeats(sheet, a.beats);
   }
 
@@ -645,11 +663,12 @@ export class BeatReader {
    * Beats read from the story that someone else does on their own ("he walks to Whiterun and turns himself in"): not a
    * step for the player, but what happens with the beat before. Asked as two yes-or-no questions, and dropped only when
    * both say so: tried on the built-in model, the pair dropped 3 of the 4 such sentences in the test documents and none
-   * of the ones the player does, the ambush at the stones and getting Varro's key among them (an earlier second
+   * of the ones the player does (waits aren't asked: the 9B dropped "a day later she has news" as hers), the ambush at the stones and getting Varro's key among them (an earlier second
    * question, "is that something the story says the player does?", dropped both of those in a full run).
    */
   private async notPlayers(sheet: BeatSheet, beats: Beat[]): Promise<void> {
-    const VERB: Partial<Record<BeatAction, string>> = { arrive: 'goes to', use: 'uses', pickup: 'picks up', read: 'reads', wait: 'waits' };
+    // (Not waiting: "a day later she has news" is the player's wait, said of what happens meanwhile.)
+    const VERB: Partial<Record<BeatAction, string>> = { arrive: 'goes to', use: 'uses', pickup: 'picks up', read: 'reads' };
     for (const b of beats) {
       const verb = VERB[b.does];
       if (!verb || !b.quote.trim()) continue;

@@ -57,6 +57,13 @@ const CASES: Case[] = [
   { q: 'noteCondition', args: ['only if the player took his money in Quest 3'], yes: true },
   { q: 'noteCondition', args: ['if Lucan was let go'], yes: true },
   { q: 'noteCondition', args: ['she remembers the promise'], yes: false },
+  // A story passage read as adding nothing: does the player do anything in it?
+  { q: 'passageActs', args: ["Varro carries Varro's Strongbox Key. The player has to get it (pickpocket it, or take it from him some other way). His strongbox is in the Bannered Mare, locked, and it holds Varro's Ledger. Reading the ledger moves the quest on."], yes: true },
+  { q: 'passageActs', args: ['- The player finds the wrecked cart on the road just north of Riverwood. A note lies in the mud next to it.\n- At the Guardian Stones there\'s a bandit camp: three bandits and their leader, Ragnvald.\n- The player can kill them all, or talk Ragnvald down (Speech 35).'], yes: true },
+  { q: 'passageActs', args: ['If the player asks her about the lantern, she tells them about Arn and begs them to find out what happened to him. Up at Bleak Falls Barrow, just inside the entrance, lies what\'s left of Arn, and on him a letter he never sent.'], yes: true },
+  { q: 'passageActs', args: ['SCENE 3 — The cellar. Five skeevers. The cask of Honningbrew Mead sits by the stairs.'], yes: true },
+  { q: 'passageActs', args: ['The ledger reads:\n\n> 3rd of Last Seed. 60 septims to Krev and two others, Embershard. One map case. Delivered three pages short. Paid half.'], yes: false },
+  { q: 'passageActs', args: ['- **Hesta Coldwater**: a Nord cartographer in her fifties, sharp-tongued and proud. She rents a room at the Sleeping Giant Inn in Riverwood and works at the corner table by the fire.'], yes: false },
   // Story steps someone else does (the pair drops a beat only when the first says yes and the second no).
   { q: 'someoneElse', args: ['He stops following the player and walks back to the Sleeping Giant Inn on his own.'], yes: true },
   { q: 'someoneElse', args: ['he walks to Whiterun'], yes: true },
