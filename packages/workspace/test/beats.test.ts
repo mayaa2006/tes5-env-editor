@@ -508,6 +508,36 @@ ULFGAR: You found it?
     expect(walkPlan(compileBeats(sheet, findDialogue(doc).blocks)).endings.map((e) => e.stage)).toEqual([30]);
   });
 
+  it('add what a beat reads that the item list left out, and join picking up the same thing at once', async () => {
+    const doc = 'The player reads the notice pinned to the bar, then talks to Hesta. Three pages are scattered in the mine: one by the forge, one in a chest, one on a table. The player brings them back to Hesta.';
+    const reply = (o: unknown): PlannerReply => ({ content: [{ type: 'text', text: JSON.stringify(o) }], stop_reason: 'end_turn' });
+    const planner = new QuestPlanner({
+      send: async (p) => {
+        const user = String(p.messages.at(-1)!.content);
+        if (user.includes('List the people'))
+          return reply({ summary: '', start: { how: 'reading', what: 'notice' }, people: [{ name: 'Hesta Coldwater', description: '', sex: 'female', race: null, where: null, spot: null, canDie: 'not said', hostile: false, quote: '' }], places: [], items: [{ name: 'Torn Map Page', kind: 'misc', where: null, carriedBy: null, spot: null, count: 3, text: null, lockedWith: null, quote: '' }], enemies: [] });
+        // What the 9B read: the notice as a target the list doesn't have, and a beat for each page.
+        if (user.includes('<passage>'))
+          return reply({
+            beats: [
+              { n: 1, does: 'read', target: 'notice pinned to the bar', count: null, hours: null, after: [], quote: 'The player reads the notice pinned to the bar', ends: 'no', then: null },
+              { n: 2, does: 'talk', target: 'Hesta Coldwater', count: null, hours: null, after: [1], quote: 'then talks to Hesta', ends: 'no', then: null },
+              ...[3, 4, 5].map((n) => ({ n, does: 'pickup', target: 'Torn Map Page', count: 1, hours: null, after: [2], quote: 'one by the forge, one in a chest, one on a table', ends: 'no', then: null })),
+              { n: 6, does: 'talk', target: 'Hesta Coldwater', count: null, hours: null, after: [3], quote: 'The player brings them back to Hesta.', ends: 'complete', then: null },
+            ],
+          });
+        if (user.includes('someone other than the player')) return reply({ yes: false });
+        if (user.includes('their journal entry')) return reply({ beats: [] });
+        if (user.includes('what the player says to')) return reply({ player: 'Here.', answer: 'Thanks.' });
+        throw new Error(`unexpected: ${user.slice(-200)}`);
+      },
+    });
+    const { sheet, questions } = await new BeatReader(planner).read(doc, { title: 'Pages', editorId: 'Pages' });
+    expect(sheet.items.map((i) => [i.key, i.kind])).toEqual([['tornMapPage', 'misc'], ['noticePinnedTo', 'book']]);
+    expect(sheet.beats.map((b) => `${b.does} ${b.target}${b.count ? ` x${b.count}` : ''} after ${b.after.join(',')}`)).toEqual(['read noticePinnedTo after ', 'talk hesta after b1', 'pickup tornMapPage x3 after b2', 'talk hesta after b3']);
+    expect(questions.filter((q) => q.next)).toEqual([]);
+  });
+
   it('ask who hands over an item the player was read as picking up from nowhere', async () => {
     const doc = 'Varro is dealt with. Hesta pays the player and gives them the Coldwater Survey of the Rift.';
     const reply = (o: unknown): PlannerReply => ({ content: [{ type: 'text', text: JSON.stringify(o) }], stop_reason: 'end_turn' });

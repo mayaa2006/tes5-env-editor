@@ -15,6 +15,7 @@
  */
 import { z } from 'zod';
 import {
+  ACTION_TARGET,
   BEAT_ACTIONS,
   checkBeats,
   type Beat,
@@ -364,6 +365,8 @@ export class BeatReader {
         await this.notPlayers(sheet, sheet.beats.filter((b) => !had.has(b.id)));
       } else await this.conversation(sheet, p.block);
     }
+    this.newTargets(sheet);
+    this.joinPickups(sheet);
     for (const b of blocks.filter((x) => x.lines.some((l) => l.notes.length))) {
       step(`reading the directions in the conversation with ${b.speaker}`);
       await this.directions(sheet, b, opts);
@@ -639,6 +642,46 @@ export class BeatReader {
         for (const x of sheet.beats) if (x.after.includes(b.id)) x.after = [...new Set(x.after.flatMap((y) => (y === b.id ? b.after : [y])))];
         for (const d of sheet.dialogue) if (d.when === b.id) d.when = b.after[0] ?? null;
         this.then.delete(b.id);
+      }
+    }
+  }
+
+  /**
+   * A beat that picks up, reads or uses something the item list doesn't have ("the notice pinned to the bar"): that's
+   * an item too, added under the name the beat gives it (a book when it's read). Otherwise the only fix the checks could
+   * offer is one of the items already listed, and a model picks one of those.
+   */
+  private newTargets(sheet: BeatSheet): void {
+    const known = new Set([...sheet.people, ...sheet.places, ...sheet.items, ...sheet.groups].map((x) => x.key));
+    const taken = new Set(known);
+    for (const b of sheet.beats) {
+      const want = ACTION_TARGET[b.does];
+      if ((want !== 'item' && want !== 'person|item') || !b.target || known.has(b.target)) continue;
+      const same = byName(sheet.items, b.target);
+      if (same) {
+        b.target = same.key;
+        continue;
+      }
+      const key = keyFor(b.target, taken);
+      taken.add(key);
+      known.add(key);
+      sheet.items.push({ key, name: b.target, kind: b.does === 'read' ? 'book' : 'misc', existing: null, place: null, carriedBy: null, spot: null, count: 1, text: null, lockedWith: null, quote: b.quote });
+      b.target = key;
+    }
+  }
+
+  /**
+   * Picking up the same item more than once, each right after the same beat ("one by the forge, one in a chest, one on a
+   * table"), is one step: picking up all of them. Joined, with their counts added; what followed any of them follows the
+   * one left.
+   */
+  private joinPickups(sheet: BeatSheet): void {
+    for (const b of [...sheet.beats]) {
+      if (b.does !== 'pickup' || !sheet.beats.includes(b)) continue;
+      const key = [...b.after].sort().join(',');
+      for (const x of sheet.beats.filter((y) => y !== b && y.does === 'pickup' && y.target === b.target && [...y.after].sort().join(',') === key && !y.ends)) {
+        b.count = (b.count ?? 1) + (x.count ?? 1);
+        mergeBeat(sheet, x.id, b.id, this.then);
       }
     }
   }
