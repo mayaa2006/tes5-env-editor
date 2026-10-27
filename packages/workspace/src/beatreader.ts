@@ -178,7 +178,8 @@ const EntitiesSchema = z.object({
 });
 
 const EffectsShape = {
-  gold: z.number().int().nullable().describe('Gold handed over right then: what the player gets (negative: pays). Null for gold only offered or promised for later'),
+  // (Said this way round: "negative: pays" read "she pays 100 gold" as the player paying, on every run of the 9B.)
+  gold: z.number().int().nullable().describe('Gold handed to the player right then (someone pays the player, or gives them gold): how much. Negative only when the player pays someone. Null for gold only offered or promised for later'),
   gives: z.array(z.object({ item: z.string(), count: z.number().int() })).describe('Items the player is given, by name'),
   takes: z.array(z.object({ item: z.string(), count: z.number().int() })).describe('Items taken from the player, by name'),
   remembers: z.string().nullable().describe('A choice the quest remembers for later, as one short word ("promised", "deal")'),
