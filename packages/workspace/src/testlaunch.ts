@@ -84,7 +84,12 @@ export async function findLauncher(ws: Workspace, ctx: { gameDir?: string; mo2?:
   if (ctx.mo2) {
     const exe = ctx.mo2.exe ?? joinPath(ctx.mo2.instanceDir, 'ModOrganizer.exe');
     if (await ws.fs.exists(exe)) {
-      const args = [...(ctx.mo2.profile ? ['-p', ctx.mo2.profile] : []), `moshortcut://:${ctx.mo2.executable ?? 'SKSE'}`];
+      // moshortcut://<instance>:<executable>, as MO2's own shortcuts are written (moshortcut.cpp). An empty instance
+      // only matches a portable one (portable.txt beside ModOrganizer.exe); a global instance is named by its folder
+      // under %LOCALAPPDATA%/ModOrganizer.
+      const portable = await ws.fs.exists(joinPath(ctx.mo2.instanceDir, 'portable.txt'));
+      const instance = portable ? '' : (ctx.mo2.instanceDir.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '');
+      const args = [...(ctx.mo2.profile ? ['-p', ctx.mo2.profile] : []), `moshortcut://${instance}:${ctx.mo2.executable ?? 'SKSE'}`];
       return { command: exe, args, cwd: ctx.mo2.instanceDir, how: `Mod Organizer 2 → ${ctx.mo2.executable ?? 'SKSE'}` };
     }
   }

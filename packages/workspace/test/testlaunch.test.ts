@@ -51,8 +51,14 @@ describe('test launch', () => {
     expect((await findLauncher(ws, { gameDir: '/game' }))?.how).toBe('SkyrimSE.exe');
     await fs.writeFile('/game/skse64_loader.exe', new Uint8Array(1));
     expect((await findLauncher(ws, { gameDir: '/game' }))?.how).toBe('skse64_loader.exe');
+    // A portable instance (portable.txt beside ModOrganizer.exe): MO2's shortcut with no instance name.
     await fs.writeFile('/mo2/ModOrganizer.exe', new Uint8Array(1));
+    await fs.writeFile('/mo2/portable.txt', new Uint8Array(0));
     const mo2 = await findLauncher(ws, { gameDir: '/game', mo2: { instanceDir: '/mo2', profile: 'Default' } });
     expect(mo2?.args).toEqual(['-p', 'Default', 'moshortcut://:SKSE']);
+    // A global instance is named by its folder (an empty name would only match a portable one).
+    await fs.writeFile('/mo2app/ModOrganizer.exe', new Uint8Array(1));
+    const global = await findLauncher(ws, { gameDir: '/game', mo2: { instanceDir: 'C:\\Users\\me\\AppData\\Local\\ModOrganizer\\Skyrim Special Edition', exe: '/mo2app/ModOrganizer.exe', profile: 'Modded' } });
+    expect(global?.args).toEqual(['-p', 'Modded', 'moshortcut://Skyrim Special Edition:SKSE']);
   });
 });
