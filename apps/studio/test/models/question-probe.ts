@@ -8,7 +8,7 @@
  * --variants also asks the other wordings being tried (VARIANTS), each on the same cases.
  * Prints each question's score and the cases it got wrong, and a JSON line with the scores at the end.
  */
-import { QuestPlanner, READ_RULES, YES_NO, type AiProvider } from '@tes5/workspace';
+import { QuestPlanner, READ_RULES, TWO_WAY, YES_NO, type AiProvider } from '@tes5/workspace';
 import { z } from 'zod';
 
 const [url, model, ...rest] = process.argv.slice(2);
@@ -57,12 +57,6 @@ const CASES: Case[] = [
   { q: 'noteCondition', args: ['only if the player took his money in Quest 3'], yes: true },
   { q: 'noteCondition', args: ['if Lucan was let go'], yes: true },
   { q: 'noteCondition', args: ['she remembers the promise'], yes: false },
-  // Handed back or given?
-  { q: 'takesItem', args: ['Hesta Coldwater', 'Here, as agreed.', 'she takes the three pages and pays 150 gold, or 250 if persuaded; the quest is done', 'Torn Map Page'], yes: true },
-  { q: 'takesItem', args: ['Varro Tullius', 'Sensible. Two hundred now, the rest when I have the pages.', 'he gives the player 200 gold and remembers the deal', 'Torn Map Page'], yes: false },
-  { q: 'takesItem', args: ['Hesta Coldwater', "Give it here. Gods. He paid them in coin and wrote it down like a grocer's bill.", 'she takes the ledger', "Varro's Ledger"], yes: true },
-  { q: 'takesItem', args: ['Tilda', 'Take this. It was his.', 'she gives the player her late husband\'s axe', "Tilda's Axe"], yes: false },
-  { q: 'takesItem', args: ['Gerdur', 'My ledger! Thank you.', 'she takes the ledger and pays 50 gold', "Gerdur's Ledger"], yes: true },
   // Story steps someone else does (the pair drops a beat only when the first says yes and the second no).
   { q: 'someoneElse', args: ['He stops following the player and walks back to the Sleeping Giant Inn on his own.'], yes: true },
   { q: 'someoneElse', args: ['he walks to Whiterun'], yes: true },
@@ -78,29 +72,27 @@ const CASES: Case[] = [
   { q: 'isPlayer', args: ['A note lies in the mud next to it: "Take the wood to the camp by the Guardian Stones. —R."', 'reads the note'], yes: true },
 ];
 
-/** Other wordings being tried, by question: the same arguments, a different question. */
+/** Two-way questions (TWO_WAY): their arguments and the answer they should get (0 the first, 1 the second). */
+const TWO_WAY_CASES: { q: keyof typeof TWO_WAY; args: [string, string, string, string]; answer: 0 | 1 }[] = [
+  { q: 'whoHas', args: ['Hesta Coldwater', 'Here, as agreed.', 'she takes the three pages and pays 150 gold, or 250 if persuaded; the quest is done', 'Torn Map Page'], answer: 0 },
+  { q: 'whoHas', args: ['Varro Tullius', 'Sensible. Two hundred now, the rest when I have the pages.', 'he gives the player 200 gold and remembers the deal', 'Torn Map Page'], answer: 1 },
+  { q: 'whoHas', args: ['Hesta Coldwater', "Give it here. Gods. He paid them in coin and wrote it down like a grocer's bill.", 'she takes the ledger', "Varro's Ledger"], answer: 0 },
+  { q: 'whoHas', args: ['Tilda', 'Take this. It was his.', "she gives the player her late husband's axe", "Tilda's Axe"], answer: 1 },
+  { q: 'whoHas', args: ['Gerdur', 'My ledger! Thank you.', 'she takes the ledger and pays 50 gold', "Gerdur's Ledger"], answer: 0 },
+  { q: 'whoHas', args: ['Brynja', 'Here, keep it safe.', 'she gives the player the ring', "Brynja's Ring"], answer: 1 },
+];
+
 /**
  * Other wordings being tried, by question: the same arguments, a different question. A list is several questions,
- * read as yes when any of them is.
+ * read as yes when any of them is. (Tried and left out so far: for lineMoves, naming the acts first and asking whether
+ * it's only talk; for sameAsStory, "the same step", "the same event" and "the person it's about"; for whether someone
+ * takes an item, every yes-or-no wording, which is why it's a two-way question.)
  */
-const VARIANTS: Partial<Record<Q, Record<string, (...a: string[]) => string | string[]>>> = {
-  lineMoves: {
-    acts: (asked, speaker, line) =>
-      `A line of dialogue in a Skyrim quest.${asked ? ` The player says: “${asked}”\nThe answer` : ` ${speaker} says`}: “${line}”\n\nIn this answer, does the speaker give or pay the player something, agree to a job or deal, leave, attack, start following the player, or end the quest?`,
-  },
-  sameAsStory: {
-    pair: (story, speaker, line, note) => `Two descriptions from a Skyrim quest.\n1. The story: “${story}”\n2. ${speaker} says: “${line}”${note ? ` (${note})` : ''}\n\nDo 1 and 2 describe the same step of the quest?`,
-    whoWhat: (story, speaker, line, note) => `The story: “${story}”\nA line: ${speaker}: “${line}”${note ? ` (${note})` : ''}\n\nIs ${speaker} the person that story sentence is about, and does the line do what it says happens?`,
-  },
-  takesItem: {
-    clauses: (who, line, note) =>
-      (note ? note.split(/;|,|\band\b/).map((c) => c.trim()).filter(Boolean) : [line]).map((c) => `In a Skyrim quest, the author writes about a line ${who} says: “${c}”\n\nDoes this say ${who} takes something from the player?`),
-  },
-};
+const VARIANTS: Partial<Record<Q, Record<string, (...a: string[]) => string | string[]>>> = {};
 
 const ai: AiProvider = { kind: 'openai', url, model };
 const planner = new QuestPlanner({ ai });
-const scores: Record<string, { right: number; of: number }> = {};
+const scores: Record<string, { right: number; of: number; unsure?: number }> = {};
 for (const c of CASES) {
   if (only && !only.includes(c.q)) continue;
   type Wording = (...a: string[]) => string | string[];
@@ -121,5 +113,24 @@ for (const c of CASES) {
     else console.log(`✗ ${name}: expected ${want ? 'yes' : 'no'}, got ${got === undefined ? 'no answer' : got ? 'yes' : 'no'} — ${c.args.join(' | ').slice(0, 140)}`);
   }
 }
-for (const [q, s] of Object.entries(scores)) console.log(`${q.padEnd(24)} ${s.right}/${s.of}`);
+// Two-way questions: asked both ways round, as the reader does; an answer only when both agree.
+for (const c of TWO_WAY_CASES) {
+  if (only && !only.includes(c.q)) continue;
+  const { question, answers } = TWO_WAY[c.q](...c.args);
+  const ask = async (a: [string, string]) => (await planner.ask(READ_RULES, question, z.object({ answer: z.enum(a) }), 40, { exact: true })).answer;
+  let got: string | undefined;
+  try {
+    const a = await ask([answers[0], answers[1]]);
+    const b = await ask([answers[1], answers[0]]);
+    got = a === b ? a : undefined;
+  } catch {
+    got = undefined;
+  }
+  const s = (scores[c.q] ??= { right: 0, of: 0, unsure: 0 });
+  s.of++;
+  if (got === answers[c.answer]) s.right++;
+  else if (got === undefined) s.unsure = (s.unsure ?? 0) + 1;
+  else console.log(`✗ ${c.q}: expected ${answers[c.answer]}, got ${got} — ${c.args.join(' | ').slice(0, 140)}`);
+}
+for (const [q, s] of Object.entries(scores)) console.log(`${q.padEnd(24)} ${s.right}/${s.of}${s.unsure ? ` (${s.unsure} left as read)` : ''}`);
 console.log(JSON.stringify({ model, scores }));

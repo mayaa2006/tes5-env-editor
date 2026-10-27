@@ -496,7 +496,7 @@ ULFGAR: You found it?
         if (user.includes('For each line with a direction'))
           return reply({ lines: [{ line: 3, words: 'Good.', if: [{ kind: 'left', value: 'Hrothmar' }], gold: null, gives: [{ item: 'Bloodied Badge', count: 1 }], takes: [], remembers: null, attacks: [], leaves: [], follows: [], stopsFollowing: [], appears: [], moves: [], instead: [] }] });
         if (q.includes('Does the note give a condition')) return reply({ yes: false });
-        if (q.includes('take something from the player')) return reply({ yes: true });
+        if (q.includes('After this line, who has the')) return reply({ answer: 'Ulfgar' });
         if (user.includes('their journal entry')) return reply({ beats: [] });
         if (user.includes('what the player says to')) return reply({ player: 'Give up.', answer: 'I yield.' });
         throw new Error(`unexpected: ${user.slice(-200)}`);

@@ -96,9 +96,6 @@ export const YES_NO = {
     `The quest's story says: “${story}”\nIn the written dialogue, ${speaker} says: “${line}”${note ? ` (${note})` : ''}\n\nDoes the line do what that sentence of the story describes?`,
   /** Does the note on a line say when it's said (so conditions read onto it are the author's)? */
   noteCondition: (note: string) => `The author's note on a line of dialogue: “${note}”\n\nDoes the note give a condition for when the line is said (“only if…”, “if…”)?`,
-  /** Does the speaker take this item (read as given) from the player? */
-  takesItem: (who: string, line: string, note: string, item: string) =>
-    `In the written dialogue, ${who} says: “${line}”${note ? ` (the author's note: ${note})` : ''}\n\nDoes ${who} take something from the player here (the ${item})?`,
   /** Is a story sentence about someone else acting on their own? */
   someoneElse: (sentence: string) => `A sentence from a Skyrim quest: “${sentence}”\n\nIs this sentence about someone other than the player doing something on their own?`,
   /** Is it the player who does this in the sentence? */
@@ -106,6 +103,19 @@ export const YES_NO = {
 };
 
 const YesSchema = z.object({ yes: z.boolean() });
+
+/**
+ * Questions with two answers, asked twice with the answers the other way round and used only when both agree: a model
+ * that leans to one side (the 2B always takes the second answer) then changes nothing instead of guessing. Each is
+ * probed like YES_NO.
+ */
+export const TWO_WAY = {
+  /** After a line read as handing an item over, who has it? */
+  whoHas: (who: string, line: string, note: string, item: string) => ({
+    question: `In the written dialogue, ${who} says: “${line}”${note ? ` (the author's note: ${note})` : ''}\n\nAfter this line, who has the ${item}?`,
+    answers: [who, 'the player'] as const,
+  }),
+};
 
 const EntitiesSchema = z.object({
   summary: z.string().describe('The quest in one sentence'),
@@ -309,6 +319,18 @@ export function passages(text: string): ({ kind: 'prose'; text: string } | { kin
 
 export class BeatReader {
   constructor(private readonly ai: QuestPlanner) {}
+
+  /** One of the two-way questions (TWO_WAY): the answer both ways of asking agree on, or none. */
+  private async agreed(q: { question: string; answers: readonly [string, string] }): Promise<string | undefined> {
+    const ask = async (answers: [string, string]) => (await this.ai.ask(READ_RULES, q.question, z.object({ answer: z.enum(answers) }), 40, { exact: true })).answer;
+    try {
+      const a = await ask([q.answers[0], q.answers[1]]);
+      const b = await ask([q.answers[1], q.answers[0]]);
+      return a === b ? a : undefined;
+    } catch {
+      return undefined;
+    }
+  }
 
   /** One of the yes-or-no questions (YES_NO); a failed answer is a no. */
   private async yes(question: string): Promise<boolean> {
@@ -1047,8 +1069,9 @@ export class BeatReader {
 
   /**
    * A line that gives the player something they picked up along the way is asked once whether it takes it instead
-   * (bringing back what was found reads easily as "gives"). Asked as yes or no, naming who: tried on the built-in model,
-   * this read 6 of 7 handovers right, where asking which way the item went read the Cartographer's none.
+   * (bringing back what was found reads easily as "gives"). Asked as who has it after the line, both ways round
+   * (TWO_WAY): on the probe's cases the 9B read 5 of 6 right, the 4B 3 (2 left as read), and the 2B, which always takes
+   * the second answer, changed none; asked as yes or no, every model got some wrong both ways.
    */
   private async handovers(sheet: BeatSheet, blocks: WrittenBlock[]): Promise<void> {
     const found = new Set(sheet.beats.filter((b) => b.does === 'pickup' && b.target).map((b) => b.target!));
@@ -1065,7 +1088,7 @@ export class BeatReader {
             if (this.handed.has(key) || !e) continue;
             this.handed.add(key);
             const who = byName(sheet.people, l.speaker)?.name ?? l.speaker;
-            if (!(await this.yes(YES_NO.takesItem(who, l.text, l.notes.join('; '), this.nameOf(sheet, g.item))))) continue;
+            if ((await this.agreed(TWO_WAY.whoHas(who, l.text, l.notes.join('; '), this.nameOf(sheet, g.item)))) !== who) continue;
             e.gives = (e.gives ?? []).filter((x) => x !== g);
             if (!e.gives.length) delete e.gives;
             e.takes = [...(e.takes ?? []), g];
