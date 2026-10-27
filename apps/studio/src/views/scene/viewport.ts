@@ -81,6 +81,34 @@ interface ModalState {
 const AXES: Record<Axis, THREE.Vector3> = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
 const AXIS_COLORS: Record<Axis, number> = { x: 0xff3352, y: 0x8bdc00, z: 0x2890ff };
 
+/** The sky's colours: overhead, at the horizon, and below it (seen past the edge of the loaded land). */
+const SKY_ZENITH = new THREE.Color(0x4a78b5);
+const SKY_HORIZON = new THREE.Color(0xc4d3e0);
+const SKY_GROUND = new THREE.Color(0x6d6e66);
+let sky: THREE.DataTexture | undefined;
+
+/** A sky gradient as an equirectangular background, turned so its up is Skyrim's +Z. */
+function skyTexture(): THREE.DataTexture {
+  if (sky) return sky;
+  const h = 256;
+  const data = new Uint8Array(4 * h * 4);
+  const c = new THREE.Color();
+  for (let y = 0; y < h; y++) {
+    // Row 0 looks straight up, the middle row at the horizon.
+    const up = 1 - (y / (h - 1)) * 2;
+    if (up >= 0) c.copy(SKY_HORIZON).lerp(SKY_ZENITH, Math.pow(up, 0.6));
+    else c.copy(SKY_HORIZON).lerp(SKY_GROUND, Math.min(1, -up * 6));
+    const srgb = c.clone().convertLinearToSRGB();
+    for (let x = 0; x < 4; x++) data.set([srgb.r * 255, srgb.g * 255, srgb.b * 255, 255], (y * 4 + x) * 4);
+  }
+  sky = new THREE.DataTexture(data, 4, h, THREE.RGBAFormat);
+  sky.mapping = THREE.EquirectangularReflectionMapping;
+  sky.colorSpace = THREE.SRGBColorSpace;
+  sky.magFilter = THREE.LinearFilter;
+  sky.needsUpdate = true;
+  return sky;
+}
+
 export function skyrimQuaternion(r: { x: number; y: number; z: number }): THREE.Quaternion {
   // Bethesda angles rotate clockwise; applied as Rz·Ry·Rx (see @tes5/workspace automations).
   return new THREE.Quaternion().setFromEuler(new THREE.Euler(-r.x, -r.y, -r.z, 'ZYX'));
@@ -183,6 +211,8 @@ export class Viewport {
     this.assets.onLoad = () => this.invalidate(true);
 
     this.scene.add(this.root, this.helpers, this.terrainGroup, this.navGroup, this.lights, this.ambient, this.pivotProxy);
+    // (The sky is drawn Y-up; Skyrim is Z-up.)
+    this.scene.backgroundRotation.set(-Math.PI / 2, 0, 0);
     const hemi = new THREE.HemisphereLight(0xdfe8ff, 0x3a3428, 1.6);
     const sun = new THREE.DirectionalLight(0xffffff, 1.4);
     sun.position.set(0.4, -0.6, 1);
@@ -589,6 +619,10 @@ export class Viewport {
 
   setCellContext(c: { interior: boolean; grid?: { x: number; y: number } }): void {
     this.buildGrid(c.grid ? c.grid.x * 4096 + 2048 : 0, c.grid ? c.grid.y * 4096 + 2048 : 0, !c.interior);
+    // Outdoors: a daytime sky and haze in the distance (several cells away, so nothing being edited fades).
+    this.scene.background = c.interior ? null : skyTexture();
+    this.scene.fog = c.interior ? null : new THREE.Fog(SKY_HORIZON, 40000, 200000);
+    this.invalidate();
   }
 
   private buildGrid(cx: number, cy: number, exterior: boolean): void {
