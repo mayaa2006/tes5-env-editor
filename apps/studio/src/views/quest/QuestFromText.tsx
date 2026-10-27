@@ -140,9 +140,10 @@ function Write({ mode, setMode, source, setSource, onPlanned, onPlannedLine, onC
   const m = MODES.find((x) => x.id === mode)!;
   // Several "Quest 1: …" headings: a questline, planned quest by quest and built together.
   const questline = useMemo(() => (mode === 'document' ? splitQuestline(source) : null), [mode, source]);
-  // How a document is read: beat by beat (small questions; what free AIs do best) or in one go (one big request).
+  // How a document is read: beat by beat (small questions, the plan played through: the default for every AI) or in one
+  // go (one big request).
   const [howChosen, setHow] = useDraft<'beats' | 'whole' | ''>('questFromText:how', '');
-  const how = howChosen || (ai.kind === 'claude' ? 'whole' : 'beats');
+  const how = howChosen || 'beats';
 
   const plan = async () => {
     if (questline) {
@@ -201,12 +202,12 @@ function Write({ mode, setMode, source, setSource, onPlanned, onPlannedLine, onC
           </p>
         ))}
       {mode === 'document' && (
-        <Field label="Read it" title="Beat by beat: the AI answers many small questions (who's in it, what the player does next, which line does it) and the editor puts the quest together, so you see an outline of what was read and can fix it. In one go: one big request for the whole plan, which works well with Claude.">
+        <Field label="Read it" title="Beat by beat: the AI answers many small questions (who's in it, what the player does next, which line does it) and the editor puts the quest together, so you see an outline of what was read and can fix it. In one go: one big request for the whole plan, quicker with Claude but nothing to check it against.">
           <span data-testid="plan-how">
             <Select
               value={how}
               options={[
-                { value: 'beats', label: 'Beat by beat (best for free AIs)' },
+                { value: 'beats', label: 'Beat by beat (recommended)' },
                 { value: 'whole', label: 'In one go' },
               ]}
               onChange={(v) => setHow(v)}

@@ -138,7 +138,7 @@ describe('the AI workspace quest tools', () => {
       provider: 'test',
       reply: async (req) => {
         const last = req.messages.at(-1)!;
-        if (last.role === 'user') return { text: '', calls: [call('plan_quest', { text: 'Brynja lost her ring in the tavern.' }, 'p')], stop: 'tools' };
+        if (last.role === 'user') return { text: '', calls: [call('plan_quest', { text: 'Brynja lost her ring in the tavern.', how: 'whole' }, 'p')], stop: 'tools' };
         const r = (last as any).results[0];
         if (r.name === 'plan_quest') {
           planId = JSON.parse(r.content).planId;
@@ -159,6 +159,20 @@ describe('the AI workspace quest tools', () => {
     expect(r.session.turns[0]!.changes).toEqual(['Build the quest from plan1']);
   });
 
+  it('reads a quest document beat by beat unless asked for one go', async () => {
+    const host = await demo();
+    // The first thing asked: who and what the quest involves (the beat reader), not the whole plan.
+    const asked: string[] = [];
+    vi.stubGlobal('fetch', async (url: string, init?: { body?: string }) => {
+      if (init?.body) asked.push(init.body);
+      return { ok: true, status: 200, json: async () => (String(url).endsWith('/models') ? { data: [] } : { choices: [{ message: { content: '{}' }, finish_reason: 'stop' }] }), text: async () => '' };
+    });
+    host.aiModel = () => scripted([{ text: '', calls: [call('plan_quest', { text: 'Brynja lost her ring in the tavern.' }, 'p')], stop: 'tools' }]);
+    const s = await host.aiNewSession();
+    await host.aiSend(s.id, 'Make the ring quest', { kind: 'openai', url: 'https://x.test/v1', model: 'm' });
+    expect(asked[0]).toContain('The quest in one sentence');
+  });
+
   it('building a revised plan again updates the quest it made, rather than making a second one', async () => {
     const host = await demo();
     // The planner (faked) returns the example plan, then the revision with a new journal entry for stage 10.
@@ -171,7 +185,7 @@ describe('the AI workspace quest tools', () => {
     const ai = { kind: 'openai' as const, url: 'https://x.test/v1', model: 'm' };
     host.aiModel = () =>
       scripted([
-        { text: '', calls: [call('plan_quest', { text: 'Brynja lost her ring.' }, 'p')], stop: 'tools' },
+        { text: '', calls: [call('plan_quest', { text: 'Brynja lost her ring.', how: 'whole' }, 'p')], stop: 'tools' },
         { text: '', calls: [call('build_plan', { planId: 'plan1' }, 'b1')], stop: 'tools' },
         { text: '', calls: [call('revise_plan', { planId: 'plan1', change: 'Brynja begs.' }, 'r')], stop: 'tools' },
         { text: '', calls: [call('build_plan', { planId: 'plan2' }, 'b2')], stop: 'tools' },
@@ -215,7 +229,7 @@ describe('the AI workspace quest tools', () => {
     const doc = `# Two Parts\n\n## Quest 1: The Ring\n\nBrynja lost her ring.\n\nPLAYER: Any work?\n  BRYNJA: Find my ring. (the player takes the job)\n\n## Quest 2: Eirik Again\n\nEirik wants thanks.\n\nPLAYER: Hello, Eirik.\n  EIRIK: You found it! (the quest is done)`;
     host.aiModel = () =>
       scripted([
-        { text: '', calls: [call('plan_quest', { text: doc }, 'p')], stop: 'tools' },
+        { text: '', calls: [call('plan_quest', { text: doc, how: 'whole' }, 'p')], stop: 'tools' },
         { text: '', calls: [call('build_questline', { questlineId: 'questline1' }, 'b')], stop: 'tools' },
         { text: 'Built both.', calls: [], stop: 'end' },
       ]);
@@ -243,7 +257,7 @@ describe('the AI workspace quest tools', () => {
     vi.stubGlobal('fetch', async () => ({ ok: true, status: 200, json: async () => ({ choices: [{ message: { content: JSON.stringify(exampleQuestPlan()) }, finish_reason: 'stop' }] }), text: async () => '' }));
     host.aiModel = () =>
       scripted([
-        { text: '', calls: [call('plan_quest', { text: 'Brynja lost her ring.' }, 'p')], stop: 'tools' },
+        { text: '', calls: [call('plan_quest', { text: 'Brynja lost her ring.', how: 'whole' }, 'p')], stop: 'tools' },
         { text: '', calls: [call('revise_plan', { planId: 'plan1', change: 'Better.' }, 'r1')], stop: 'tools' },
         { text: '', calls: [call('revise_plan', { planId: 'plan2', change: 'Better still.' }, 'r2')], stop: 'tools' },
         { text: '', calls: [call('revise_plan', { planId: 'plan3', change: 'Even better.' }, 'r3')], stop: 'tools' },
@@ -265,7 +279,7 @@ describe('the AI workspace quest tools', () => {
     vi.stubGlobal('fetch', (_url: string, init: { signal?: AbortSignal }) =>
       new Promise((_, reject) => init.signal?.addEventListener('abort', () => ((aborted = true), reject(new DOMException('aborted', 'AbortError'))))),
     );
-    host.aiModel = () => scripted([{ text: '', calls: [call('plan_quest', { text: 'Brynja lost her ring.' }, 'p')], stop: 'tools' }]);
+    host.aiModel = () => scripted([{ text: '', calls: [call('plan_quest', { text: 'Brynja lost her ring.', how: 'whole' }, 'p')], stop: 'tools' }]);
     const s = await host.aiNewSession();
     const sent = host.aiSend(s.id, 'Make the ring quest', { kind: 'openai', url: 'https://x.test/v1', model: 'm' });
     await new Promise((r) => setTimeout(r, 50));
@@ -279,7 +293,7 @@ describe('the AI workspace quest tools', () => {
     const host = await demo();
     vi.stubGlobal('fetch', async () => ({ ok: true, status: 200, json: async () => ({ choices: [{ message: { content: JSON.stringify(exampleQuestPlan()) }, finish_reason: 'stop' }] }), text: async () => '' }));
     const ai = { kind: 'openai' as const, url: 'https://x.test/v1', model: 'm' };
-    host.aiModel = () => scripted([{ text: '', calls: [call('plan_quest', { text: 'Brynja lost her ring.' }, 'p')], stop: 'tools' }, { text: 'Here is the plan.', calls: [], stop: 'end' }]);
+    host.aiModel = () => scripted([{ text: '', calls: [call('plan_quest', { text: 'Brynja lost her ring.', how: 'whole' }, 'p')], stop: 'tools' }, { text: 'Here is the plan.', calls: [], stop: 'end' }]);
     const s = await host.aiNewSession();
     await host.aiSend(s.id, 'Plan the ring quest', ai);
     // The app restarts: a new host reads the saved conversation.

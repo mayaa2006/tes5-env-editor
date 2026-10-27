@@ -18,6 +18,7 @@ import {
   BEAT_ACTIONS,
   checkBeats,
   type Beat,
+  type BeatAction,
   type BeatCondition,
   type BeatDialogueLine,
   type BeatEffects,
@@ -130,7 +131,7 @@ const EntitiesSchema = z.object({
 });
 
 const EffectsShape = {
-  gold: z.number().int().nullable().describe('Gold the player gets (negative: pays)'),
+  gold: z.number().int().nullable().describe('Gold handed over right then: what the player gets (negative: pays). Null for gold only offered or promised for later'),
   gives: z.array(z.object({ item: z.string(), count: z.number().int() })).describe('Items the player is given, by name'),
   takes: z.array(z.object({ item: z.string(), count: z.number().int() })).describe('Items taken from the player, by name'),
   remembers: z.string().nullable().describe('A choice the quest remembers for later, as one short word ("promised", "deal")'),
@@ -186,16 +187,6 @@ const WordsSchema = z.object({
 const PassageSchema = z.object({
   beats: z.array(BeatShape).describe('New beats this passage adds (none if it adds none)'),
 });
-
-/** A written conversation: when it's offered, and which of its lines move the quest on (each one is talking to its speaker). */
-/** A written conversation: when it's offered, and for each line that could move the quest on, what it does. */
-const conversationSchema = (beats: number[], lines: number[], choices: string[]) =>
-  z.object({
-    when: z.number().int().nullable().describe(`The beat after which the player can have this conversation; null when they can have it from the start of the quest {enum: ${JSON.stringify(beats)}}`),
-    lines: z
-      .array(z.object({ line: z.number().int().describe(`{enum: ${JSON.stringify(lines)}}`), does: z.string().describe(`{enum: ${JSON.stringify(choices)}}`) }))
-      .describe(`One entry for each of lines ${lines.join(', ')}: a beat listed above that saying it does (several lines can do the same beat, as different ways of taking a job); "a new step" when saying it moves the quest on (the player takes a job, agrees, gets something, or the quest ends) and no beat above is it; "only talk" when it moves nothing on (an answer, a failed persuasion, the end of the conversation)`),
-  });
 
 /** The author's prose, paragraph by paragraph: which paragraphs tell what happens. */
 const paragraphsSchema = (n: number) =>
@@ -297,6 +288,7 @@ export class BeatReader {
     this.unread.clear();
     this.notThings.clear();
     this.gold.clear();
+    this.handed.clear();
     const blocks = findDialogue(text).blocks;
     step('finding who and what the quest involves');
     const sheet = await this.entities(text, opts);
@@ -307,13 +299,17 @@ export class BeatReader {
       step(`reading part ${i + 1} of ${parts.length}${p.kind === 'conversation' ? ` (a conversation with ${p.block.speaker})` : ''}`);
       if (p.kind === 'prose') {
         const told = story(p.text);
+        const had = new Set(sheet.beats.map((b) => b.id));
         if (told) await this.prose(sheet, told);
+        await this.notPlayers(sheet, sheet.beats.filter((b) => !had.has(b.id)));
       } else await this.conversation(sheet, p.block);
     }
     for (const b of blocks.filter((x) => x.lines.some((l) => l.notes.length))) {
       step(`reading the directions in the conversation with ${b.speaker}`);
       await this.directions(sheet, b, opts);
     }
+    this.dropSelfChoices(sheet, opts);
+    await this.checkConditions(sheet, blocks);
     this.dropUnremembered(sheet, opts);
     // What else happens, read before the checks so they see it (and items handed over that weren't listed).
     const happenings = async () => {
@@ -323,6 +319,7 @@ export class BeatReader {
       }
       this.dropUnremembered(sheet, opts);
       await this.newItems(sheet, text);
+      await this.handovers(sheet, blocks);
     };
     await happenings();
     let questions = checkBeats(sheet, { blocks, earlierChoices: earlierChoices(opts) });
@@ -389,9 +386,10 @@ export class BeatReader {
     // The same item named twice (singular and plural, or numbered) is one item.
     const items: BeatItem[] = [];
     for (const i of a.items) {
-      // Hundreds of something is usually money: asked, and gold isn't an item (it's paid with what happens).
-      if (i.count > 20 && (await this.isGold(text, i.name))) {
-        this.gold.set(i.name, i.count);
+      // Hundreds of something, or a name that starts with an amount ("50 gold"), is usually money: asked, and gold isn't
+      // an item (it's paid with what happens).
+      if ((i.count > 20 || /^\d/.test(i.name.trim())) && (await this.isGold(text, i.name))) {
+        this.gold.set(i.name, i.count > 20 ? i.count : Number(/\d+/.exec(i.name)?.[0]) || i.count);
         continue;
       }
       const same = byName(items, i.name.replace(/\s*(#\s*)?\d+$/, ''));
@@ -558,6 +556,37 @@ export class BeatReader {
     this.addBeats(sheet, a.beats);
   }
 
+  /**
+   * Beats read from the story that someone else does on their own ("he walks to Whiterun and turns himself in"): not a
+   * step for the player, but what happens with the beat before. Asked as two yes-or-no questions, and dropped only when
+   * both say so: tried on the built-in model, the pair dropped 2 of the 4 such sentences in the test documents and none
+   * of the 12 the player does (either question alone dropped some of those).
+   */
+  private async notPlayers(sheet: BeatSheet, beats: Beat[]): Promise<void> {
+    const VERB: Partial<Record<BeatAction, string>> = { arrive: 'goes to', use: 'uses', pickup: 'picks up', read: 'reads', wait: 'waits' };
+    for (const b of beats) {
+      const verb = VERB[b.does];
+      if (!verb || !b.quote.trim()) continue;
+      const act = `${verb}${b.target ? ` ${this.nameOf(sheet, b.target)}` : ''}`;
+      try {
+        const other = await this.ai.ask(READ_RULES, `A sentence from a Skyrim quest: “${b.quote}”\n\nIs this sentence about someone other than the player doing something on their own?`, z.object({ yes: z.boolean() }), 40);
+        if (!other.yes) continue;
+        const player = await this.ai.ask(READ_RULES, `The quest's story says: “${b.quote}”\n\nRead as a step of the quest: the player ${act}.\n\nIs that something the story says the player does?`, z.object({ yes: z.boolean() }), 40);
+        if (player.yes) continue;
+      } catch {
+        continue;
+      }
+      // What it does goes with the beat it follows; with no single one, it's only dropped.
+      if (b.after.length === 1) mergeBeat(sheet, b.id, b.after[0]!, this.then);
+      else {
+        sheet.beats = sheet.beats.filter((x) => x !== b);
+        for (const x of sheet.beats) if (x.after.includes(b.id)) x.after = [...new Set(x.after.flatMap((y) => (y === b.id ? b.after : [y])))];
+        for (const d of sheet.dialogue) if (d.when === b.id) d.when = b.after[0] ?? null;
+        this.then.delete(b.id);
+      }
+    }
+  }
+
   private async conversation(sheet: BeatSheet, block: WrittenBlock): Promise<void> {
     const numbered = structuredClone(block);
     numbered.lines.forEach((l, i) => (l.n = i + 1));
@@ -569,67 +598,54 @@ export class BeatReader {
     const sayers = new Set(sheet.dialogue.flatMap((d) => d.lines.map((x) => x.beat)));
     const speakers = new Set(others.map((l) => byName(sheet.people, l.speaker)?.key));
     const talks = sheet.beats.map((b, i) => [b, i + 1] as const).filter(([b]) => b.does === 'talk' && !sayers.has(b.id) && speakers.has(b.target ?? undefined));
-    const label = (b: Beat, n: number) => `beat ${n}: talk ${this.nameOf(sheet, b.target!)}`;
-    const choices = [...talks.map(([b, n]) => label(b, n)), 'a new step', 'only talk'];
-    const pick = (c: string): number | null | undefined => {
-      // A listed beat by its label or number; or by who it's talking to (the first such beat nothing says yet: a later
-      // conversation can't take one an earlier one did). Null: a new step; undefined: only talk.
-      c = c.trim().toLowerCase();
-      if (c === 'a new step') return null;
-      const who = /talk\s+(.+)$/.exec(c)?.[1];
-      const byWho = who ? talks.filter(([b]) => !!byName([{ key: b.target!, name: this.nameOf(sheet, b.target!) }], who)) : [];
-      const hit = talks.find(([b, n]) => label(b, n).toLowerCase() === c || c === `beat ${n}`) ?? byWho[0];
-      return hit ? hit[1] : c.startsWith('beat') ? null : undefined;
+    const moves: { line: number; words: string; beat: number | null }[] = [];
+    // When it's had first: a line can only do a beat that can come next then (or after a line above it).
+    const at = await this.ai.ask(
+      READ_RULES,
+      `${this.context(sheet)}\n\nA conversation the author wrote out:\n${describeBlocks([numbered])}\n\nAfter which beat can the player have this conversation?`,
+      z.object({ when: z.number().int().nullable().describe(`The beat after which the player can have it; null when they can have it from the start of the quest {enum: ${JSON.stringify(beats)}}`) }),
+      40,
+    );
+    const next = (b: Beat) => {
+      const now = [at.when ? sheet.beats[at.when - 1]?.id : undefined, ...moves.map((m) => (m.beat ? sheet.beats[m.beat - 1]?.id : undefined))];
+      return at.when ? b.after.some((x) => now.includes(x)) : !b.after.length || b.after.some((x) => now.includes(x));
     };
-    let a: { when: number | null; moves: { line: number; words: string; beat: number | null }[] };
-    const directed = others.filter((l) => l.notes.length);
-    if (directed.length) {
-      // The author's directions say which lines move the quest on: each asked about on its own, in a few words, and
-      // only then which beat it is (when there's more than one way to read it).
-      const moves: typeof a.moves = [];
-      for (const l of directed) {
-        // (Asked as yes or no, with what counts listed: tried on the built-in model, this wording read 10 of 10 of the
-        // Cartographer's and the screenplay's directions right, where a choice between two descriptions read none.)
-        const m = await this.ai.ask(
-          READ_RULES,
-          `A line of dialogue in a Skyrim quest: “${l.text}”\nThe author's note on it: “${l.notes.join('; ')}”\n\nDoes the note say something happens in the quest (a job taken, an agreement, a promise, something given, taken or paid, someone following, attacking or leaving, the quest done)?`,
-          z.object({ happens: z.boolean() }),
-          40,
-        );
-        if (!m.happens) continue;
-        // Which beat it is: each talk with this speaker nothing says yet, in order, asked as yes or no (a list to pick
-        // from was always answered with its last choice); none of them, a new step.
-        const mine = talks.filter(([b]) => b.target === byName(sheet.people, l.speaker)?.key).slice(0, 4);
-        let beat: number | null = null;
-        for (const [b, n] of mine) {
-          const w = await this.ai.ask(
-            READ_RULES,
-            `The quest's story says: “${b.quote}”\nIn the written dialogue, ${l.speaker} says: “${l.text}” (${l.notes.join('; ')})\n\nDoes the line do what that sentence of the story describes?`,
-            z.object({ same: z.boolean() }),
-            40,
-          );
-          if (w.same) {
-            beat = n;
-            break;
-          }
-        }
-        moves.push({ line: l.n, words: '', beat });
-      }
-      const w = await this.ai.ask(
+    const directed = others.some((l) => l.notes.length);
+    for (const l of others.filter((x) => said.includes(x.n))) {
+      // Each line asked about on its own, as yes or no, with what counts listed; only then which beat it is. Where the
+      // author wrote directions, the direction is asked about (tried on the built-in model: 10 of 10 of the
+      // Cartographer's and the screenplay's read right, where a choice between two descriptions read none); otherwise
+      // the line itself, with what the player said before it (9 of 10).
+      const asked = numbered.lines.slice(0, l.n - 1).reverse().find((x) => x.player);
+      const m = await this.ai.ask(
         READ_RULES,
-        `${this.context(sheet)}\n\nA conversation the author wrote out:\n${describeBlocks([numbered])}\n\nAfter which beat can the player have this conversation?`,
-        z.object({ when: z.number().int().nullable().describe(`The beat after which the player can have it; null when they can have it from the start of the quest {enum: ${JSON.stringify(beats)}}`) }),
+        directed
+          ? `A line of dialogue in a Skyrim quest: “${l.text}”\nThe author's note on it: “${l.notes.join('; ')}”\n\nDoes the note say something happens in the quest (a job taken, an agreement, a promise, something given, taken or paid, someone following, attacking or leaving, the quest done)?`
+          : `A line of dialogue in a Skyrim quest.${asked ? ` The player says: “${asked.text}”\nThe answer` : ` ${l.speaker} says`}: “${l.text}”\n\nDoes this answer move the quest on (a job taken or given, a deal, something handed over or paid, someone leaving, attacking or following, the quest done), rather than only talk?`,
+        z.object({ happens: z.boolean() }),
         40,
       );
-      a = { when: w.when, moves };
-    } else {
-      const r = await this.ai.ask(
-        READ_RULES,
-        `${this.context(sheet)}\n\nA conversation the author wrote out (numbered lines; the author's directions after "—"):\n${describeBlocks([numbered])}\n\nAfter which beat can the player have this conversation? And for each of lines ${said.join(', ')}: does saying it only talk, do one of the beats above, or move the quest on in a new step?`,
-        conversationSchema(beats, said, choices),
-      );
-      a = { when: r.when, moves: r.lines.flatMap((x) => { const b = pick(x.does); return b === undefined ? [] : [{ line: x.line, words: '', beat: b }]; }) };
+      if (!m.happens) continue;
+      // Which beat it is: each talk with this speaker nothing says yet that can come next, in order, asked as yes or no
+      // (a list to pick from was always answered with its last choice); none of them, a new step.
+      const withSpeaker = talks.filter(([b]) => b.target === byName(sheet.people, l.speaker)?.key);
+      const mine = (withSpeaker.some(([b]) => next(b)) ? withSpeaker.filter(([b]) => next(b)) : withSpeaker).slice(0, 4);
+      let beat: number | null = null;
+      for (const [b, n] of mine) {
+        const w = await this.ai.ask(
+          READ_RULES,
+          `The quest's story says: “${b.quote}”\nIn the written dialogue, ${l.speaker} says: “${l.text}”${l.notes.length ? ` (${l.notes.join('; ')})` : ''}\n\nDoes the line do what that sentence of the story describes?`,
+          z.object({ same: z.boolean() }),
+          40,
+        );
+        if (w.same) {
+          beat = n;
+          break;
+        }
+      }
+      moves.push({ line: l.n, words: '', beat });
     }
+    const a = { when: at.when, moves };
     const when = a.when ? (sheet.beats[a.when - 1]?.id ?? null) : null;
     // Each line that moves the quest on is talking to whoever says it. It comes after the nearest line above it in the
     // conversation that also moved the quest on (the author's indenting), or after the beat the conversation follows.
@@ -637,7 +653,7 @@ export class BeatReader {
     const lines: BeatDialogueLine[] = [];
     // Lines of this conversation with the same direction, word for word ("the player agrees"), are the same beat said
     // different ways; a lone word ("success") doesn't count.
-    const directions = (l: { notes: string[] }) => l.notes.flatMap((x) => x.split(';')).map((x) => x.trim().toLowerCase()).filter((x) => x.split(/\s+/).length > 1);
+    const directions = (l: { notes: string[] }) => l.notes.flatMap((x) => x.split(/[;,]/)).map((x) => x.trim().toLowerCase()).filter((x) => x.split(/\s+/).length > 1);
     const byDirection = new Map<string, string>();
     for (const m of [...a.moves].sort((x, y) => x.line - y.line)) {
       const n = lineFor(numbered, m.line, m.words);
@@ -718,6 +734,48 @@ export class BeatReader {
       if (Object.keys(e).length) entry.effects = { ...(entry.effects ?? {}), ...e };
       const instead = l.instead.map((v) => ({ if: this.conditions(sheet, v.if), effects: v.gold ? { gold: v.gold } : {} })).filter((v) => v.if.length);
       if (instead.length) entry.variants = instead;
+    }
+  }
+
+  /**
+   * Conditions read onto a line whose note gives none (a choice from an earlier quest attached to "she takes the
+   * ledger"): asked once per line, as yes or no; on no, the line is said without them. Tried on the built-in model, this
+   * wording read 12 of 12 notes right, where asking about the named choice missed every one worded another way ("took
+   * his money" for "deal").
+   */
+  private async checkConditions(sheet: BeatSheet, blocks: WrittenBlock[]): Promise<void> {
+    for (const d of sheet.dialogue) {
+      const block = blocks.find((b) => b.id === d.block);
+      for (const entry of d.lines) {
+        const l = block?.lines[entry.line - 1];
+        if (!entry.if?.length || !l?.notes.length) continue;
+        try {
+          const a = await this.ai.ask(READ_RULES, `The author's note on a line of dialogue: “${l.notes.join('; ')}”\n\nDoes the note give a condition for when the line is said (“only if…”, “if…”)?`, z.object({ yes: z.boolean() }), 40);
+          if (!a.yes) delete entry.if;
+        } catch {
+          // Left as read.
+        }
+      }
+    }
+  }
+
+  /**
+   * A line can't wait on a choice that's only made by saying it, or by a line after it in the same conversation: the
+   * note names the choice the line makes ("if chose persuade" on the line that persuades), so it's said without it.
+   */
+  private dropSelfChoices(sheet: BeatSheet, opts: BeatReadOptions): void {
+    const remembers = (l: BeatDialogueLine, c: string) => l.effects?.remembers === c || (l.variants ?? []).some((v) => v.effects?.remembers === c);
+    for (const d of sheet.dialogue) {
+      const made = (c: string, n: number) =>
+        earlierChoices(opts).includes(c) ||
+        sheet.dialogue.some((x) => x !== d && x.lines.some((l) => remembers(l, c))) ||
+        d.lines.some((l) => l.line < n && remembers(l, c)) ||
+        sheet.beats.some((b) => b.effects?.remembers === c && !d.lines.some((l) => l.line >= n && l.beat === b.id));
+      for (const entry of d.lines) {
+        if (!entry.if) continue;
+        entry.if = entry.if.filter((c) => c.kind !== 'choice' || made(c.name, entry.line));
+        if (!entry.if.length) delete entry.if;
+      }
     }
   }
 
@@ -865,7 +923,7 @@ export class BeatReader {
         const a = await this.ai.ask(
           READ_RULES,
           `The quest:\n<quest>\n${text.trim()}\n</quest>\n\nBeats, in order:\n${this.outline(sheet, b.id)}\n\n${q.message}`,
-          z.object({ same: z.boolean().describe(`True when beat ${n} is the same moment as the beat before it, read twice`) }),
+          z.object({ same: z.boolean().describe(`True when beat ${n} and the other are one moment, read twice`) }),
           40,
         );
         if (a.same) mergeBeat(sheet, b.id, q.same, this.then);
@@ -964,6 +1022,49 @@ export class BeatReader {
       }
   }
 
+  /** Lines already asked whether they take an item rather than give it (block:line:item). */
+  private readonly handed = new Set<string>();
+
+  /**
+   * A line that gives the player something they picked up along the way is asked once whether it takes it instead
+   * (bringing back what was found reads easily as "gives"). Asked as yes or no, naming who: tried on the built-in model,
+   * this read 6 of 7 handovers right, where asking which way the item went read the Cartographer's none.
+   */
+  private async handovers(sheet: BeatSheet, blocks: WrittenBlock[]): Promise<void> {
+    const found = new Set(sheet.beats.filter((b) => b.does === 'pickup' && b.target).map((b) => b.target!));
+    for (const d of sheet.dialogue) {
+      const block = blocks.find((b) => b.id === d.block);
+      for (const entry of d.lines) {
+        const l = block?.lines[entry.line - 1];
+        if (!l || l.player) continue;
+        // (What the line does, or the beat it does: both are said on it.)
+        const beat = sheet.beats.find((b) => b.id === entry.beat);
+        for (const e of [entry.effects, beat?.effects]) {
+          for (const g of (e?.gives ?? []).filter((x) => found.has(x.item))) {
+            const key = `${d.block}:${entry.line}:${g.item}`;
+            if (this.handed.has(key) || !e) continue;
+            this.handed.add(key);
+            const who = byName(sheet.people, l.speaker)?.name ?? l.speaker;
+            try {
+              const a = await this.ai.ask(
+                READ_RULES,
+                `In the written dialogue, ${who} says: “${l.text}”${l.notes.length ? ` (the author's note: ${l.notes.join('; ')})` : ''}\n\nDoes ${who} take something from the player here (the ${this.nameOf(sheet, g.item)})?`,
+                z.object({ yes: z.boolean() }),
+                40,
+              );
+              if (!a.yes) continue;
+              e.gives = (e.gives ?? []).filter((x) => x !== g);
+              if (!e.gives.length) delete e.gives;
+              e.takes = [...(e.takes ?? []), g];
+            } catch {
+              // Left as read.
+            }
+          }
+        }
+      }
+    }
+  }
+
   /** Items handed over that aren't in the list yet (a reward the first reading left out): added, with their kind asked. */
   private async newItems(sheet: BeatSheet, text: string): Promise<void> {
     const known = new Set(sheet.items.map((i) => i.key));
@@ -992,6 +1093,11 @@ export class BeatReader {
       }
       if (this.gold.has(name)) {
         pay(name, this.gold.get(name));
+        continue;
+      }
+      if (/^\d/.test(name.trim()) && (await this.isGold(text, name))) {
+        this.gold.set(name, Number(/\d+/.exec(name)?.[0]) || 0);
+        pay(name, this.gold.get(name) || undefined);
         continue;
       }
       let kind: BeatItem['kind'] = 'misc';

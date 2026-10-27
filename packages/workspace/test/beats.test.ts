@@ -23,6 +23,7 @@ import {
   parseScreenplay,
   splitQuestline,
   validatePlan,
+  walkPlan,
   type BeatSheet,
   type PlannerReply,
 } from '../src';
@@ -137,6 +138,14 @@ describe('beat sheets', () => {
     expect(checkBeats(sheet).map((q) => q.message)).toContain('“The player has to find all three pages.”: the player does “kill” to a person, but “bandit” isn\'t one (it\'s an enemy group, which the player can clear). Which person (one of: hesta, lucan), or is the action “clear”?');
   });
 
+  it('ask whether the story and a written line, at the same point with the same person, are one moment', () => {
+    const sheet = lines();
+    // The story's "Hesta offers the job" and the line that takes it, both right at the start.
+    sheet.beats.push({ id: 'offer', does: 'talk', target: 'hesta', after: [], quote: 'Hesta offers the player the job', journal: null, objective: null, ends: null, effects: {} });
+    sheet.beats[1]!.after = ['job', 'offer'];
+    expect(checkBeats(sheet, { blocks: quest1() }).filter((q) => q.same)).toEqual([{ about: 'offer', message: '“Hesta offers the player the job”, and at the same point “When the player takes the job”: both talking to Hesta Coldwater. Is that one moment (the same beat)?', same: 'job' }]);
+  });
+
   it('order beats by what each needs first, and join branches', () => {
     const sheet = lines();
     // Two endings, then going back to Hesta either way.
@@ -167,6 +176,15 @@ describe('beat sheets', () => {
       ['left lucan', 'gold x100', '40'],
       [null, 'gold x200', '40'],
     ]);
+    // Something Lucan says that leads nowhere is said on the side: it doesn't leave the player stuck at a stage.
+    sheet.beats.push({ id: 'boast', does: 'talk', target: 'lucan', after: ['meet'], quote: 'Lucan boasts about his maps', journal: null, objective: null, ends: null, effects: { gold: 5 } });
+    sheet.lines.push({ beat: 'boast', player: 'Nice maps.', answer: 'The best.' });
+    const withSide = compileBeats(sheet);
+    expect(withSide.stages.map((s) => s.index)).toEqual([0, 10, 20, 30, 40]);
+    expect(withSide.conversations.find((c) => c.title === 'Lucan Valerius')!.screenplay).toContain('PLAYER: Nice maps. [if stage 10]\nLUCAN: The best. [gives gold x5]');
+    expect(walkPlan(withSide).stuck).toEqual([]);
+    sheet.beats.pop();
+    sheet.lines.pop();
     // A loop is said, not built.
     sheet.beats[0]!.after = ['report'];
     expect(beatOrder(sheet.beats)).toBeUndefined();
@@ -434,6 +452,60 @@ HESTA: My maps were stolen.
     expect(sheet.dialogue[0]!.when).toBeNull();
     // Hundreds of septims is money, not 250 items.
     expect(sheet.items.map((i) => i.key)).toEqual(['tornMapPage']);
+  });
+
+  it('drop what someone else does on their own, conditions the note never gives, and hand back what was found', async () => {
+    const doc = `The player picks up the badge. Hrothmar surrenders to the player and walks to Whiterun on his own. The player brings the badge back to Ulfgar.
+
+ULFGAR: You found it?
+  PLAYER: Here it is.
+    ULFGAR: Good. (he takes the badge; the quest is done)
+`;
+    const reply = (o: unknown): PlannerReply => ({ content: [{ type: 'text', text: JSON.stringify(o) }], stop_reason: 'end_turn' });
+    const asked: string[] = [];
+    const planner = new QuestPlanner({
+      send: async (p) => {
+        const user = String(p.messages.at(-1)!.content);
+        const q = user.split('\n').at(-1)!;
+        asked.push(q);
+        if (user.includes('List the people'))
+          return reply({
+            summary: '',
+            start: { how: 'picking up', what: 'Bloodied Badge' },
+            people: ['Ulfgar', 'Hrothmar'].map((name) => ({ name, description: '', sex: 'male', race: null, where: null, spot: null, canDie: 'not said', hostile: false, quote: '' })),
+            places: [{ name: 'Whiterun', description: '', quote: '' }],
+            items: [{ name: 'Bloodied Badge', kind: 'misc', where: 'Whiterun', carriedBy: null, spot: null, count: 1, text: null, lockedWith: null, quote: '' }],
+            enemies: [],
+          });
+        if (user.includes('<passage>'))
+          return reply({
+            beats: [
+              { n: 1, does: 'pickup', target: 'Bloodied Badge', count: 1, hours: null, after: [], quote: 'The player picks up the badge.', ends: 'no', then: null },
+              { n: 2, does: 'talk', target: 'Hrothmar', count: null, hours: null, after: [1], quote: 'Hrothmar surrenders to the player', ends: 'no', then: null },
+              { n: 3, does: 'arrive', target: 'Whiterun', count: null, hours: null, after: [2], quote: 'walks to Whiterun on his own', ends: 'no', then: null },
+              { n: 4, does: 'talk', target: 'Ulfgar', count: null, hours: null, after: [3], quote: 'The player brings the badge back to Ulfgar.', ends: 'complete', then: null },
+            ],
+          });
+        // Hrothmar walking off is his own doing: it goes with the beat before it.
+        if (q.includes('someone other than the player')) return reply({ yes: user.includes('walks to Whiterun') });
+        if (q.includes('something the story says the player does')) return reply({ yes: false });
+        if (q.includes('After which beat')) return reply({ when: 2 });
+        if (q.includes('Does the note say something happens')) return reply({ happens: true });
+        if (q.includes('Does the line do what')) return reply({ same: true });
+        // What a small model read: "if Hrothmar left", and the badge given rather than taken.
+        if (user.includes('For each line with a direction'))
+          return reply({ lines: [{ line: 3, words: 'Good.', if: [{ kind: 'left', value: 'Hrothmar' }], gold: null, gives: [{ item: 'Bloodied Badge', count: 1 }], takes: [], remembers: null, attacks: [], leaves: [], follows: [], stopsFollowing: [], appears: [], moves: [], instead: [] }] });
+        if (q.includes('Does the note give a condition')) return reply({ yes: false });
+        if (q.includes('take something from the player')) return reply({ yes: true });
+        if (user.includes('their journal entry')) return reply({ beats: [] });
+        if (user.includes('what the player says to')) return reply({ player: 'Give up.', answer: 'I yield.' });
+        throw new Error(`unexpected: ${user.slice(-200)}`);
+      },
+    });
+    const { sheet } = await new BeatReader(planner).read(doc, { title: 'The Badge', editorId: 'TheBadge' });
+    expect(sheet.beats.map((b) => `${b.id} ${b.does} ${b.target} after ${b.after.join(',')}`)).toEqual(['b1 pickup bloodiedBadge after ', 'b2 talk hrothmar after b1', 'b4 talk ulfgar after b2']);
+    expect(sheet.dialogue[0]!.lines).toEqual([{ line: 3, beat: 'b4', effects: { takes: [{ item: 'bloodiedBadge', count: 1 }] } }]);
+    expect(walkPlan(compileBeats(sheet, findDialogue(doc).blocks)).endings.map((e) => e.stage)).toEqual([30]);
   });
 
   it('ask who hands over an item the player was read as picking up from nowhere', async () => {

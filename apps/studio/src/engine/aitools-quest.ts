@@ -6,7 +6,7 @@
  */
 import { z } from 'zod';
 import type { FormKey } from '@tes5/esp';
-import { QuestPlanSchema, QuestPlanner, WorkspaceError, blockingIssues, lintScreenplay, normalizePlan, planCatalog, planQuestline, repairPlan, settleCharacters, splitQuestline, validatePlan, type AgentTool, type AiProvider, type PlanIssue, type PlanResolution, type QuestPlan } from '@tes5/workspace';
+import { BeatReader, QuestPlanSchema, QuestPlanner, WorkspaceError, beatLookup, blockingIssues, compileBeats, editorIdFromTitle, lintScreenplay, normalizePlan, planCatalog, planQuestline, readQuestline, repairPlan, settleCharacters, splitQuestline, validatePlan, type AgentTool, type AiProvider, type PlanIssue, type PlanResolution, type QuestPlan } from '@tes5/workspace';
 import type { EngineHost } from './host';
 
 /** How much of the load order the planner lists: everything for Claude, less for a free AI (it reads it slowly). */
@@ -101,18 +101,29 @@ export function questTools(host: EngineHost, ctx: QuestToolContext): AgentTool<a
       writes: false,
       description:
         "Plan a whole new quest (characters, places, items, stages, journal, objectives, what moves it on, dialogue, events, rewards) from a description, the way Quests → From writing does. Nothing is built yet: you get a plan id and a summary with problems to check. Also plans creating or changing characters, places and items without a quest. Describe everything the author asked for in 'text', in your own words if they told you over several messages.",
-      input: z.object({ text: z.string().describe('The quest as the author describes it: who, where, what the player does, how it ends'), mode: z.enum(['document', 'conversation']).nullable().optional().describe("'conversation' when the text is a conversation to build a quest around; otherwise 'document'") }),
+      input: z.object({
+        text: z.string().describe('The quest as the author describes it: who, where, what the player does, how it ends'),
+        mode: z.enum(['document', 'conversation']).nullable().optional().describe("'conversation' when the text is a conversation to build a quest around; otherwise 'document'"),
+        how: z
+          .enum(['beats', 'whole'])
+          .nullable()
+          .optional()
+          .describe("How a document is read. 'beats' (the default): beat by beat, in small questions, with the author's conversations kept word for word and the plan played through; what doesn't fit comes back as questions. 'whole': in one request; use it for characters, places or items without a quest"),
+      }),
       summary: () => 'Plan a quest',
       run: async (i, c) => {
         // Several quests, each under its own heading: a questline, planned quest by quest.
-        const line = (i.mode ?? 'document') === 'document' ? splitQuestline(i.text) : null;
+        const document = (i.mode ?? 'document') === 'document';
+        const beats = document && (i.how ?? 'beats') === 'beats';
+        const line = document ? splitQuestline(i.text) : null;
         if (line) {
           const free = ctx.ai.kind !== 'claude';
           const n = line.parts.length;
-          const planned = await planQuestline((q) => new QuestPlanner({ ai: ctx.ai, signal: c?.signal, onStep: (what) => c?.progress?.(`quest ${q + 1} of ${n} (${line.parts[q]!.title}), ${what}…`) }), line, {
-            catalog: (text) => planCatalog(ws(), { text, ...(free ? { limit: 60, short: 25 } : catalogLimits(ctx.ai)) }),
-            settle: (p, text) => void settleCharacters(ws(), p, text, free),
-          });
+          const quest = (q: number) => new QuestPlanner({ ai: ctx.ai, signal: c?.signal, onStep: (what) => c?.progress?.(`quest ${q + 1} of ${n} (${line.parts[q]!.title}), ${what}…`) });
+          const settle = (p: QuestPlan, text: string) => void settleCharacters(ws(), p, text, free);
+          const planned = beats
+            ? await readQuestline(quest, line, { lookup: beatLookup(ws()), settle })
+            : await planQuestline(quest, line, { catalog: (text) => planCatalog(ws(), { text, ...(free ? { limit: 60, short: 25 } : catalogLimits(ctx.ai)) }), settle });
           const planIds = planned.quests.map((q) => keep(q.plan, { source: q.source }));
           ctx.questlines ??= new Map();
           const lineId = `questline${ctx.questlines.size + 1}`;
@@ -122,6 +133,14 @@ export function questTools(host: EngineHost, ctx: QuestToolContext): AgentTool<a
             data: { questlineId: lineId, title: planned.title, quests: planIds.map((id) => review(id)), linkedAcrossQuests: r.links.map((l) => `${l.name}: made in quest ${l.from + 1}, used in quest ${l.quest + 1}`), questlineProblems: r.questlineIssues.map((x) => x.message), next: 'Tell the author what each quest does and ask whether to build; build all of them with build_questline.' },
             note: `Planned the questline “${planned.title}” (${planIds.length} quests)`,
           };
+        }
+        if (beats) {
+          const title = /^\s*(?:#+\s*|quest:\s*)(.+)$/im.exec(i.text)?.[1]?.trim() || 'New quest';
+          const read = await new BeatReader(new QuestPlanner({ ai: ctx.ai, signal: c?.signal, onStep: (what) => c?.progress?.(`${what}…`) })).read(i.text, { title, editorId: editorIdFromTitle(title), lookup: beatLookup(ws()) });
+          const plan = normalizePlan(compileBeats(read.sheet, read.blocks));
+          settleCharacters(ws(), plan, i.text, ctx.ai.kind !== 'claude');
+          const id = keep(plan, { source: i.text });
+          return { data: { ...review(id), unclear: read.questions.map((q) => q.message) }, note: `Planned “${plan.title}”` };
         }
         const plan = await planner(c?.signal).plan(i.text, i.mode ?? 'document', catalog(i.text));
         settleCharacters(ws(), plan, i.text, ctx.ai.kind !== 'claude');

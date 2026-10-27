@@ -299,6 +299,15 @@ export function checkBeats(sheet: BeatSheet, opts: { earlierChoices?: string[]; 
     if (sheet.beats.some((x) => x !== b && x.after.includes(a.id))) continue;
     q.push({ about: b.id, message: `“${a.quote}”, then right after it “${b.quote}”: both talking to ${nameOf(sheet, b.target!)}. Is that one moment (the same beat)?`, same: a.id });
   }
+  // Talking to someone in the story and in a written line, both after the same beat, may be one moment read twice (the
+  // story's “she offers the job” and the line where she does): asked about the one nothing says.
+  const said = new Set([...saidIn, ...sheet.lines.map((l) => l.beat)]);
+  const afterKey = (b: Beat) => [...b.after].sort().join(',');
+  for (const b of sheet.beats) {
+    if (b.does !== 'talk' || said.has(b.id) || b.ends) continue;
+    const a = sheet.beats.find((x) => x !== b && x.does === 'talk' && x.target === b.target && said.has(x.id) && afterKey(x) === afterKey(b));
+    if (a) q.push({ about: b.id, message: `“${b.quote}”, and at the same point “${a.quote}”: both talking to ${nameOf(sheet, b.target!)}. Is that one moment (the same beat)?`, same: a.id });
+  }
   // Every beat leads somewhere: to another beat, or to the quest's end.
   const followed = new Set(sheet.beats.flatMap((b) => b.after));
   // (Asked once some beat ends the quest; before that, which one does is the question.)
@@ -386,8 +395,21 @@ function keysOf(sheet: BeatSheet, kind: BeatEntityKind): string[] {
 
 /** Stage numbers: 0 for the start, then 10, 20… in the order the beats can happen. */
 export function beatStages(sheet: BeatSheet): Map<string, number> {
-  const order = beatOrder(sheet.beats) ?? sheet.beats;
+  const side = sideBeats(sheet);
+  const order = (beatOrder(sheet.beats) ?? sheet.beats).filter((b) => !side.has(b.id));
   return new Map(order.map((b, i) => [b.id, (i + 1) * 10]));
+}
+
+/**
+ * Talk beats that lead nowhere in a quest that does end: nothing follows them and they don't end it, so as stages
+ * they'd leave the player stuck. They're said on the side instead: their lines keep what they do but don't move the
+ * quest on. Only talk beats, and only the last of a chain: a longer branch that leads nowhere stays a stage, so
+ * playing it through still shows it.
+ */
+export function sideBeats(sheet: BeatSheet): Set<string> {
+  if (!sheet.beats.some((b) => b.ends)) return new Set();
+  const followed = new Set(sheet.beats.flatMap((b) => b.after));
+  return new Set(sheet.beats.filter((b) => b.does === 'talk' && !b.ends && !followed.has(b.id)).map((b) => b.id));
 }
 
 const conditionTag = (c: BeatCondition, stages: Map<string, number>): string | undefined => {
@@ -429,10 +451,14 @@ function effectTags(e: BeatEffects, speaker: { key: string; name: string } | und
 export function compileBeats(sheet: BeatSheet, blocks: WrittenBlock[] = []): QuestPlan {
   const stages = beatStages(sheet);
   const stageOf = (id: string) => stages.get(id) ?? 0;
-  const order = beatOrder(sheet.beats) ?? sheet.beats;
+  const side = sideBeats(sheet);
+  const all = beatOrder(sheet.beats) ?? sheet.beats;
+  const order = all.filter((b) => !side.has(b.id));
   const byId = new Map(sheet.beats.map((b) => [b.id, b]));
   // A stage is where the quest is once a beat is done; the start is 0.
   const fromStages = (b: Beat) => (b.after.length ? b.after.filter((a) => byId.has(a)).map(stageOf) : [0]);
+  // The stage a beat moves the quest to, or none for a beat said on the side.
+  const stageTag = (b: Beat) => (side.has(b.id) ? [] : [`[stage ${stageOf(b.id)}]`]);
 
   const characters: PlanCharacter[] = sheet.people.map((p) => ({
     key: p.key,
@@ -530,7 +556,8 @@ export function compileBeats(sheet: BeatSheet, blocks: WrittenBlock[] = []): Que
   for (const d of sheet.dialogue) {
     const block = copy.find((b) => b.id === d.block);
     if (!block) continue;
-    if (d.when && stages.has(d.when)) block.tags.push(`[if stage ${stageOf(d.when)}]`);
+    const when = d.when && side.has(d.when) ? byId.get(d.when)?.after[0] : d.when;
+    if (when && stages.has(when)) block.tags.push(`[if stage ${stageOf(when)}]`);
     const original = [...block.lines];
     for (const x of d.lines) {
       const l = original[x.line - 1];
@@ -539,7 +566,7 @@ export function compileBeats(sheet: BeatSheet, blocks: WrittenBlock[] = []): Que
       const who = l.player ? undefined : speakerOf(l.speaker);
       const tagsFor = (extra: BeatEffects | undefined) => {
         const e: BeatEffects = { ...(b?.effects ?? {}), ...(extra ?? {}) };
-        return [...(b ? [`[stage ${stageOf(b.id)}]`] : []), ...effectTags(e, who)];
+        return [...(b ? stageTag(b) : []), ...effectTags(e, who)];
       };
       l.tags.push(...conditionTags(x.if), ...tagsFor(x.effects));
       // Said another way when something holds: those copies first, this one otherwise.
@@ -568,8 +595,8 @@ export function compileBeats(sheet: BeatSheet, blocks: WrittenBlock[] = []): Que
     const gate = fromStages(b).length === 1 ? [`[if stage ${fromStages(b)[0]}]`] : [];
     const answer = (tags: string[]): WrittenLine => ({ n: 0, level: 0, speaker: key, player: false, text: l.answer, notes: [], tags });
     const lines: WrittenLine[] = [{ n: 0, level: 0, speaker: 'PLAYER', player: true, text: l.player, notes: [], tags: gate }];
-    for (const v of b.variants ?? []) lines.push(answer([...conditionTags(v.if), `[stage ${stageOf(b.id)}]`, ...effectTags({ ...(b.effects ?? {}), ...v.effects }, who)]));
-    lines.push(answer([`[stage ${stageOf(b.id)}]`, ...effectTags(b.effects ?? {}, who), ...(b.variants?.length ? ['[otherwise]'] : [])]));
+    for (const v of b.variants ?? []) lines.push(answer([...conditionTags(v.if), ...stageTag(b), ...effectTags({ ...(b.effects ?? {}), ...v.effects }, who)]));
+    lines.push(answer([...stageTag(b), ...effectTags(b.effects ?? {}, who), ...(b.variants?.length ? ['[otherwise]'] : [])]));
     lines.forEach((x, n) => (x.n = n + 1));
     const title = who?.name ?? 'NPC';
     written.set(title, [...(written.get(title) ?? []), { id: 10000 + i, header: '', scene: false, speaker: key, lines, tags: [] }]);
