@@ -79,4 +79,13 @@ describe('playing a plan through', () => {
     expect(w.endings[1]!.path.steps).toEqual(['Brynja is killed']);
     expect(w.backwards).toEqual([{ line: 'Brynja: “Start over.”', from: 10, to: 5 }]);
   });
+
+  it('takes a choice an earlier quest remembered as either way', () => {
+    const p = plan({
+      stages: [stage(0), stage(10, 'complete')],
+      steps: [],
+      conversations: [{ title: 'Brynja', screenplay: 'PLAYER: I kept my promise. [if stage 0] [if chose promise]\nBRYNJA: Then here. [stage 10]' }],
+    });
+    expect(walkPlan(p).endings.map((e) => e.stage)).toEqual([10]);
+  });
 });

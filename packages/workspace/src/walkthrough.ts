@@ -180,6 +180,10 @@ export function walkPlan(plan: QuestPlan, opts: { limit?: number; ms?: number } 
   index(topics);
   for (const g of greetings) index(g.then);
 
+  // Choices this quest remembers itself, and who in it leaves; others come from earlier quests (either way here).
+  const ownChoices = new Set(allLines.flatMap((l) => l.remember));
+  const leavers = new Set(allLines.filter((l) => l.leaves).map((l) => l.speaker));
+
   // Conditions: true, false, or either (what the plan can't know about the player).
   type Truth = 'yes' | 'no' | 'maybe';
   const holds = (s: State, c: IfClause): Truth => {
@@ -193,10 +197,12 @@ export function walkPlan(plan: QuestPlan, opts: { limit?: number; ms?: number } 
         return (have >= c.count) !== c.not ? 'yes' : 'no';
       }
       case 'choice':
+        if (!ownChoices.has(c.name.toLowerCase())) return 'maybe';
         return s.chose.includes(c.name.toLowerCase()) !== c.not ? 'yes' : 'no';
       case 'dead':
         return s.dead.includes(personOf(c.who)) !== c.not ? 'yes' : 'no';
       case 'left':
+        if (!leavers.has(personOf(c.who))) return 'maybe';
         return s.gone.includes(personOf(c.who)) !== c.not ? 'yes' : 'no';
       default:
         // Gold the player brings, Speech, level, sex, race, time of day, other quests.
