@@ -350,6 +350,7 @@ export class BeatReader {
     this.notThings.clear();
     this.gold.clear();
     this.handed.clear();
+    this.startsWith = undefined;
     const blocks = findDialogue(text).blocks;
     step('finding who and what the quest involves');
     const sheet = await this.entities(text, opts);
@@ -479,6 +480,8 @@ export class BeatReader {
         : a.start.how === 'talking' || !startTarget
           ? { kind: 'game' }
           : { kind: a.start.how === 'reading' ? 'read' : a.start.how === 'picking up' ? 'pickup' : a.start.how === 'arriving' ? 'arrive' : 'use', target: startTarget };
+    // (What starts it, as the AI named it, for a first beat that reads or picks up something the list left out.)
+    this.startsWith = a.start.what?.trim() || undefined;
     return { title: opts.title, editorId: opts.editorId, summary: a.summary, start, people, places, items, groups, beats: [], dialogue: [], lines: [] };
   }
 
@@ -514,10 +517,11 @@ export class BeatReader {
       const hit = byName(pools[k], name);
       if (hit) return hit.key;
     }
-    // Something of another kind (an enemy group where a person was expected): its key, for the checks to ask about.
+    // Something of another kind (an enemy group where a person was expected): its key, for the checks to ask about. Not
+    // a name found inside a longer one, though: a notice's text that says "ask for Hesta Coldwater" isn't Hesta.
     for (const k of ['person', 'place', 'item', 'group'] as const) {
       const hit = byName(pools[k], name);
-      if (hit) return hit.key;
+      if (hit && !(norm(name).includes(norm(hit.name)) && norm(name) !== norm(hit.name))) return hit.key;
     }
     return name;
   }
@@ -654,7 +658,7 @@ export class BeatReader {
   private newTargets(sheet: BeatSheet): void {
     const known = new Set([...sheet.people, ...sheet.places, ...sheet.items, ...sheet.groups].map((x) => x.key));
     const taken = new Set(known);
-    for (const b of sheet.beats) {
+    for (const b of [...sheet.beats]) {
       const want = ACTION_TARGET[b.does];
       if ((want !== 'item' && want !== 'person|item') || !b.target || known.has(b.target)) continue;
       const same = byName(sheet.items, b.target);
@@ -662,11 +666,23 @@ export class BeatReader {
         b.target = same.key;
         continue;
       }
-      const key = keyFor(b.target, taken);
+      // The first thing the player does, when it's what the quest starts with ("a notice"): called by that name (the beat
+      // may give its words instead).
+      const first = !b.after.length && this.startsWith && sheet.start.kind === 'game';
+      const name = first ? this.startsWith!.replace(/^(the|a|an)\s+/i, '').replace(/^./, (c) => c.toUpperCase()) : b.target;
+      const key = keyFor(name, taken);
       taken.add(key);
       known.add(key);
-      sheet.items.push({ key, name: b.target, kind: b.does === 'read' ? 'book' : 'misc', existing: null, place: null, carriedBy: null, spot: null, count: 1, text: null, lockedWith: null, quote: b.quote });
+      sheet.items.push({ key, name, kind: b.does === 'read' ? 'book' : 'misc', existing: null, place: null, carriedBy: null, spot: null, count: 1, text: null, lockedWith: null, quote: b.quote });
       b.target = key;
+      // It's what starts the quest, then: the start, not a beat of its own (what came after it comes first).
+      if (first && (b.does === 'read' || b.does === 'pickup')) {
+        sheet.start = { kind: b.does, target: key };
+        sheet.beats = sheet.beats.filter((x) => x !== b);
+        for (const x of sheet.beats) x.after = x.after.filter((y) => y !== b.id);
+        for (const d of sheet.dialogue) if (d.when === b.id) d.when = null;
+        this.then.delete(b.id);
+      }
     }
   }
 
@@ -1106,6 +1122,9 @@ export class BeatReader {
         if (l.variants) l.variants = l.variants.filter((v) => v.if.every(keep));
       }
   }
+
+  /** What the quest starts with, as the AI named it ("a notice"). */
+  private startsWith: string | undefined;
 
   /** Lines already asked whether they take an item rather than give it (block:line:item). */
   private readonly handed = new Set<string>();
