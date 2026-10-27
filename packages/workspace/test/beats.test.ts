@@ -367,7 +367,7 @@ describe('beat sheets', () => {
         if (user.includes('<passage>\nSCENE 3')) return reply({ beats: [{ n: 4, does: 'clear', target: 'skeever', count: null, hours: null, after: [2], quote: 'When the skeevers are dead:', ends: 'no', then: null }] });
         if (user.includes('<passage>')) throw new Error('the heading was read for beats');
         // Each line with a direction, on its own: does its direction move the quest on? (A failed persuasion doesn't.)
-        if (user.includes('Does the note say something happens')) return reply({ happens: !user.includes('Not with those things') });
+        if (user.includes('Does the note say something happens')) return reply({ yes: !user.includes('Not with those things') });
         // When each conversation is offered. The agreement and the persuasion's success both come after the job.
         if (user.includes('Block 1 —')) return reply({ when: null });
         if (user.includes('Block 2 —')) return reply({ when: 1 });
@@ -430,10 +430,10 @@ HESTA: My maps were stolen.
               { n: 3, does: 'talk', target: 'Hesta', count: null, hours: null, after: [2], quote: 'brings them to her', ends: 'complete', then: null },
             ],
           });
-        if (user.includes('Does the note say something happens')) return reply({ happens: !user.includes('“No.”') });
+        if (user.includes('Does the note say something happens')) return reply({ yes: !user.includes('“No.”') });
         // Both ways of taking the job are the job: asked beat by beat, the first talk with Hesta is it.
         // (Asked about the persuaded line, the AI says no: the same direction as the first line makes it the job anyway.)
-        if (user.includes('Does the line do what that sentence of the story describes')) return reply({ same: user.includes('“The player takes the job”') && user.includes('Good. Bring me all three.') });
+        if (user.includes('Does the line do what that sentence of the story describes')) return reply({ yes: user.includes('“The player takes the job”') && user.includes('Good. Bring me all three.') });
         // Said to be offered after the job, which it does itself.
         if (user.includes('After which beat can the player have this conversation')) return reply({ when: 1 });
         if (user.includes('For each line with a direction')) return reply({ lines: [] });
@@ -490,8 +490,8 @@ ULFGAR: You found it?
         if (q.includes('someone other than the player')) return reply({ yes: user.includes('walks to Whiterun') });
         if (q.includes('Is it the player who')) return reply({ yes: false });
         if (q.includes('After which beat')) return reply({ when: 2 });
-        if (q.includes('Does the note say something happens')) return reply({ happens: true });
-        if (q.includes('Does the line do what')) return reply({ same: true });
+        if (q.includes('Does the note say something happens')) return reply({ yes: true });
+        if (q.includes('Does the line do what')) return reply({ yes: true });
         // What a small model read: "if Hrothmar left", and the badge given rather than taken.
         if (user.includes('For each line with a direction'))
           return reply({ lines: [{ line: 3, words: 'Good.', if: [{ kind: 'left', value: 'Hrothmar' }], gold: null, gives: [{ item: 'Bloodied Badge', count: 1 }], takes: [], remembers: null, attacks: [], leaves: [], follows: [], stopsFollowing: [], appears: [], moves: [], instead: [] }] });

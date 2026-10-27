@@ -474,11 +474,13 @@ export class QuestPlanner {
 
   /**
    * One small question to the AI, answered in a given shape (checked, with one chance to fix it). The beat reader
-   * (beatreader.ts) asks all its questions through this.
+   * (beatreader.ts) asks all its questions through this. `exact`: a closed question, asked of a free AI at temperature 0
+   * so it gets the model's most likely answer every time (at the planner's usual 0.3 a yes-or-no could come out
+   * either way from one run to the next).
    */
-  async ask<T>(system: string, user: string, schema: z.ZodType<T>, maxTokens = 2000): Promise<T> {
+  async ask<T>(system: string, user: string, schema: z.ZodType<T>, maxTokens = 2000, opts: { exact?: boolean } = {}): Promise<T> {
     return this.run(
-      { model: this.model, max_tokens: maxTokens, output_config: { effort: 'low', format: betaZodOutputFormat(schema as never) }, system: [{ type: 'text', text: system }], messages: [{ role: 'user', content: user }] },
+      { model: this.model, max_tokens: maxTokens, ...(opts.exact && this.free ? { temperature: 0 } : {}), output_config: { effort: 'low', format: betaZodOutputFormat(schema as never) }, system: [{ type: 'text', text: system }], messages: [{ role: 'user', content: user }] },
       schema,
     );
   }

@@ -76,7 +76,36 @@ const ITEM_KINDS = ['misc', 'book', 'key', 'clothing', 'armor', 'weapon', 'potio
 
 const WRITE_RULES = `You write the words a Skyrim quest needs that its author didn't write, in the author's tone: short, plain, in the game's style, no game terms. Answer only in the JSON format given.`;
 
-const READ_RULES = `You read a Skyrim quest an author has written, to help turn it into a working quest. Answer only from what the text says, in the JSON format given. Quote the author's sentence each answer comes from, word for word. Where the text doesn't say, use null or an empty list; don't invent.`;
+export const READ_RULES = `You read a Skyrim quest an author has written, to help turn it into a working quest. Answer only from what the text says, in the JSON format given. Quote the author's sentence each answer comes from, word for word. Where the text doesn't say, use null or an empty list; don't invent.`;
+
+/**
+ * The yes-or-no questions the reader asks, word for word. Small models answer these far more reliably than a choice
+ * between descriptions (asked to choose, they nearly always take the last choice). Every wording has to read its test
+ * cases right on every model offered, not just one: apps/studio/test/models/question-probe.ts asks each on real
+ * sentences from the test documents, model by model.
+ */
+export const YES_NO = {
+  /** A written line with the author's note on it: does the note say it moves the quest on? */
+  noteHappens: (line: string, note: string) =>
+    `A line of dialogue in a Skyrim quest: “${line}”\nThe author's note on it: “${note}”\n\nDoes the note say something happens in the quest (a job taken, an agreement, a promise, something given, taken or paid, someone following, attacking or leaving, the quest done)?`,
+  /** A written line with no directions anywhere in its conversation: does saying it move the quest on? */
+  lineMoves: (asked: string | undefined, speaker: string, line: string) =>
+    `A line of dialogue in a Skyrim quest.${asked ? ` The player says: “${asked}”\nThe answer` : ` ${speaker} says`}: “${line}”\n\nDoes this answer move the quest on (a job taken or given, a deal, something handed over or paid, someone leaving, attacking or following, the quest done), rather than only talk?`,
+  /** Is this written line the moment a sentence of the story describes? */
+  sameAsStory: (story: string, speaker: string, line: string, note: string) =>
+    `The quest's story says: “${story}”\nIn the written dialogue, ${speaker} says: “${line}”${note ? ` (${note})` : ''}\n\nDoes the line do what that sentence of the story describes?`,
+  /** Does the note on a line say when it's said (so conditions read onto it are the author's)? */
+  noteCondition: (note: string) => `The author's note on a line of dialogue: “${note}”\n\nDoes the note give a condition for when the line is said (“only if…”, “if…”)?`,
+  /** Does the speaker take this item (read as given) from the player? */
+  takesItem: (who: string, line: string, note: string, item: string) =>
+    `In the written dialogue, ${who} says: “${line}”${note ? ` (the author's note: ${note})` : ''}\n\nDoes ${who} take something from the player here (the ${item})?`,
+  /** Is a story sentence about someone else acting on their own? */
+  someoneElse: (sentence: string) => `A sentence from a Skyrim quest: “${sentence}”\n\nIs this sentence about someone other than the player doing something on their own?`,
+  /** Is it the player who does this in the sentence? */
+  isPlayer: (sentence: string, act: string) => `A sentence from a Skyrim quest: “${sentence}”\n\nIs it the player who ${act} in this sentence, rather than someone else?`,
+};
+
+const YesSchema = z.object({ yes: z.boolean() });
 
 const EntitiesSchema = z.object({
   summary: z.string().describe('The quest in one sentence'),
@@ -280,6 +309,15 @@ export function passages(text: string): ({ kind: 'prose'; text: string } | { kin
 
 export class BeatReader {
   constructor(private readonly ai: QuestPlanner) {}
+
+  /** One of the yes-or-no questions (YES_NO); a failed answer is a no. */
+  private async yes(question: string): Promise<boolean> {
+    try {
+      return (await this.ai.ask(READ_RULES, question, YesSchema, 40, { exact: true })).yes;
+    } catch {
+      return false;
+    }
+  }
 
   /** Read one quest into a beat sheet (checked, with what didn't fit asked about again). */
   async read(text: string, opts: BeatReadOptions): Promise<{ sheet: BeatSheet; questions: BeatQuestion[]; blocks: WrittenBlock[] }> {
@@ -571,14 +609,7 @@ export class BeatReader {
       const verb = VERB[b.does];
       if (!verb || !b.quote.trim()) continue;
       const act = `${verb}${b.target ? ` ${this.nameOf(sheet, b.target)}` : ''}`;
-      try {
-        const other = await this.ai.ask(READ_RULES, `A sentence from a Skyrim quest: “${b.quote}”\n\nIs this sentence about someone other than the player doing something on their own?`, z.object({ yes: z.boolean() }), 40);
-        if (!other.yes) continue;
-        const player = await this.ai.ask(READ_RULES, `A sentence from a Skyrim quest: “${b.quote}”\n\nIs it the player who ${act} in this sentence, rather than someone else?`, z.object({ yes: z.boolean() }), 40);
-        if (player.yes) continue;
-      } catch {
-        continue;
-      }
+      if (!(await this.yes(YES_NO.someoneElse(b.quote))) || (await this.yes(YES_NO.isPlayer(b.quote, act)))) continue;
       // What it does goes with the beat it follows; with no single one, it's only dropped.
       if (b.after.length === 1) mergeBeat(sheet, b.id, b.after[0]!, this.then);
       else {
@@ -620,28 +651,14 @@ export class BeatReader {
       // Cartographer's and the screenplay's read right, where a choice between two descriptions read none); otherwise
       // the line itself, with what the player said before it (9 of 10).
       const asked = numbered.lines.slice(0, l.n - 1).reverse().find((x) => x.player);
-      const m = await this.ai.ask(
-        READ_RULES,
-        directed
-          ? `A line of dialogue in a Skyrim quest: “${l.text}”\nThe author's note on it: “${l.notes.join('; ')}”\n\nDoes the note say something happens in the quest (a job taken, an agreement, a promise, something given, taken or paid, someone following, attacking or leaving, the quest done)?`
-          : `A line of dialogue in a Skyrim quest.${asked ? ` The player says: “${asked.text}”\nThe answer` : ` ${l.speaker} says`}: “${l.text}”\n\nDoes this answer move the quest on (a job taken or given, a deal, something handed over or paid, someone leaving, attacking or following, the quest done), rather than only talk?`,
-        z.object({ happens: z.boolean() }),
-        40,
-      );
-      if (!m.happens) continue;
+      if (!(await this.yes(directed ? YES_NO.noteHappens(l.text, l.notes.join('; ')) : YES_NO.lineMoves(asked?.text, l.speaker, l.text)))) continue;
       // Which beat it is: each talk with this speaker nothing says yet that can come next, in order, asked as yes or no
       // (a list to pick from was always answered with its last choice); none of them, a new step.
       const withSpeaker = talks.filter(([b]) => b.target === byName(sheet.people, l.speaker)?.key);
       const mine = (withSpeaker.some(([b]) => next(b)) ? withSpeaker.filter(([b]) => next(b)) : withSpeaker).slice(0, 4);
       let beat: number | null = null;
       for (const [b, n] of mine) {
-        const w = await this.ai.ask(
-          READ_RULES,
-          `The quest's story says: “${b.quote}”\nIn the written dialogue, ${l.speaker} says: “${l.text}”${l.notes.length ? ` (${l.notes.join('; ')})` : ''}\n\nDoes the line do what that sentence of the story describes?`,
-          z.object({ same: z.boolean() }),
-          40,
-        );
-        if (w.same) {
+        if (await this.yes(YES_NO.sameAsStory(b.quote, l.speaker, l.text, l.notes.join('; ')))) {
           beat = n;
           break;
         }
@@ -752,9 +769,9 @@ export class BeatReader {
       for (const entry of d.lines) {
         const l = block?.lines[entry.line - 1];
         if (!entry.if?.length || !l?.notes.length) continue;
+        // (An answer that doesn't come back leaves them as read.)
         try {
-          const a = await this.ai.ask(READ_RULES, `The author's note on a line of dialogue: “${l.notes.join('; ')}”\n\nDoes the note give a condition for when the line is said (“only if…”, “if…”)?`, z.object({ yes: z.boolean() }), 40);
-          if (!a.yes) delete entry.if;
+          if (!(await this.ai.ask(READ_RULES, YES_NO.noteCondition(l.notes.join('; ')), YesSchema, 40, { exact: true })).yes) delete entry.if;
         } catch {
           // Left as read.
         }
@@ -1048,20 +1065,10 @@ export class BeatReader {
             if (this.handed.has(key) || !e) continue;
             this.handed.add(key);
             const who = byName(sheet.people, l.speaker)?.name ?? l.speaker;
-            try {
-              const a = await this.ai.ask(
-                READ_RULES,
-                `In the written dialogue, ${who} says: “${l.text}”${l.notes.length ? ` (the author's note: ${l.notes.join('; ')})` : ''}\n\nDoes ${who} take something from the player here (the ${this.nameOf(sheet, g.item)})?`,
-                z.object({ yes: z.boolean() }),
-                40,
-              );
-              if (!a.yes) continue;
-              e.gives = (e.gives ?? []).filter((x) => x !== g);
-              if (!e.gives.length) delete e.gives;
-              e.takes = [...(e.takes ?? []), g];
-            } catch {
-              // Left as read.
-            }
+            if (!(await this.yes(YES_NO.takesItem(who, l.text, l.notes.join('; '), this.nameOf(sheet, g.item))))) continue;
+            e.gives = (e.gives ?? []).filter((x) => x !== g);
+            if (!e.gives.length) delete e.gives;
+            e.takes = [...(e.takes ?? []), g];
           }
         }
       }

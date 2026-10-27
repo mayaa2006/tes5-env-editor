@@ -205,13 +205,13 @@ export function chatSend(p: ChatProvider, fetchImpl: Fetch = globalThis.fetch as
         messages,
         stream: true,
         format: schema ?? 'json',
-        options: { num_ctx: contextWindow(promptTokens, max), temperature: 0.3 },
+        options: { num_ctx: contextWindow(promptTokens, max), temperature: params.temperature ?? 0.3 },
       });
       return { content: [{ type: 'text', text: cleanJson(String(r?.message?.content ?? '')) }], stop_reason: r?.done_reason === 'length' ? 'max_tokens' : 'end_turn' };
     }
     const url = `${p.url.replace(/\/+$/, '')}/chat/completions`;
     const headers: Record<string, string> = p.apiKey ? { authorization: `Bearer ${p.apiKey}` } : {};
-    const base = { model: p.model, messages, temperature: 0.3, max_tokens: Math.min(params.max_tokens ?? 16000, 32000), ...streamFields(p.url) };
+    const base = { model: p.model, messages, temperature: params.temperature ?? 0.3, max_tokens: Math.min(params.max_tokens ?? 16000, 32000), ...streamFields(p.url) };
     let r;
     try {
       r = await call(url, { ...base, response_format: schema ? { type: 'json_schema', json_schema: { name: 'answer', schema, strict: false } } : { type: 'json_object' } }, headers);
