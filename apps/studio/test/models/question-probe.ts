@@ -79,21 +79,22 @@ const CASES: Case[] = [
 ];
 
 /** Other wordings being tried, by question: the same arguments, a different question. */
-const VARIANTS: Partial<Record<Q, Record<string, (...a: string[]) => string>>> = {
+/**
+ * Other wordings being tried, by question: the same arguments, a different question. A list is several questions,
+ * read as yes when any of them is.
+ */
+const VARIANTS: Partial<Record<Q, Record<string, (...a: string[]) => string | string[]>>> = {
   lineMoves: {
-    happens: (asked, speaker, line) =>
-      `A line of dialogue in a Skyrim quest.${asked ? ` The player says: “${asked}”\nThe answer` : ` ${speaker} says`}: “${line}”\n\nWhen this is said, does something happen: something handed over or paid, a job or deal agreed, someone leaving, attacking or starting to follow, or the quest ending?`,
-    onlyTalk: (asked, speaker, line) =>
-      `A line of dialogue in a Skyrim quest.${asked ? ` The player says: “${asked}”\nThe answer` : ` ${speaker} says`}: “${line}”\n\nIs this answer only information or chat, with nothing handed over, paid, agreed or changed?`,
+    acts: (asked, speaker, line) =>
+      `A line of dialogue in a Skyrim quest.${asked ? ` The player says: “${asked}”\nThe answer` : ` ${speaker} says`}: “${line}”\n\nIn this answer, does the speaker give or pay the player something, agree to a job or deal, leave, attack, start following the player, or end the quest?`,
   },
   sameAsStory: {
-    moment: (story, speaker, line, note) =>
-      `One sentence of a Skyrim quest's story: “${story}”\nA line from the quest's dialogue: ${speaker}: “${line}”${note ? ` (the author's note: ${note})` : ''}\n\nIs this line the moment that sentence describes, with the same person doing the same thing?`,
-    event: (story, speaker, line, note) => `The story says: “${story}”\nWhat happens when ${speaker} says a line: “${note || line}”\n\nDo the story and this describe the same event?`,
+    pair: (story, speaker, line, note) => `Two descriptions from a Skyrim quest.\n1. The story: “${story}”\n2. ${speaker} says: “${line}”${note ? ` (${note})` : ''}\n\nDo 1 and 2 describe the same step of the quest?`,
+    whoWhat: (story, speaker, line, note) => `The story: “${story}”\nA line: ${speaker}: “${line}”${note ? ` (${note})` : ''}\n\nIs ${speaker} the person that story sentence is about, and does the line do what it says happens?`,
   },
   takesItem: {
-    note: (who, _line, note) => `The author's note on a line ${who} says: “${note}”\n\nDoes the note say ${who} takes something from the player, or that the player hands something over?`,
-    after: (who, line, note, item) => `In the written dialogue, ${who} says: “${line}”${note ? ` (the author's note: ${note})` : ''}\n\nAfter this line, does ${who} have the ${item} rather than the player?`,
+    clauses: (who, line, note) =>
+      (note ? note.split(/;|,|\band\b/).map((c) => c.trim()).filter(Boolean) : [line]).map((c) => `In a Skyrim quest, the author writes about a line ${who} says: “${c}”\n\nDoes this say ${who} takes something from the player?`),
   },
 };
 
@@ -102,16 +103,18 @@ const planner = new QuestPlanner({ ai });
 const scores: Record<string, { right: number; of: number }> = {};
 for (const c of CASES) {
   if (only && !only.includes(c.q)) continue;
-  const wordings: [string, (...a: string[]) => string][] = [[c.q, YES_NO[c.q] as (...a: string[]) => string], ...(withVariants ? Object.entries(VARIANTS[c.q] ?? {}).map(([k, f]) => [`${c.q}.${k}`, f] as [string, (...a: string[]) => string]) : [])];
+  type Wording = (...a: string[]) => string | string[];
+  const wordings: [string, Wording][] = [[c.q, YES_NO[c.q] as Wording], ...(withVariants ? Object.entries(VARIANTS[c.q] ?? {}).map(([k, f]) => [`${c.q}.${k}`, f] as [string, Wording]) : [])];
   for (const [name, f] of wordings) {
     let got: boolean | undefined;
     try {
-      got = (await planner.ask(READ_RULES, f(...c.args), z.object({ yes: z.boolean() }), 40, { exact: true })).yes;
+      const qs = [f(...c.args)].flat();
+      got = false;
+      for (const q of qs) if ((await planner.ask(READ_RULES, q, z.object({ yes: z.boolean() }), 40, { exact: true })).yes) got = true;
     } catch {
       got = undefined;
     }
-    // (onlyTalk asks the opposite way round.)
-    const want = name.endsWith('.onlyTalk') ? !c.yes : c.yes;
+    const want = c.yes;
     const s = (scores[name] ??= { right: 0, of: 0 });
     s.of++;
     if (got === want) s.right++;
