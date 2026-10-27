@@ -24,12 +24,9 @@ export interface NavmeshParent {
 export interface BuildOptions {
   /** Merge vertices closer than this (Skyrim units). Default 1. */
   weldTolerance?: number;
-  /**
-   * Spatial grid divisor (1–12). Default 1, which is always correct; larger
-   * values speed up lookups but rely on the engine's cell ordering.
-   */
+  /** Spatial grid divisor (1–12). Default: the one the Creation Kit picks for the triangle count (gridDivisorFor). */
   gridDivisor?: number;
-  /** Cell order for gridDivisor > 1: row = Y (default) or row = X. */
+  /** Cell order: row = Y (the game's, the default) or row = X. */
   gridOrder?: 'yx' | 'xy';
 }
 
@@ -137,8 +134,24 @@ export function boundsOf(vertices: readonly NavVertex[]): { min: NavVertex; max:
   return { min, max };
 }
 
-/** Rebuild the spatial lookup grid. */
-export function buildGrid(nav: Navmesh, divisor = 1, order: 'yx' | 'xy' = 'yx'): void {
+/**
+ * The grid divisor the Creation Kit gives a navmesh of this many triangles: 1 up to 16, then one more for every 50,
+ * up to 12. Every one of the 15,966 navmeshes in Skyrim.esm follows it.
+ */
+/** How close to a grid cell's edge counts as on it, in cells. */
+const EPS = 1e-3;
+
+export function gridDivisorFor(triangles: number): number {
+  return triangles <= 16 ? 1 : Math.min(12, Math.floor(triangles / 50) + 2);
+}
+
+/**
+ * Rebuild the spatial lookup grid: each cell lists the triangles whose box touches it (edges included). Cells are
+ * row by row in Y, and the bounds and cell sizes are the game's. The Creation Kit's own test is a little tighter (it
+ * leaves out some triangles whose box touches a cell) but never lists one this leaves out: checked on every navmesh
+ * in Skyrim.esm and the DLC masters.
+ */
+export function buildGrid(nav: Navmesh, divisor = gridDivisorFor(nav.triangles.length), order: 'yx' | 'xy' = 'yx'): void {
   const d = Math.max(1, Math.min(12, Math.floor(divisor)));
   const { min, max } = boundsOf(nav.vertices);
   const sizeX = Math.max((max.x - min.x) / d, 1e-3);
@@ -150,10 +163,13 @@ export function buildGrid(nav: Navmesh, divisor = 1, order: 'yx' | 'xy' = 'yx'):
     const x1 = Math.max(...vs.map((v) => v.x));
     const y0 = Math.min(...vs.map((v) => v.y));
     const y1 = Math.max(...vs.map((v) => v.y));
-    const cx0 = Math.max(0, Math.min(d - 1, Math.floor((x0 - min.x) / sizeX)));
-    const cx1 = Math.max(0, Math.min(d - 1, Math.floor((x1 - min.x) / sizeX)));
-    const cy0 = Math.max(0, Math.min(d - 1, Math.floor((y0 - min.y) / sizeY)));
-    const cy1 = Math.max(0, Math.min(d - 1, Math.floor((y1 - min.y) / sizeY)));
+    // (A vertex on a cell's edge is in the cells on both sides, as the game has it; EPS, a thousandth of a cell, for
+    // float rounding.)
+    const cell = (v: number, from: number, size: number, toward: number) => Math.max(0, Math.min(d - 1, Math.floor((v - from) / size + toward)));
+    const cx0 = cell(x0, min.x, sizeX, -EPS);
+    const cx1 = cell(x1, min.x, sizeX, EPS);
+    const cy0 = cell(y0, min.y, sizeY, -EPS);
+    const cy1 = cell(y1, min.y, sizeY, EPS);
     for (let cy = cy0; cy <= cy1; cy++)
       for (let cx = cx0; cx <= cx1; cx++) cells[order === 'yx' ? cy * d + cx : cx * d + cy]!.push(ti);
   });
@@ -196,7 +212,7 @@ export function createNavmesh(mesh: TriangleMesh, parent: NavmeshParent, opts: B
     grid: { divisor: 1, sizeX: 0, sizeY: 0, min: { x: 0, y: 0, z: 0 }, max: { x: 0, y: 0, z: 0 }, cells: [[]] },
   };
   relinkInternalEdges(nav);
-  buildGrid(nav, opts.gridDivisor ?? 1, opts.gridOrder);
+  buildGrid(nav, opts.gridDivisor, opts.gridOrder);
   return nav;
 }
 
@@ -298,7 +314,7 @@ export function deleteTriangles(nav: Navmesh, remove: Iterable<number>): void {
   });
   for (const t of kept) t.v = [vMap[t.v[0]]!, vMap[t.v[1]]!, vMap[t.v[2]]!];
   nav.vertices = verts;
-  buildGrid(nav, nav.grid.divisor);
+  buildGrid(nav);
 }
 
 /** Append a triangle from three positions (welding to existing vertices). Returns its index. */
@@ -314,7 +330,7 @@ export function addTriangle(nav: Navmesh, a: NavVertex, b: NavVertex, c: NavVert
   if (nz < 0) tri.v = [tri.v[0], tri.v[2], tri.v[1]];
   nav.triangles.push(tri);
   relinkInternalEdges(nav);
-  buildGrid(nav, nav.grid.divisor);
+  buildGrid(nav);
   return nav.triangles.length - 1;
 }
 

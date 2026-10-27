@@ -11,6 +11,7 @@ import {
   encodeNavmeshInfo,
   findTriangleAt,
   generateWalkableMesh,
+  gridDivisorFor,
   linkDoors,
   linkNavmeshes,
   snapToCellBorder,
@@ -74,6 +75,19 @@ describe('building navmeshes', () => {
     expect(nav.grid.divisor).toBe(4);
     expect(nav.grid.cells.length).toBe(16);
     expect(validateNavmesh(nav)).toEqual([]);
+  });
+
+  it("picks the Creation Kit's grid size, and lists a triangle on a cell's edge in both cells", () => {
+    // (The rule every navmesh in Skyrim.esm and the DLC masters follows.)
+    expect([1, 16, 17, 49, 50, 99, 100, 499, 500, 5000].map(gridDivisorFor)).toEqual([1, 1, 2, 2, 3, 3, 4, 11, 12, 12]);
+    // 8×8 squares of 50 units, 128 triangles: a 4×4 grid of 100-unit cells.
+    const nav = createNavmesh(floor(0, 0, 400, 8), { cell: 1 });
+    expect(nav.grid.divisor).toBe(4);
+    // A triangle with a corner on x = 100 (a cell edge) is in the cells on both sides of it.
+    const onEdge = nav.triangles.findIndex((t) => t.v.every((i) => nav.vertices[i]!.x >= 50 && nav.vertices[i]!.x <= 100 && nav.vertices[i]!.y <= 50) && t.v.some((i) => nav.vertices[i]!.x === 100));
+    expect(onEdge).toBeGreaterThanOrEqual(0);
+    expect(nav.grid.cells[0]).toContain(onEdge);
+    expect(nav.grid.cells[1]).toContain(onEdge);
   });
 
   it('edits: delete and add triangles keep indices consistent', () => {

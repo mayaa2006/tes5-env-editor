@@ -96,7 +96,7 @@ export default function SceneView() {
         void editNav(
           (nav) => {
             for (const m of moves) nav.vertices[m.index] = { x: m.x, y: m.y, z: m.z };
-            buildGrid(nav, nav.grid.divisor);
+            buildGrid(nav);
           },
           'Move navmesh vertices',
           { needsSelection: false },
