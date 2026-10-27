@@ -510,9 +510,11 @@ export class BeatReader {
     // The AI's own numbers, when they number the new beats one each from where the list left off; by order otherwise.
     const own = beats.map((b) => b.n);
     const byOwn = new Set(own).size === own.length && own.every((n) => n >= first && n < first + beats.length);
-    beats.forEach((b, i) => ids.set(byOwn ? b.n : first + i, `b${first + i}`));
+    // (Ids count on from the highest so far: a beat dropped earlier leaves a gap, not a number to use again.)
+    const next = nextBeatNumber(sheet);
+    beats.forEach((b, i) => ids.set(byOwn ? b.n : first + i, `b${next + i}`));
     for (const [i, b] of beats.entries()) {
-      const id = `b${first + i}`;
+      const id = `b${next + i}`;
       sheet.beats.push(this.toBeat(sheet, b, id, ids));
       if (b.then?.trim()) (this.then.set(id, b.then.trim()), this.unread.add(id));
     }
@@ -681,7 +683,7 @@ export class BeatReader {
           }
         }
         const who = byName(sheet.people, l.speaker);
-        id = `b${sheet.beats.length + 1}`;
+        id = `b${nextBeatNumber(sheet)}`;
         // (Which beat ends the quest is asked once all of it is read.)
         // Its quote carries the author's direction ("the player agrees to clear the cellar"): what later beats follow.
         const quote = `${l.text}${l.notes.length ? ` (${l.notes.join('; ')})` : ''}`;
@@ -1195,6 +1197,11 @@ function lineFor(block: WrittenBlock, n: number, words: string | undefined): num
   if (starts(n)) return n;
   for (const d of [1, -1, 2, -2]) if (starts(n + d)) return n + d;
   return block.lines[n - 1] ? n : undefined;
+}
+
+/** The number for a new beat's id: one past the highest so far. */
+function nextBeatNumber(sheet: BeatSheet): number {
+  return Math.max(0, ...sheet.beats.map((b) => Number(/^b(\d+)$/.exec(b.id)?.[1] ?? 0))) + 1;
 }
 
 function earlierChoices(opts: BeatReadOptions): string[] {
