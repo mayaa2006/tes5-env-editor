@@ -799,7 +799,17 @@ export class BeatReader {
       const n = lineFor(numbered, m.line, m.words);
       const l = n ? numbered.lines[n - 1] : undefined;
       if (!n || !l || l.player || moved.has(n) || !said.includes(n)) continue;
-      const same = directions(l).map((x) => byDirection.get(x)).find(Boolean);
+      // (And lines in a row from the same speaker are one answer to what the player said, so one moment: Hesta's "if
+      // Varro left… / if he's dead… / otherwise…" are the same ending said different ways. Not a persuasion's success
+      // and failure, which are its two outcomes.)
+      const outcome = (x: { notes: string[] }) => x.notes.some((t) => /^(succe(ss|eds?)|fail(ure|s|ed)?)$/i.test(t.trim()));
+      let inRow: string | undefined;
+      for (let k = n - 1; k >= 1 && !inRow && !outcome(l); k--) {
+        const x = numbered.lines[k - 1]!;
+        if (x.player || x.speaker !== l.speaker || x.level !== l.level || outcome(x)) break;
+        inRow = moved.get(k);
+      }
+      const same = directions(l).map((x) => byDirection.get(x)).find(Boolean) ?? inRow;
       if (same) {
         moved.set(n, same);
         lines.push({ line: n, beat: same });

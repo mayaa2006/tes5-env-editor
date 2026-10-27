@@ -543,6 +543,43 @@ ULFGAR: You found it?
     expect(questions.filter((q) => q.next)).toEqual([]);
   });
 
+  it("keep lines said in a row as one moment, and a persuasion's two outcomes apart", async () => {
+    const doc = `The player tells Hesta it's over.
+
+PLAYER: It's done.
+  HESTA: Gone back to Cyrodiil. Good. (if Varro left; the quest is done)
+  HESTA: Dead, then.
+  HESTA: Here. Three hundred. (otherwise; she pays 300 gold; the quest is done)
+PLAYER: (Persuade) Pay me more.
+  HESTA: (success) Fine, four hundred.
+  HESTA: (failure) No.
+`;
+    const reply = (o: unknown): PlannerReply => ({ content: [{ type: 'text', text: JSON.stringify(o) }], stop_reason: 'end_turn' });
+    const planner = new QuestPlanner({
+      send: async (p) => {
+        const user = String(p.messages.at(-1)!.content);
+        if (user.includes('List the people'))
+          return reply({ summary: '', start: { how: 'talking', what: null }, people: [{ name: 'Hesta Coldwater', description: '', sex: 'female', race: null, where: null, spot: null, canDie: 'not said', hostile: false, quote: '' }], places: [], items: [], enemies: [] });
+        if (user.includes('<passage>')) return reply({ beats: [] });
+        if (user.includes('Does this part say something the player does')) return reply({ yes: false });
+        if (user.includes('After which beat')) return reply({ when: null });
+        // Every line with a direction moves the quest on, and none is a beat the story told.
+        if (user.includes('Does the note say something happens')) return reply({ yes: true });
+        if (user.includes('For each line with a direction')) return reply({ lines: [] });
+        if (user.includes('No beat completes the quest')) return reply({ beat: 1 });
+        if (user.includes('their journal entry')) return reply({ beats: [] });
+        if (user.includes('leads nowhere')) return reply({ next: null, ends: 'no' });
+        return reply({});
+      },
+    });
+    const { sheet } = await new BeatReader(planner).read(doc, { title: 'Accounts', editorId: 'Accounts' });
+    const beatOf = (n: number) => sheet.dialogue[0]!.lines.find((l) => l.line === n)?.beat;
+    // Both endings, one beat; the persuasion's success and failure, two.
+    expect(beatOf(2)).toBeDefined();
+    expect(beatOf(4)).toBe(beatOf(2));
+    expect(beatOf(6)).not.toBe(beatOf(7));
+  });
+
   it('ask who hands over an item the player was read as picking up from nowhere', async () => {
     const doc = 'Varro is dealt with. Hesta pays the player and gives them the Coldwater Survey of the Rift.';
     const reply = (o: unknown): PlannerReply => ({ content: [{ type: 'text', text: JSON.stringify(o) }], stop_reason: 'end_turn' });
