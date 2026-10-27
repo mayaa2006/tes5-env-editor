@@ -45,3 +45,4 @@ export * from './actormodel';
 export * from './landtex';
 export * from './xml';
 export * from './bodyslide';
+export * from './walkthrough';

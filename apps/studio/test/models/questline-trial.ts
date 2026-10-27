@@ -15,7 +15,7 @@ import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { NodeFileSystem, NodeProcessRunner } from '@tes5/workspace/node';
-import { findDialogue, splitQuestline, type AiProvider, type QuestlinePlan } from '@tes5/workspace';
+import { findDialogue, splitQuestline, walkPlan, type AiProvider, type QuestlinePlan } from '@tes5/workspace';
 import { decodeRecord, parsePlugin, type FormKey } from '@tes5/esp';
 import { EngineHost } from '../../src/engine/host';
 
@@ -130,6 +130,16 @@ for (const [i, report] of built.quests.entries()) {
   const missing = author.filter((l) => !said.has(norm(l.text)));
   out.authorLines = `${author.length - missing.length} of ${author.length} kept word for word`;
   if (missing.length) out.missingAuthorLines = missing.map((l) => `${l.speaker}: ${l.text}`).slice(0, 12);
+  // Played through: every way the player can go, as the plan says.
+  const walk = walkPlan(line.quests[i]!.plan);
+  out.playedThrough = {
+    endings: walk.endings.map((e) => `${e.fails ? 'fails' : 'completes'} at ${e.stage} in ${e.path.steps.length} steps`),
+    stuck: walk.stuck.map((x) => `stage ${x.stage}: ${x.path.steps.join(' → ')}`),
+    unreached: walk.unreached,
+    unsaid: walk.unsaid.length,
+    backwards: walk.backwards.map((b) => `${b.line.slice(0, 60)} (${b.from} → ${b.to})`),
+    ...(walk.partial ? { partial: true } : {}),
+  };
   results.push(out);
 }
 // Every script the build wrote, through the editor's checker.
@@ -157,6 +167,7 @@ try {
   saved = { error: (e as Error).message.slice(0, 300) };
 }
 for (const r of results) log(r);
-const ok = results.every((r) => !(r.questProblems as string[]).length && !(r.dialogueErrors as string[]).length && !r.missingAuthorLines) && !scriptErrors.length && !releaseErrors.length && !saved.error && !(saved.inexact as string[] | undefined)?.length;
+const walked = (r: Record<string, unknown>) => r.playedThrough as { endings: string[]; stuck: string[] };
+const ok = results.every((r) => !(r.questProblems as string[]).length && !(r.dialogueErrors as string[]).length && !r.missingAuthorLines && !walked(r).stuck.length && walked(r).endings.some((e) => e.startsWith('completes'))) && !scriptErrors.length && !releaseErrors.length && !saved.error && !(saved.inexact as string[] | undefined)?.length;
 log({ ok, minutes: Math.round((Date.now() - t0) / 6000) / 10, scripts: written.length, scriptErrors: scriptErrors.slice(0, 20), releaseErrors: releaseErrors.slice(0, 20), saved });
 process.exit(0);

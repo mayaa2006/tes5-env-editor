@@ -13,7 +13,7 @@ import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { NodeFileSystem, NodeProcessRunner } from '@tes5/workspace/node';
-import { BeatReader, QuestPlanner, beatLookup, compileBeats, editorIdFromTitle, normalizePlan, questlineSource, settleCharacters, settleQuestlinePlan, splitQuestline, validatePlan, type AiProvider, type BeatLookup, type BeatSheet, type QuestPlan, type QuestlinePlan, type Workspace } from '@tes5/workspace';
+import { BeatReader, QuestPlanner, beatLookup, compileBeats, editorIdFromTitle, walkPlan, normalizePlan, questlineSource, settleCharacters, settleQuestlinePlan, splitQuestline, validatePlan, type AiProvider, type BeatLookup, type BeatSheet, type QuestPlan, type QuestlinePlan, type Workspace } from '@tes5/workspace';
 import { EngineHost } from '../../src/engine/host';
 import { EXPECTED } from './beats/expected';
 import { scoreBeats, type BeatScore } from './beats/score';
@@ -71,6 +71,9 @@ if (DATA) {
 
 const ai: AiProvider = { kind: 'openai', url, model };
 const docs = [...new Set(EXPECTED.map((e) => e.doc))].filter((d) => !only || only.some((o) => d.includes(o)));
+// Quests that play through: an ending that completes them, and nowhere to get stuck.
+let playable = 0;
+let quests = 0;
 const total: BeatScore = { people: [0, 0], places: [0, 0], items: [0, 0], beats: [0, 0], extra: 0, order: [0, 0], endings: [0, 0], links: [0, 0], missing: [] };
 const saved: Record<string, BeatSheet> = {};
 const lines: QuestlinePlan[] = [];
@@ -107,7 +110,21 @@ for (const doc of docs) {
       plans.push({ title: part.title, source: questlineSource(line, part.i), plan, sheet, questions });
     }
     const errors = validatePlan(plan).filter((i) => i.severity === 'error').map((i) => i.message);
-    const out: Record<string, unknown> = { doc, part: part.i, title: part.title, minutes: Math.round((Date.now() - t) / 6000) / 10, asked: steps.length, questionsLeft: questions.map((q) => q.message), planErrors: errors };
+    const walk = walkPlan(plan);
+    const plays = walk.endings.some((e) => !e.fails) && !walk.stuck.length;
+    quests++;
+    if (plays) playable++;
+    const out: Record<string, unknown> = {
+      doc,
+      part: part.i,
+      title: part.title,
+      minutes: Math.round((Date.now() - t) / 6000) / 10,
+      asked: steps.length,
+      questionsLeft: questions.map((q) => q.message),
+      planErrors: errors,
+      playsThrough: plays,
+      ...(plays ? {} : { stuck: walk.stuck.map((x) => `stage ${x.stage}: ${x.path.steps.join(' → ')}`), completes: walk.endings.filter((e) => !e.fails).length }),
+    };
     if (want) {
       const s = scoreBeats(sheet, want, part.text);
       for (const k of ['people', 'places', 'items', 'beats', 'order', 'endings', 'links'] as const) (total[k][0] += s[k][0]), (total[k][1] += s[k][1]);
@@ -122,5 +139,5 @@ const lineFile = flag('--line');
 if (lineFile && lines[0]) writeFileSync(lineFile, JSON.stringify({ line: lines[0] }, null, 1));
 const save = flag('--save');
 if (save) writeFileSync(save, JSON.stringify(saved, null, 1));
-console.log(JSON.stringify({ total: Object.fromEntries(Object.entries(total).filter(([k]) => k !== 'missing').map(([k, v]) => [k, Array.isArray(v) ? `${v[0]}/${v[1]}` : v])), minutes: Math.round((Date.now() - t0) / 6000) / 10 }));
+console.log(JSON.stringify({ playsThrough: `${playable}/${quests}`, total: Object.fromEntries(Object.entries(total).filter(([k]) => k !== 'missing').map(([k, v]) => [k, Array.isArray(v) ? `${v[0]}/${v[1]}` : v])), minutes: Math.round((Date.now() - t0) / 6000) / 10 }));
 process.exit(0);

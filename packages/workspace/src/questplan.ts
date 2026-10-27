@@ -954,6 +954,8 @@ export function keepAskedChanges(plan: QuestPlan, text: string): string[] {
 export interface PlanIssue {
   severity: 'error' | 'warning';
   message: string;
+  /** More about it (how the player gets there). */
+  detail?: string;
 }
 
 const START_VERB = { arrive: 'enters', read: 'reads', pickup: 'picks up', activate: 'uses' } as const;

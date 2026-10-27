@@ -145,6 +145,15 @@ for (const size of [
     await expect(outline.getByTestId('beat-3').locator('select').nth(2)).toHaveValue('complete');
 
     // The plan made from it has the author's lines word for word, tagged from the beats.
+    // Played through before it's built: the way to the end, step by step.
+    await review.getByTestId('plan-tab-overview').click();
+    const played = review.getByTestId('played-through');
+    await expect(played).toContainText('Completes at stage 30');
+    await played.getByRole('button', { name: /Completes at stage 30/ }).click();
+    await expect(played).toContainText('Talk to Brynja: “I can.”');
+    await expect(played).toContainText("Pick up Brynja's Ledger");
+    await expect(played).not.toContainText('get stuck');
+    if (process.env.SCREENSHOT_DIR) await dlg.screenshot({ path: `${process.env.SCREENSHOT_DIR}/played-through-${size.width}.png` });
     await review.getByTestId('plan-tab-dialogue').click();
     await expect(review.locator('.plan-screenplay textarea').first()).toHaveValue(/BRYNJA: Then find my ledger\. It's somewhere in this tavern\. \[stage 10\]/);
 

@@ -37,6 +37,8 @@ import {
   planQuestline,
   readQuestline,
   beatLookup,
+  walkPlan,
+  walkIssues,
   BeatReader,
   compileBeats,
   checkBeats,
@@ -1243,8 +1245,10 @@ export class EngineHost {
   }
 
   /** What's wrong with a plan, and what each character, place and item will use. */
+  /** A plan's problems, what it resolves to in the load order, and the plan played through (every way the player can go). */
   reviewQuestPlan(plan: QuestPlan) {
-    return { issues: validatePlan(plan), resolution: this.builder!.resolve(plan) };
+    const walkthrough = walkPlan(plan);
+    return { issues: [...validatePlan(plan), ...walkIssues(walkthrough)], resolution: this.builder!.resolve(plan), walkthrough };
   }
 
   /** Claude plans a quest from a design document or a conversation. */

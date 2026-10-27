@@ -6,14 +6,15 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import type { FormKey } from '@tes5/esp';
-import { splitQuestline, type BeatQuestion, type BeatSheet, type PlanIssue, type PlanResolution, type PlannerMode, type QuestBuildReport, type QuestPlan, type QuestlineBuildReport, type QuestlineLink, type QuestlinePlan } from '@tes5/workspace';
+import { splitQuestline, type BeatQuestion, type BeatSheet, type Walkthrough, type PlanIssue, type PlanResolution, type PlannerMode, type QuestBuildReport, type QuestPlan, type QuestlineBuildReport, type QuestlineLink, type QuestlinePlan } from '@tes5/workspace';
 import { clearDraft, Field, Help, Icon, Modal, Select, TextInput, useDraft } from '../../components/ui';
 import { engine, useStore } from '../../state/store';
 import { AiPicker, useAi } from '../../components/AiPicker';
 import { BeatOutline } from './BeatOutline';
+import { PlayedThrough } from './PlayedThrough';
 
 /** A plan to check; when it was read beat by beat, the reading it was made from and what still doesn't fit together. */
-type Review = { plan: QuestPlan; issues: PlanIssue[]; resolution: PlanResolution[]; sheet?: BeatSheet; questions?: BeatQuestion[] };
+type Review = { plan: QuestPlan; issues: PlanIssue[]; resolution: PlanResolution[]; sheet?: BeatSheet; questions?: BeatQuestion[]; walkthrough?: Walkthrough };
 type LineReview = { line: QuestlinePlan; reviews: { issues: PlanIssue[]; resolution: PlanResolution[] }[]; links: QuestlineLink[]; questlineIssues: PlanIssue[] };
 
 /** While planning: what the engine says it's doing goes in the busy message, and Stop calls the request off. */
@@ -387,11 +388,16 @@ function ReviewPlan({ review, setReview, source, onBack, onBuilt, existing, inQu
               <span className={`chip ${i.severity === 'error' ? 'err' : 'warn'}`} style={{ flex: 'none' }}>
                 {i.severity === 'error' ? 'Must fix' : 'Check'}
               </span>
-              <span className="grow">{i.message}</span>
+              <span className="grow">
+                {i.message}
+                {'detail' in i && typeof i.detail === 'string' && <span className="dim small" style={{ display: 'block', whiteSpace: 'normal' }}>{i.detail}</span>}
+              </span>
             </li>
           ))}
         </ul>
       )}
+
+      {review.walkthrough && draft.stages.length > 0 && <PlayedThrough walk={review.walkthrough} />}
 
       {(draft.questions.length > 0 || draft.assumptions.length > 0) && (
         <div className="card" data-testid="plan-assumptions">
