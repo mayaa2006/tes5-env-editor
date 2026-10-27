@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { gameTexturePath } from '@tes5/assets';
 import type { EngineClient } from '../../engine/client';
 import type { MeshPayload, TexturePayload } from '../../engine/host';
+import { buildParticles } from './particles3d';
 
 type Shape = MeshPayload['shapes'][number];
 
@@ -119,13 +120,14 @@ export class AssetCache {
     const group = new THREE.Group();
     group.name = payload.path;
     for (const w of payload.warnings) this.warnings.add(`${payload.path}: ${w}`);
-    // Effects (mist, smoke, sparks) are particle systems the editor can't draw; their only shape is an editor box the game never shows.
+    // Effects (mist, smoke, sparks): their particles are drawn; their editor box is one the game never shows.
     const effect = /^meshes\\effects\\/i.test(payload.path);
     for (const s of payload.shapes) {
       const mesh = this.buildShape(s);
       if (effect && mesh.userData.editorMarker) continue;
       group.add(mesh);
     }
+    for (const p of payload.particles ?? []) group.add(buildParticles(p, p.material.textures[0] ? this.texture(p.material.textures[0]) : undefined));
     return group;
   }
 

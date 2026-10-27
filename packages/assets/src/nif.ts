@@ -5,6 +5,11 @@
  * header, so unknown blocks (collision, controllers, ...) are skipped safely.
  */
 
+const PARTICLE_TYPES: ReadonlySet<string> = new Set([
+  'NiParticleSystem', 'NiPSysBoxEmitter', 'NiPSysCylinderEmitter', 'NiPSysSphereEmitter', 'NiPSysMeshEmitter', 'NiPSysEmitterCtlr', 'NiFloatInterpolator',
+  'NiFloatData', 'NiPSysGravityModifier', 'BSPSysSimpleColorModifier', 'BSPSysScaleModifier', 'BSPSysSubTexModifier', 'NiPSysData', 'NiControllerSequence',
+]);
+
 export interface NifMaterial {
   shader: 'lighting' | 'effect' | 'none';
   /** Texture slots from BSShaderTextureSet (0 diffuse, 1 normal, 2 glow/skin, 3 height, 4 env, 5 env mask, 6 multilayer/tint, 7 backlight/specular). */
@@ -65,6 +70,49 @@ export interface NifMesh {
   bindMatrix?: Mat4;
 }
 
+/**
+ * A particle system (mist, smoke, fire, sparks), as its emitter and modifiers set it up: enough to draw where its
+ * particles are at a moment, not to run it. Read from NiParticleSystem and the blocks it lists (checked on every
+ * particle mesh in Skyrim SE's meshes archive).
+ */
+export interface NifParticles {
+  name: string;
+  blockIndex: number;
+  material: NifMaterial;
+  emitter: {
+    shape: 'box' | 'cylinder' | 'sphere' | 'mesh';
+    /** box: width, height, depth; cylinder: radius, height, 0; sphere: radius, 0, 0 (mesh: the system's bounding sphere radius). */
+    size: [number, number, number];
+    /** The emitter object (or, for mesh emitters, the bounding sphere's centre) in file space. */
+    matrix: Mat4;
+  };
+  speed: number;
+  speedVariation: number;
+  /** Radians from the emitter's +Z, and around it. */
+  declination: number;
+  declinationVariation: number;
+  planarAngle: number;
+  planarAngleVariation: number;
+  /** RGBA, 0–1. */
+  color: [number, number, number, number];
+  radius: number;
+  radiusVariation: number;
+  lifeSpan: number;
+  lifeSpanVariation: number;
+  /** Particles a second. */
+  birthRate: number;
+  /** Acceleration in file space (units/s²). */
+  gravity?: [number, number, number];
+  /** BSPSysSimpleColorModifier: three colours over a particle's life, with fade in and out (fractions of life). */
+  colorOverLife?: { fadeIn: number; fadeOut: number; c1End: number; c2Start: number; c2End: number; c3Start: number; colors: [number, number, number, number][] };
+  /** BSPSysScaleModifier: size multipliers spread over a particle's life. */
+  scaleOverLife?: number[];
+  /** Sprite-sheet rectangles (u, v, width, height); several and no animation: each particle picks one. */
+  frames: [number, number, number, number][];
+  /** Frames stepped through over a particle's life (BSPSysSubTexModifier). */
+  animatedFrames: boolean;
+}
+
 export interface NifNode {
   name: string;
   type: string;
@@ -76,6 +124,7 @@ export interface NifNode {
   flags: number;
   children: NifNode[];
   mesh?: NifMesh;
+  particles?: NifParticles;
 }
 
 export interface NifFile {
@@ -275,6 +324,19 @@ interface ParsedBlock {
   textures?: string[];
   alphaFlags?: number;
   alphaThreshold?: number;
+  // particles
+  psys?: { modifiers: number[]; dataRef: number; bound: [number, number, number, number] };
+  emitter?: Omit<NifParticles['emitter'], 'matrix'> & { object: number } & Pick<NifParticles, 'speed' | 'speedVariation' | 'declination' | 'declinationVariation' | 'planarAngle' | 'planarAngleVariation' | 'color' | 'radius' | 'radiusVariation' | 'lifeSpan' | 'lifeSpanVariation'>;
+  emitterCtlr?: { target: number; interpolator: number };
+  floatValue?: { value: number; dataRef: number };
+  floatKeys?: number[];
+  gravity?: { object: number; axis: [number, number, number]; strength: number; worldAligned: boolean };
+  colorOverLife?: NifParticles['colorOverLife'];
+  scaleOverLife?: number[];
+  subTex?: boolean;
+  frames?: [number, number, number, number][];
+  /** NiControllerSequence: which interpolator drives which controller. */
+  sequence?: { interpolator: number; controller: number }[];
 }
 
 function readObjectNET(r: Reader, h: Header, isLightingShader: boolean): string {
@@ -535,6 +597,160 @@ function readEffectShader(r: Reader, h: Header): ParsedBlock {
   };
 }
 
+// ------------------------------------------------------------------ particle systems
+
+/** NiPSysModifier: name, order, target, active. */
+function skipModifier(r: Reader): void {
+  r.pos += 4 + 4 + 4 + 1;
+}
+
+function readEmitterFields(r: Reader) {
+  const speed = r.f32();
+  const speedVariation = r.f32();
+  const declination = r.f32();
+  const declinationVariation = r.f32();
+  const planarAngle = r.f32();
+  const planarAngleVariation = r.f32();
+  const color: [number, number, number, number] = [r.f32(), r.f32(), r.f32(), r.f32()];
+  const radius = r.f32();
+  const radiusVariation = r.f32();
+  const lifeSpan = r.f32();
+  const lifeSpanVariation = r.f32();
+  return { speed, speedVariation, declination, declinationVariation, planarAngle, planarAngleVariation, color, radius, radiusVariation, lifeSpan, lifeSpanVariation };
+}
+
+function readParticleBlock(r: Reader, h: Header, type: string, size: number): ParsedBlock | undefined {
+  const start = r.pos;
+  switch (type) {
+    case 'NiParticleSystem': {
+      const av = readAVObject(r, h);
+      let bound: [number, number, number, number] = [0, 0, 0, 0];
+      let shaderRef: number;
+      let alphaRef: number;
+      let dataRef = -1;
+      if (h.bsVersion >= 100) {
+        bound = [r.f32(), r.f32(), r.f32(), r.f32()];
+        r.i32(); // skin
+        shaderRef = r.i32();
+        alphaRef = r.i32();
+        r.u64(); // vertex description
+      } else {
+        dataRef = r.i32();
+        r.i32(); // skin instance
+        const materials = r.count(r.u32(), 8);
+        r.pos += materials * 8 + 4 + 1; // names and extra data, active material, dirty flag
+        shaderRef = r.i32();
+        alphaRef = r.i32();
+      }
+      r.pos += 8; // far/near LOD
+      if (h.bsVersion >= 100) dataRef = r.i32();
+      r.u8(); // world space
+      const n = r.count(r.u32(), 4);
+      const modifiers: number[] = [];
+      for (let i = 0; i < n; i++) modifiers.push(r.i32());
+      return { type, av, shaderRef, alphaRef, psys: { modifiers, dataRef, bound } };
+    }
+    case 'NiPSysBoxEmitter':
+    case 'NiPSysCylinderEmitter':
+    case 'NiPSysSphereEmitter': {
+      skipModifier(r);
+      const f = readEmitterFields(r);
+      const object = r.i32();
+      const dims: [number, number, number] = type === 'NiPSysBoxEmitter' ? [r.f32(), r.f32(), r.f32()] : type === 'NiPSysCylinderEmitter' ? [r.f32(), r.f32(), 0] : [r.f32(), 0, 0];
+      return { type, emitter: { ...f, shape: type === 'NiPSysBoxEmitter' ? 'box' : type === 'NiPSysCylinderEmitter' ? 'cylinder' : 'sphere', size: dims, object } };
+    }
+    case 'NiPSysMeshEmitter': {
+      skipModifier(r);
+      return { type, emitter: { ...readEmitterFields(r), shape: 'mesh', size: [0, 0, 0], object: -1 } };
+    }
+    case 'NiPSysEmitterCtlr': {
+      r.i32(); // next controller
+      r.u16(); // flags
+      r.pos += 16; // frequency, phase, start and stop time
+      const target = r.i32();
+      const interpolator = r.i32();
+      return { type, emitterCtlr: { target, interpolator } };
+    }
+    case 'NiFloatInterpolator':
+      return { type, floatValue: { value: r.f32(), dataRef: r.i32() } };
+    case 'NiFloatData': {
+      const n = r.count(r.u32(), 8);
+      const floatKeys: number[] = [];
+      if (n) {
+        const kind = r.u32();
+        const each = kind === 2 ? 16 : kind === 3 ? 20 : 8;
+        for (let i = 0; i < n; i++) {
+          r.f32(); // time
+          floatKeys.push(r.f32());
+          r.pos += each - 8;
+        }
+      }
+      return { type, floatKeys };
+    }
+    case 'NiPSysGravityModifier': {
+      skipModifier(r);
+      const object = r.i32();
+      const axis = r.vec3();
+      r.f32(); // decay
+      const strength = r.f32();
+      r.pos += 12; // force type, turbulence, turbulence scale
+      const worldAligned = h.bsVersion > 16 && r.u8() !== 0;
+      return { type, gravity: { object, axis, strength, worldAligned } };
+    }
+    case 'BSPSysSimpleColorModifier': {
+      skipModifier(r);
+      const fadeIn = r.f32();
+      const fadeOut = r.f32();
+      const c1End = r.f32();
+      const c2Start = r.f32();
+      const c2End = r.f32();
+      const c3Start = r.f32();
+      const colors = [0, 1, 2].map(() => [r.f32(), r.f32(), r.f32(), r.f32()] as [number, number, number, number]);
+      return { type, colorOverLife: { fadeIn, fadeOut, c1End, c2Start, c2End, c3Start, colors } };
+    }
+    case 'BSPSysScaleModifier': {
+      skipModifier(r);
+      const n = r.count(r.u32(), 4);
+      const scaleOverLife: number[] = [];
+      for (let i = 0; i < n; i++) scaleOverLife.push(r.f32());
+      return { type, scaleOverLife };
+    }
+    case 'BSPSysSubTexModifier':
+      return { type, subTex: true };
+    case 'NiControllerSequence': {
+      r.i32(); // name
+      const n = r.count(r.u32(), 29);
+      r.u32(); // array grow by
+      const sequence: { interpolator: number; controller: number }[] = [];
+      for (let i = 0; i < n; i++) {
+        const interpolator = r.i32();
+        const controller = r.i32();
+        r.pos += 1 + 5 * 4; // priority; node name, property, controller and interpolator IDs
+        sequence.push({ interpolator, controller });
+      }
+      return { type, sequence };
+    }
+    case 'NiPSysData': {
+      // The sprite-sheet rectangles sit just before a fixed 19-byte tail (aspect ratio and flags, speed-to-aspect),
+      // after their count; found from the end, as the vertex arrays before them vary.
+      const dv = new DataView(r.b.buffer, r.b.byteOffset + start, size);
+      for (let k = 0; k <= 256; k++) {
+        const at = size - 19 - 16 * k - 4;
+        if (at < 0) break;
+        if (dv.getUint32(at, true) !== k) continue;
+        // Stored as u, width, v, height.
+        const frames = Array.from({ length: k }, (_, i) => {
+          const f = (j: number) => dv.getFloat32(at + 4 + i * 16 + j * 4, true);
+          return [f(0), f(2), f(1), f(3)] as [number, number, number, number];
+        });
+        return { type, frames };
+      }
+      return { type, frames: [] };
+    }
+  }
+  return undefined;
+}
+
 /** @internal Header and raw block bytes, for the block-level editor (nif-blocks.ts). */
 export function splitNif(bytes: Uint8Array): { version: number; userVersion: number; bsVersion: number; strings: string[]; blocks: { type: string; data: Uint8Array }[]; roots: number[] } {
   const r = new Reader(bytes);
@@ -708,6 +924,8 @@ export function parseNif(bytes: Uint8Array): NifFile {
           bones.push({ rotation, translation, scale, vertices: hasWeights ? nv : 0 });
         }
         blocks.push({ type, skinData: { bones } });
+      } else if (PARTICLE_TYPES.has(type)) {
+        blocks.push(readParticleBlock(r, h, type, size) ?? { type });
       } else if (type === 'NiAlphaProperty') {
         readObjectNET(r, h, false);
         const flags = r.u16();
@@ -801,7 +1019,70 @@ export function parseNif(bytes: Uint8Array): NifFile {
       }
       node.mesh = { ...geom, name: b.av.name, blockIndex: index, material: materialFor(b), skinned, bindMatrix: skinned ? bindMatrixOf(b) : undefined };
     }
+    if (b.psys) node.particles = particlesOf(index, b);
     return node;
+  };
+
+  /** A particle system's emitter, controller and modifiers, gathered (file space). */
+  const particlesOf = (index: number, b: ParsedBlock): NifParticles | undefined => {
+    const ps = b.psys!;
+    const mods = ps.modifiers.map((m) => (m >= 0 ? blocks[m] : undefined));
+    const em = mods.find((m) => m?.emitter)?.emitter;
+    if (!em) return undefined;
+    const own = world.get(index) ?? identity;
+    // A mesh emitter sends particles from the shapes it names: drawn from the system's bounding sphere instead.
+    const matrix =
+      em.shape === 'mesh'
+        ? multiply(own, nodeMatrix({ translation: [ps.bound[0], ps.bound[1], ps.bound[2]], rotation: [1, 0, 0, 0, 1, 0, 0, 0, 1], scale: 1 }))
+        : em.object >= 0
+          ? (world.get(em.object) ?? own)
+          : own;
+    const size: [number, number, number] = em.shape === 'mesh' ? [ps.bound[3], 0, 0] : em.size;
+    // Particles a second: the emitter controller's value, or the most its keys reach.
+    // (A blend interpolator is fed by the file's animation sequences: the highest rate any of them gives.)
+    const ctlrIndex = blocks.findIndex((x) => x?.emitterCtlr?.target === index);
+    const ctlr = ctlrIndex >= 0 ? blocks[ctlrIndex]!.emitterCtlr! : undefined;
+    const rateOf = (i: number): number => {
+      const v = i >= 0 ? blocks[i]?.floatValue : undefined;
+      if (!v) return 0;
+      if (Math.abs(v.value) < 1e30) return Math.max(0, v.value);
+      return v.dataRef >= 0 ? Math.max(0, ...(blocks[v.dataRef]?.floatKeys ?? [])) : 0;
+    };
+    let birthRate = ctlr ? rateOf(ctlr.interpolator) : 0;
+    if (ctlr && !birthRate) for (const seq of blocks) for (const c of seq?.sequence ?? []) if (c.controller === ctlrIndex) birthRate = Math.max(birthRate, rateOf(c.interpolator));
+    const g = mods.find((m) => m?.gravity)?.gravity;
+    let gravity: [number, number, number] | undefined;
+    if (g && g.strength) {
+      const m = !g.worldAligned && g.object >= 0 ? world.get(g.object) : undefined;
+      const [x, y, z] = g.axis;
+      const d: [number, number, number] = m ? [m[0]! * x + m[4]! * y + m[8]! * z, m[1]! * x + m[5]! * y + m[9]! * z, m[2]! * x + m[6]! * y + m[10]! * z] : [x, y, z];
+      const len = Math.hypot(...d) || 1;
+      gravity = [(d[0] / len) * g.strength, (d[1] / len) * g.strength, (d[2] / len) * g.strength];
+    }
+    const frames = (ps.dataRef >= 0 ? blocks[ps.dataRef]?.frames : undefined) ?? [];
+    return {
+      name: b.av?.name ?? '',
+      blockIndex: index,
+      material: materialFor(b),
+      emitter: { shape: em.shape, size, matrix },
+      speed: em.speed,
+      speedVariation: em.speedVariation,
+      declination: em.declination,
+      declinationVariation: em.declinationVariation,
+      planarAngle: em.planarAngle,
+      planarAngleVariation: em.planarAngleVariation,
+      color: em.color,
+      radius: em.radius,
+      radiusVariation: em.radiusVariation,
+      lifeSpan: em.lifeSpan,
+      lifeSpanVariation: em.lifeSpanVariation,
+      birthRate,
+      gravity,
+      colorOverLife: mods.find((m) => m?.colorOverLife)?.colorOverLife,
+      scaleOverLife: mods.find((m) => m?.scaleOverLife)?.scaleOverLife,
+      frames: frames.length ? frames : [[0, 0, 1, 1]],
+      animatedFrames: frames.length > 1 && mods.some((m) => m?.subTex),
+    };
   };
 
   // World transforms of every node, for placing skinned shapes in their bind pose.
@@ -880,6 +1161,18 @@ export function flattenMeshes(nif: NifFile): { mesh: NifMesh; matrix: Mat4 }[] {
   };
   const identity = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
   for (const r of nif.roots) walk(r, identity);
+  return out;
+}
+
+/** All particle systems not under a hidden node (their emitters are already in file space). */
+export function flattenParticles(nif: NifFile): NifParticles[] {
+  const out: NifParticles[] = [];
+  const walk = (n: NifNode) => {
+    if (n.flags & 1) return;
+    if (n.particles) out.push(n.particles);
+    for (const c of n.children) walk(c);
+  };
+  for (const r of nif.roots) walk(r);
   return out;
 }
 

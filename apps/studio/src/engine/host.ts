@@ -4,7 +4,7 @@
  * demo runs it in-page against an in-memory demo data set. Every method takes
  * and returns structured-clone friendly values.
  */
-import { decodeToRgba, flattenMeshes, gameTexturePath, isCompressed, parseDds, parseNif, parseTri, type NifMaterial } from '@tes5/assets';
+import { decodeToRgba, flattenMeshes, flattenParticles, gameTexturePath, isCompressed, parseDds, parseNif, parseTri, type NifMaterial, type NifParticles } from '@tes5/assets';
 import { allConditionFunctions, isFormKey, newCondition, parseFormKey, recordTypeName, type FormKey, type Navmesh, type VmadProperty } from '@tes5/esp';
 import { validateNavmesh } from '@tes5/navmesh';
 import {
@@ -173,6 +173,8 @@ export interface MeshPayload {
     material: NifMaterial;
     skinned: boolean;
   }[];
+  /** Mist, smoke, fire and sparks: each system's emitter and modifiers (drawn as a still cloud). */
+  particles?: NifParticles[];
   warnings: string[];
 }
 
@@ -708,6 +710,7 @@ export class EngineHost {
         material: mesh.material,
         skinned: mesh.skinned,
       })),
+      particles: flattenParticles(nif),
       warnings: nif.warnings,
     };
     if (this.meshCache.size > 300) this.meshCache.clear();
